@@ -1,0 +1,5 @@
+/dist
+/node_modules
+/obsolete
+/src/native/.build
+/vcpkg_installed
