@@ -1,11 +1,12 @@
 <script setup>
-import { ref, watch } from "vue";
+import { onMounted, ref, watch } from "vue";
 import Tooltip from "./components/Tooltip.vue";
 import Popup from "./components/Popup.vue";
 import { modes } from "./lib/modes.js";
 
 const mode = ref(modes.automatic);
 const popup = ref(false);
+const settings = ref({});
 
 let popupTimeout;
 
@@ -21,8 +22,12 @@ watch(mode, () => {
   }, 2500);
 });
 
-electron.on("settings", (settings) => {
-  mode.value = settings.default_mode;
+electron.on("settings", (config) => {
+  logger.debug(`Client received settings: ${JSON.stringify(config, null, 4)}`);
+
+  settings.value = config;
+
+  mode.value = modes[config.general.default_mode];
 });
 
 electron.on("toggleMode", () => {
@@ -39,11 +44,20 @@ electron.on("toggleMode", () => {
       mode.value = modes.automatic;
       break;
   }
+
+  logger.debug(`Changed mode to: ${mode.value}`);
+});
+
+onMounted(() => {
+  electron.send("ready");
 });
 </script>
 
 <template>
-  <Tooltip :mode="mode" />
+  <Tooltip
+    :mode="mode"
+    :alignment="settings?.general?.alignment || 'attached'"
+  />
 
   <transition
     enter-active-class="transition-opacity duration-200"

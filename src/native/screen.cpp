@@ -18,6 +18,15 @@
 #include <windows.h>
 #include <winrt/base.h>
 
+namespace winrt 
+{
+    using namespace Windows::Foundation;
+    using namespace Windows::Graphics;
+    using namespace Windows::Graphics::Capture;
+    using namespace Windows::Graphics::DirectX;
+    using namespace Windows::Graphics::DirectX::Direct3D11;
+}
+
 std::string Screen::TesseractPath = "";
 std::string Screen::OnnxFile = "";
 
@@ -91,14 +100,30 @@ bool Screen::Initialize (std::string CaptureMethod)
         //     return false;
         // }
 
-        if (CaptureMethod == "d3d") {
-            InitializeD3D ();
+        UsingWGC = false;
+        UsingD3D = false;
+
+        if (CaptureMethod == "wgc") {
+            if (InitializeWGC ()) {
+                UsingWGC = true;
+            }
         }
 
-        if (UsingD3D) {
+        if (CaptureMethod == "d3d") {
+            if (InitializeD3D ()) {
+                UsingD3D = true;
+            }
+        }
+
+        if (UsingWGC) {
             Logger::log (
                 Logger::Level::E_INFO,
-                "Using DirectX Desktop Duplication API"
+                "Using Windows Graphic Capture API (WGC)"
+            );
+        } else if (UsingD3D) {
+            Logger::log (
+                Logger::Level::E_INFO,
+                "Using DirectX Desktop Duplication API (D3D)"
             );
         } else {
             Logger::log (
@@ -106,6 +131,7 @@ bool Screen::Initialize (std::string CaptureMethod)
                 "Using GDI fallback"
             );
         }
+        
 
         // Microsoft::WRL::ComPtr<ID3D11Debug> Debug;
 
@@ -259,6 +285,87 @@ bool Screen::Initialize (std::string CaptureMethod)
     }
 }
 
+bool Screen::InitializeWGC ()
+{
+    Logger::log (
+        Logger::Level::E_INFO,
+        "Initializing WGC"
+    );
+
+    try {
+        // winrt::init_apartment ();
+
+        if (!winrt::GraphicsCaptureSession::IsSupported ()) {
+            Logger::log (
+                Logger::Level::E_WARNING,
+                "WGC is not supported"
+            );
+
+            return false;
+        }
+
+        if (!InitializeD3D ()) {
+            Logger::log (
+                Logger::Level::E_ERROR,
+                "Failed to initialize D3D device needed for Graphics Capture"
+            );
+
+            return false;
+        }
+
+        Microsoft::WRL::ComPtr<IDXGIDevice> DxgiDevice;
+        HRESULT hr = Device.As (&DxgiDevice);
+
+        winrt::com_ptr<IDXGIDevice> WinrtDxgiDevice;
+        WinrtDxgiDevice.copy_from (DxgiDevice.Get ());
+
+        if (FAILED (hr)) {
+            Logger::log (hr, "Failed to get DXGI device");
+            return false;
+        }
+
+        WinRTDevice = CreateDirect3DDevice (DxgiDevice.Get ());
+
+        if (!WinRTDevice) {
+            Logger::log (
+                Logger::Level::E_ERROR,
+                "Failed to create WinRT Direct3D device"
+            );
+
+            return false;
+        }
+    } catch (const winrt::hresult_error& e) {
+        Logger::log (
+            Logger::Level::E_ERROR,
+            "WinRT error in WGC initialization: " + 
+            winrt::to_string (e.message ())
+        );
+
+        return false;
+    } catch (const std::exception& e) {
+        Logger::log (
+            Logger::Level::E_ERROR,
+            std::string ("Exception in WGC initialization: ") + e.what ()
+        );
+
+        return false;
+    } catch (...) {
+        Logger::log (
+            Logger::Level::E_ERROR,
+            "Unknown exception in WGC initialization"
+        );
+
+        return false;
+    }
+
+    Logger::log (
+        Logger::Level::E_INFO,
+        "WGC initialized and device presumed stable"
+    );
+
+    return true;
+}
+
 bool Screen::InitializeD3D () 
 {
     CleanupD3D ();
@@ -401,8 +508,6 @@ bool Screen::InitializeD3D ()
         "D3D11 initialized and device presumed stable"
     );
 
-    UsingD3D = true;
-
     return true;
 }
 
@@ -462,6 +567,7 @@ void Screen::Cleanup ()
         CoUninitialize ();
     }
 
+    CleanupWGC ();
     CleanupD3D ();
     
     if (Tesseract) {
@@ -476,24 +582,69 @@ void Screen::Cleanup ()
     IsInitialized = false;
 }
 
-void Screen::CleanupD3D () 
+void Screen::CleanupWGC ()
 {
-    if (!UsingD3D) {
+    try {
+        if (CaptureSession) {
+            CaptureSession.Close ();
+            CaptureSession = nullptr;
+        }
+        
+        if (FramePool) {
+            FramePool.Close ();
+            FramePool = nullptr;
+        }
+        
+        CaptureItem = nullptr;
+        WinRTDevice = nullptr;
+        
+        Logger::log (
+            Logger::Level::E_INFO, 
+            "WGC resources cleaned up"
+        );
+    } catch (const std::exception& e) {
+        Logger::log (
+            Logger::Level::E_WARNING,
+            std::string ("Exception in WGC cleanup: ") + e.what ()
+        );
+
+        return;
+    } catch (...) {
+        Logger::log (
+            Logger::Level::E_WARNING,
+            "Unknown exception in WGC cleanup"
+        );
+
         return;
     }
 
+    Logger::log (Logger::Level::E_INFO, "WGC resources cleaned up");
+}
+
+void Screen::CleanupD3D () 
+{
     if (DesktopDuplication) {
         try {
             DesktopDuplication->ReleaseFrame ();
-        } catch (...) {}
+        } catch (const std::exception& e) {
+            Logger::log (
+                Logger::Level::E_WARNING, 
+                std::string ("Exception releasing frame during cleanup: ") + e.what ()
+            );
+        } catch (...) {
+            Logger::log (
+                Logger::Level::E_WARNING, 
+                "Unknown exception releasing frame during cleanup"
+            );
+        }
 
         DesktopDuplication.Reset ();
     }
 
-    Context.Reset ();
-    Device.Reset ();
-
-    UsingD3D = false;
+    if (Context) Context.Reset ();
+    if (Device) Device.Reset ();
+    
+    Logger::log (Logger::Level::E_INFO, "DirectX resources cleaned up");
 }
 
 std::optional<cv::Mat> Screen::Capture () 
@@ -504,7 +655,20 @@ std::optional<cv::Mat> Screen::Capture ()
 
     std::lock_guard<std::mutex> lock (CaptureLock);
 
-    if (0 && UsingD3D) {
+    if (UsingWGC) {
+        auto result = CaptureUsingWGC ();
+        
+        if (result) {
+            return result;
+        }
+
+        Logger::log (
+            Logger::Level::E_WARNING,
+            "WGC capture failed, trying D3D"  
+        );
+    }
+
+    if (UsingD3D) {
         auto result = CaptureUsingD3D ();
 
         if (result) {
@@ -536,6 +700,200 @@ std::optional<cv::Mat> Screen::Capture ()
     return std::nullopt;
 }
 
+std::optional<cv::Mat> Screen::CaptureUsingWGC ()
+{
+    if (!UsingWGC) {
+        return std::nullopt;
+    }
+
+    try {
+        HWND GameWindow = FindGameWindow ();
+        
+        if (!GameWindow) {
+            return std::nullopt;
+        }
+
+        auto InteropFactory = winrt::get_activation_factory<
+            winrt::Windows::Graphics::Capture::GraphicsCaptureItem
+        >().as<IGraphicsCaptureItemInterop> ();
+
+        bool NeedsNewSession = false;
+        
+        if (!CaptureItem) {
+            NeedsNewSession = true;
+            
+            winrt::GraphicsCaptureItem Item { nullptr };
+            winrt::check_hresult (InteropFactory->CreateForWindow (
+                GameWindow,
+                winrt::guid_of<winrt::GraphicsCaptureItem> (),
+                winrt::put_abi (Item)));
+                
+            if (!Item) {
+                Logger::log (
+                    Logger::Level::E_WARNING,
+                    "Failed to create capture item for window"
+                );
+
+                return std::nullopt;
+            }
+            
+            CaptureItem = Item;
+        }
+        
+        if (NeedsNewSession || !FramePool || !CaptureSession) {
+            if (CaptureSession) {
+                CaptureSession.Close ();
+                CaptureSession = nullptr;
+            }
+            
+            if (FramePool) {
+                FramePool.Close ();
+                FramePool = nullptr;
+            }
+            
+            auto size = CaptureItem.Size ();
+
+            FramePool = winrt::Direct3D11CaptureFramePool::Create (
+                WinRTDevice,
+                winrt::DirectXPixelFormat::B8G8R8A8UIntNormalized,
+                1, // Number of frames in pool
+                size);
+                
+            CaptureSession = FramePool.CreateCaptureSession (CaptureItem);
+
+            CaptureSession.StartCapture ();
+            
+            std::this_thread::sleep_for (std::chrono::milliseconds (50));
+        }
+
+        // Discard potentially stale frames
+        for (int i = 0; i < 3; i++) {
+            auto discardFrame = FramePool.TryGetNextFrame ();
+
+            if (discardFrame) {
+                discardFrame.Close ();
+            }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+
+        auto Frame = FramePool.TryGetNextFrame();
+
+        if (!Frame) {
+            Logger::log (
+                Logger::Level::E_WARNING,
+                "Failed to get capture frame"
+            );
+
+            return std::nullopt;
+        }
+
+        auto Surface = Frame.Surface ();
+
+        auto Access = Surface.as <Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess> ();
+        winrt::com_ptr<ID3D11Texture2D> Texture;
+        winrt::check_hresult (Access->GetInterface (IID_PPV_ARGS (&Texture)));
+
+        D3D11_TEXTURE2D_DESC Desc;
+        Texture->GetDesc (&Desc);
+        
+        D3D11_TEXTURE2D_DESC StagingDesc = Desc;
+
+        StagingDesc.Usage = D3D11_USAGE_STAGING;
+        StagingDesc.BindFlags = 0;
+        StagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        StagingDesc.MiscFlags = 0;
+        
+        winrt::com_ptr<ID3D11Texture2D> StagingTexture;
+        HRESULT hr = Device->CreateTexture2D (&StagingDesc, nullptr, StagingTexture.put ());
+
+        if (FAILED (hr)) {
+            Logger::log (hr, "Failed to create staging texture");
+        
+            Surface.Close ();
+            Frame.Close ();
+            
+            return std::nullopt;
+        }
+        
+        Context->CopyResource (
+            StagingTexture.get (), 
+            Texture.get ()
+        );
+        
+        D3D11_MAPPED_SUBRESOURCE MappedResource;
+        hr = Context->Map(
+            StagingTexture.get (),
+            0,
+            D3D11_MAP_READ,
+            0,
+            &MappedResource
+        );
+        
+        if (FAILED (hr)) {
+            Logger::log (hr, "Failed to map texture");
+
+            Surface.Close ();
+            Frame.Close ();
+
+            return std::nullopt;
+        }
+        
+        cv::Mat Screenshot (
+            Desc.Height,
+            Desc.Width,
+            CV_8UC4,
+            MappedResource.pData,
+            MappedResource.RowPitch
+        );
+        
+        cv::Mat Result = Screenshot.clone ();
+
+        // cv::imwrite ("screenshot.png", Result);
+
+        Context->Unmap (StagingTexture.get (), 0);
+        
+        Surface.Close ();
+        Frame.Close ();
+
+        return Result;
+    } catch (const winrt::hresult_error& e) {
+        Logger::log (
+            Logger::Level::E_ERROR,
+            "WinRT error in Graphics Capture: " + 
+            winrt::to_string (e.message ())
+        );
+        
+        if (CaptureSession) {
+            CaptureSession.Close ();
+            CaptureSession = nullptr;
+        }
+        
+        if (FramePool) {
+            FramePool.Close ();
+            FramePool = nullptr;
+        }
+        
+        CaptureItem = nullptr;
+        
+        return std::nullopt;
+    } catch (const std::exception& e) {
+        Logger::log (
+            Logger::Level::E_ERROR,
+            std::string ("Exception in Graphics Capture: ") + e.what()
+        );
+
+        return std::nullopt;
+    } catch (...) {
+        Logger::log(
+            Logger::Level::E_ERROR,
+            "Unknown exception in WGC capture"
+        );
+
+        return std::nullopt;
+    }
+}
+
 std::optional<cv::Mat> Screen::CaptureUsingD3D ()
 {
     if (!UsingD3D) {
@@ -547,6 +905,19 @@ std::optional<cv::Mat> Screen::CaptureUsingD3D ()
     if (!GameWindow) {
         return std::nullopt;
     }
+
+    auto SafeReleaseFrame = [this] () {
+        if (DesktopDuplication) {
+            try {
+                DesktopDuplication->ReleaseFrame ();
+            } catch (...) {
+                Logger::log (
+                    Logger::Level::E_WARNING, 
+                    "Exception caught when releasing frame"
+                );
+            }
+        }
+    };
 
     HMONITOR Monitor = MonitorFromWindow (GameWindow, MONITOR_DEFAULTTONEAREST);
 
@@ -592,16 +963,7 @@ std::optional<cv::Mat> Screen::CaptureUsingD3D ()
         //     "Attemping to acquire duplication frame on attempt #" + std::to_string (i + 1)
         // );
 
-        if (DesktopDuplication) {
-            try {
-                DesktopDuplication->ReleaseFrame ();
-            } catch (...) {
-                Logger::log (
-                    Logger::Level::E_WARNING, 
-                    "Exception while releasing previous frame"
-                );
-            }
-        }
+        SafeReleaseFrame ();
 
         hr = DesktopDuplication->AcquireNextFrame (
             500, 
@@ -681,7 +1043,7 @@ std::optional<cv::Mat> Screen::CaptureUsingD3D ()
         image
     );
 
-    DesktopDuplication->ReleaseFrame ();
+    SafeReleaseFrame ();
 
     if (FAILED (hr)) {
         Logger::log (hr, "Failed to capture texture");
@@ -1279,4 +1641,11 @@ Microsoft::WRL::ComPtr<IDXGIOutputDuplication> Screen::GetDuplicationForMonitor 
     );
     
     return nullptr;
+}
+
+winrt::IDirect3DDevice Screen::CreateDirect3DDevice (IDXGIDevice* DxgiDevice)
+{
+    winrt::com_ptr<::IInspectable> Device;
+    winrt::check_hresult(CreateDirect3D11DeviceFromDXGIDevice (DxgiDevice, Device.put ()));
+    return Device.as <winrt::IDirect3DDevice> ();
 }

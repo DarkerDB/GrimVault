@@ -3,3 +3,4 @@
 /obsolete
 /src/native/.build
 /vcpkg_installed
+/ui/dist/

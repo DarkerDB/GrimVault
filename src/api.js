@@ -3,6 +3,9 @@ import electron from 'electron';
 import { isDebug } from "./util.js";
 import { logger } from "./logger.js";
 
+import nmi from 'node-machine-id';
+const { machineIdSync } = nmi;
+
 const { app } = electron;
 
 const api = axios.create ({
@@ -11,7 +14,7 @@ const api = axios.create ({
     : 'https://api.darkerdb.com',
 
   timeout: 15000,
-  headers: { "X-Requested-With": `GrimVault ${app.getVersion ()} (${app.getLocale ()})` },
+  headers: { "User-Agent": `GrimVault v${app.getVersion ()} (${machineIdSync ()})` },
   withCredentials: 'include'
 });
 

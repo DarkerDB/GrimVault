@@ -38,8 +38,9 @@ settings = merge (defaults, settings);
 settings.general.telemetry = toBool (settings.general.telemetry);
 settings.general.auto_updates = toBool (settings.general.auto_updates);
 settings.general.launch_on_startup = toBool (settings.general.launch_on_startup);
-settings.general.capture_method = toEnum (settings.general.capture_method, [ 'd3d', 'gdi' ]);
+settings.general.capture_method = toEnum (settings.general.capture_method, [ 'wgc', 'd3d', 'gdi' ]);
 settings.general.default_mode = toEnum (settings.general.default_mode, [ 'automatic', 'manual', 'disabled' ]);
+settings.general.alignment = toEnum (settings.general.alignment, [ 'attached', 'top-left', 'top-right', 'bottom-left', 'bottom-right' ]);
 
 settings.hotkeys.toggle_mode = toHotkey (settings.hotkeys.toggle_mode) || 'Ctrl+F6';
 settings.hotkeys.run_price_check = toHotkey (settings.hotkeys.run_price_check) || 'F5';

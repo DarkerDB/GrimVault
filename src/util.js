@@ -7,9 +7,12 @@ import FormData from 'form-data';
 import { exec } from 'node:child_process';
 import { createReadStream } from 'node:fs';
 import { join } from 'node:path';
-import { freemem, totalmem } from 'node:os';
+import { freemem, machine, totalmem } from 'node:os';
 import { logger, logPath } from './logger.js';
 import { settings } from './settings.js';
+
+import nmi from 'node-machine-id';
+const { machineId } = nmi;
 
 export function isDebug () {
   return process.env.NODE_ENV === 'development';
@@ -98,6 +101,7 @@ export function updateOverlayPosition (overlay, window) {
 }
 
 export async function logSystemInformation () {
+  logger.info (`[System] Machine ID: ${await machineId ()}`);
   logger.info (`[System] Platform: ${process.platform}`);
   logger.info (`[System] Architecture: ${process.arch}`);
   logger.info (`[System] Node Version: ${process.version}`);
@@ -137,6 +141,7 @@ export async function uploadLog (path) {
   try {
     const formData = new FormData ();
     formData.append ('file', createReadStream (path));
+    formData.append ('machine_id', await machineId ());
 
     logger.info (`Uploading log: ${path}`);
 

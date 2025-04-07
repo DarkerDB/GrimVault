@@ -342,7 +342,7 @@ app.on ('ready', async () => {
   }
 
   logger.info (`Initializing native screen module with mode: ${settings.general.capture_method}`);
-
+// 
   if (!initialize (tesseractPath, onnxFile, onMessage, settings.general.capture_method)) {
     logger.error ('Failed to initialize native screen module');
     app.quit ();
@@ -365,15 +365,15 @@ app.on ('ready', async () => {
           window.y !== previous?.y ||
           window.width !== previous?.width ||
           window.height !== previous?.height) {
-        logger.info ('Updating overlay position (and setting opacity to 1.0): ', window);
-        overlay.setOpacity (1);
+        // logger.info ('Updating overlay position (and setting opacity to 1.0): ', window);
+        // overlay.setOpacity (1);
         updateOverlayPosition (overlay, window);
       }
       
       previous = window;
     } else {
-      logger.debug ("Game window not found (setting opacity to 0.0)");
-      overlay.setOpacity (0.0);
+      // logger.debug ("Game window not found (setting opacity to 0.0)");
+      // overlay.setOpacity (0.0);
       isGameOpen = false;
     }
   }, 1000);
@@ -418,14 +418,17 @@ app.on ('ready', async () => {
     logger.info ('Auto updates are disabled');
   }
 
-  overlay.webContents.send ('settings', settings);
-
   globalShortcut.register (settings.hotkeys.toggle_mode, () => {
     overlay.webContents.send ('toggleMode');
   });
   
   globalShortcut.register (settings.hotkeys.run_price_check, () => {
     overlay.webContents.send ('manual:checkForTooltips');
+  });
+
+  ipcMain.on ('ready', () => {
+    logger.info ('Backend received client ready state');
+    overlay.webContents.send ('settings', settings);
   });
 
   ipcMain.on ('log', (event, data) => {

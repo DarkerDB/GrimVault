@@ -15,19 +15,16 @@
         <div class="tooltip-title">Item Statistics</div>
 
         <div class="tooltip-body">
-          <!-- <section v-if="item.attributes.primary.length">
-            <div
-              v-for="attribute in item.attributes.primary"
-              class="[&:not(:last-child)]:pb-2"
-            >
-              <div class="text-base">
-                ({{ attribute.min }} - {{ attribute.max }}) (<span
-                  :style="`color: ${getGradeColor(attribute.grade)}`"
-                  >{{ attribute.grade }}</span
-                >)
-              </div>
+          <section v-if="primary.length">
+            <div v-for="attribute in primary" class="[&:not(:last-child)]:pb-2">
+              <span v-if="attribute.min !== attribute.max"
+                >{{ attribute.display }} {{ attribute.min }} -
+                {{ attribute.max }}</span
+              >
             </div>
-          </section> -->
+            <div class="tooltip-separator"></div>
+          </section>
+
           <section v-if="item.attributes.secondary.length">
             <div
               v-for="attribute in item.attributes.secondary"
@@ -40,7 +37,9 @@
                       ? "+"
                       : attribute.value < 0
                         ? "-"
-                        : "") + attribute.value
+                        : "") +
+                    attribute.value +
+                    (attribute.is_percentage ? "%" : "")
                   }}
                 </span>
                 <span>{{ attribute.display }}</span>
@@ -111,7 +110,7 @@
 
 <script setup>
 import { createPopper } from "@popperjs/core";
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { MOUSE_STILL_FOR_MS, MOUSE_WAKEUP_DISTANCE } from "../config.js";
 import {
   onMouseStill,
@@ -123,6 +122,10 @@ import { modes } from "../lib/modes.js";
 const props = defineProps({
   mode: {
     type: Number,
+  },
+
+  alignment: {
+    type: String,
   },
 });
 
@@ -149,9 +152,13 @@ const item = ref({
   },
 });
 
-onMounted(() => {
-  console.log("MOUNTED");
+const primary = computed(() =>
+  item.value.attributes.primary.filter(
+    (attribute) => attribute.min !== attribute.max,
+  ),
+);
 
+onMounted(() => {
   const popper = createPopper(marker.value, tooltip.value, {
     placement: "left",
     modifiers: [
@@ -205,7 +212,44 @@ onMounted(() => {
     open.value = true;
 
     setTimeout(async () => {
+      const padding = "5px";
+
+      if (props.alignment !== "attached") {
+        marker.value.style.top = null;
+        marker.value.style.bottom = null;
+        marker.value.style.right = null;
+        marker.value.style.left = null;
+        marker.value.style.width = 0;
+        marker.value.style.height = 0;
+      }
+
+      switch (props.alignment) {
+        case "attached":
+          break;
+
+        case "top-right":
+          marker.value.style.top = 0;
+          marker.value.style.right = padding;
+          break;
+
+        case "top-left":
+          marker.value.style.top = 0;
+          marker.value.style.left = padding;
+          break;
+
+        case "bottom-right":
+          marker.value.style.bottom = 0;
+          marker.value.style.right = padding;
+          break;
+
+        case "bottom-left":
+          marker.value.style.bottom = 0;
+          marker.value.style.left = padding;
+          break;
+      }
+
       await popper.update();
+
       tooltip.value.style.visibility = "visible";
 
       setMouseSleepPosition();

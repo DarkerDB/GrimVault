@@ -24,6 +24,7 @@
     "form-data": "^4.0.2",
     "ini": "^5.0.0",
     "node-addon-api": "^8.3.0",
+    "node-machine-id": "^1.1.12",
     "vue": "^3.2.13",
     "winreg": "^1.2.5",
     "winston": "^3.17.0",
