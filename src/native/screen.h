@@ -93,7 +93,6 @@ class Screen
 		void CleanupD3D ();
 		void D3DDump ();
 		void D3DReportLiveObjects ();
-		HWND FindGameWindow ();
 		
 		std::optional<cv::Mat> CaptureUsingD3D ();
 		std::optional<cv::Mat> CaptureUsingGDI ();

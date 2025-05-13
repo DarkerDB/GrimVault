@@ -41,6 +41,7 @@ settings.general.launch_on_startup = toBool (settings.general.launch_on_startup)
 settings.general.capture_method = toEnum (settings.general.capture_method, [ 'wgc', 'd3d', 'gdi' ]);
 settings.general.default_mode = toEnum (settings.general.default_mode, [ 'automatic', 'manual', 'disabled' ]);
 settings.general.alignment = toEnum (settings.general.alignment, [ 'attached', 'top-left', 'top-right', 'bottom-left', 'bottom-right' ]);
+settings.general.components = toList (settings.general.components, [ 'header', 'primary', 'secondary', 'details', 'pricing' ]);
 
 settings.hotkeys.toggle_mode = toHotkey (settings.hotkeys.toggle_mode) || 'Ctrl+F6';
 settings.hotkeys.run_price_check = toHotkey (settings.hotkeys.run_price_check) || 'F5';
@@ -68,6 +69,18 @@ function toHotkey (s) {
   }
 
   // logger.warn (`Invalid hotkey setting: ${s}`);
+  return s;
+}
+
+function toList (s, values) {
+  if (!s) {
+    return values;
+  }
+  console.log (s);
+
+  s = s.split (/ *, */g);
+  s = s.filter (v => values.includes (v));
+
   return s;
 }
 

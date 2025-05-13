@@ -62,44 +62,6 @@ bool Screen::Initialize (std::string CaptureMethod)
     try {
         COMState = ComInitState::NOT_INITIALIZED;
 
-        // HRESULT hrMTA = CoInitializeEx (nullptr, COINIT_MULTITHREADED);
-        
-        // if (FAILED (hrMTA)) {
-        //     if (hrMTA == RPC_E_CHANGED_MODE || 
-        //         hrMTA == S_FALSE ||
-        //         hrMTA == CO_E_NOTINITIALIZED) {
-        //         COMState = ComInitState::ALREADY_INITIALIZED;
-
-        //         Logger::log (
-        //             Logger::Level::E_INFO, 
-        //             "COM already initialized in different mode"
-        //         );
-        //     } else {
-        //         Logger::log (
-        //             hrMTA, 
-        //             "COM initialization failed"
-        //         );
-
-        //         return false;
-        //     }
-        // } else {
-        //     COMState = ComInitState::INITIALIZED_BY_US;
-
-        //     Logger::log (
-        //         Logger::Level::E_INFO, 
-        //         "COM initialized in multi-threaded mode"
-        //     );
-        // }
-
-        // if (!InitializeD3D () &&
-        //     !InitializeGDI ()) {
-        //     return false;
-        // }
-
-        // if (!InitializeGDI ()) {
-        //     return false;
-        // }
-
         UsingWGC = false;
         UsingD3D = false;
 
@@ -132,78 +94,6 @@ bool Screen::Initialize (std::string CaptureMethod)
             );
         }
         
-
-        // Microsoft::WRL::ComPtr<ID3D11Debug> Debug;
-
-        // if (SUCCEEDED (Device.As (&Debug))) {
-        //     Microsoft::WRL::ComPtr<ID3D11InfoQueue> InfoQueue;
-
-        //     if (SUCCEEDED (Debug.As (&InfoQueue))) {
-        //         InfoQueue->SetBreakOnSeverity (D3D11_MESSAGE_SEVERITY_CORRUPTION, true);
-        //         InfoQueue->SetBreakOnSeverity (D3D11_MESSAGE_SEVERITY_ERROR, true);
-
-        //         D3D11_MESSAGE_ID Hide [] = {
-        //             D3D11_MESSAGE_ID_SETPRIVATEDATA_CHANGINGPARAMS
-        //         };
-
-        //         D3D11_INFO_QUEUE_FILTER Filter = {};
-
-        //         Filter.DenyList.NumIDs = _countof (Hide);
-        //         Filter.DenyList.pIDList = Hide;
-                
-        //         InfoQueue->AddStorageFilterEntries (&Filter);
-
-        //         Logger::log (
-        //             Logger::Level::E_INFO,
-        //             "Debug interface configured successfully"
-        //         );
-        //     }
-        // }
-
-        // -- -- //
-
-        // Create the DesktopDuplication using the DirectX device.
-
-        // Microsoft::WRL::ComPtr<IDXGIDevice> DxgiDevice;
-        // Microsoft::WRL::ComPtr<IDXGIAdapter> Adapter;
-        // Microsoft::WRL::ComPtr<IDXGIOutput> DxgiOutput;
-        // Microsoft::WRL::ComPtr<IDXGIOutput1> DxgiOutput1;
-
-        // hr = Device.As (&DxgiDevice);
-
-        // if (FAILED (hr)) {
-        //     Logger::log (hr, "Failed to get output for device");
-        //     return false;
-        // }
-
-        // hr = DxgiDevice->GetAdapter (&Adapter);
-
-        // if (FAILED (hr)) {
-        //     Logger::log (hr, "Failed to get device adapter");
-        //     return false;
-        // }
-
-        // hr = Adapter->EnumOutputs (0, &DxgiOutput);
-
-        // if (FAILED (hr)) {
-        //     Logger::log (hr, "Failed to enumerate device outputs");
-        //     return false;
-        // }
-
-        // hr = DxgiOutput.As (&DxgiOutput1);
-
-        // if (FAILED (hr)) {
-        //     Logger::log (hr, "Failed to get DXGI output1");
-        //     return false;
-        // }
-
-        // hr = DxgiOutput1->DuplicateOutput (DxgiDevice.Get (), &DesktopDuplication);
-
-        // if (FAILED (hr)) {
-        //     Logger::log (hr, "Failed to duplicate output");
-        //     return false;
-        // }
-
         if (!Tesseract) {
             Logger::log (
                 Logger::Level::E_INFO, 
@@ -511,51 +401,6 @@ bool Screen::InitializeD3D ()
     return true;
 }
 
-// bool Screen::InitializeGDI () 
-// {
-//     Logger::log (
-//         Logger::Level::E_INFO,
-//         "Initializing Windows Graphics Capture API"
-//     );
-
-//     try {
-//         winrt::init_apartment ();
-        
-//         UsingGDI = true;
-//         return true;
-//     } catch (const winrt::hresult_error& e) {
-//         if (e.code () == HRESULT_FROM_WIN32 (ERROR_INVALID_FUNCTION) ||  // 0x80070001
-//             e.code () == RPC_E_CHANGED_MODE)                             // 0x80010106
-//         {
-//             Logger::log (
-//                 Logger::Level::E_INFO,
-//                 "WinRT already initialized in a different apartment type, continuing anyway"
-//             );
-
-//             UsingGDI = true;
-//             return true;
-//         } else {
-//             Logger::log (
-//                 Logger::Level::E_ERROR,
-//                 "WinRT error in InitializeGDI: " + winrt::to_string (e.message ())
-//             );
-//         }
-//     } catch (const std::exception& e) {
-//         Logger::log(
-//             Logger::Level::E_ERROR,
-//             std::string ("Exception in InitializeGDI: ") + e.what ()
-//         );
-//     } catch (...) {
-//         Logger::log (
-//             Logger::Level::E_ERROR,
-//             "Unknown exception in InitializeGDI"
-//         );
-//     }
-
-//     UsingGDI = false;
-//     return false;
-// }
-
 void Screen::Cleanup () 
 {
     Logger::log (
@@ -653,13 +498,13 @@ std::optional<cv::Mat> Screen::Capture ()
         throw std::runtime_error ("Cannot capture screen before initialization");
     }
 
-    std::lock_guard<std::mutex> lock (CaptureLock);
+    std::lock_guard<std::mutex> Lock (CaptureLock);
 
     if (UsingWGC) {
-        auto result = CaptureUsingWGC ();
+        auto Result = CaptureUsingWGC ();
         
-        if (result) {
-            return result;
+        if (Result) {
+            return Result;
         }
 
         Logger::log (
@@ -669,10 +514,10 @@ std::optional<cv::Mat> Screen::Capture ()
     }
 
     if (UsingD3D) {
-        auto result = CaptureUsingD3D ();
+        auto Result = CaptureUsingD3D ();
 
-        if (result) {
-            return result;
+        if (Result) {
+            return Result;
         }
 
         Logger::log (
@@ -681,10 +526,10 @@ std::optional<cv::Mat> Screen::Capture ()
         );
     }
 
-    auto result = CaptureUsingGDI ();
+    auto Result = CaptureUsingGDI ();
 
-    if (result) {
-        return result;
+    if (Result) {
+        return Result;
     }
 
     Logger::log (
@@ -924,7 +769,7 @@ std::optional<cv::Mat> Screen::CaptureUsingD3D ()
     if (Monitor != CachedMonitor) {
         Logger::log (
             Logger::Level::E_INFO,
-            "Game changed monitors"    
+            "Game changed monitors"
         );
 
         auto NewDuplication = GetDuplicationForMonitor (Monitor);
@@ -1027,10 +872,10 @@ std::optional<cv::Mat> Screen::CaptureUsingD3D ()
         return std::nullopt;
     }
     
-    // Logger::log (
-    //     Logger::Level::E_INFO,
-    //     "Frame successfully acquired"
-    // );
+    Logger::log (
+        Logger::Level::E_DEBUG,
+        "Frame successfully acquired"
+    );
 
     DesktopResource.As (&AcquiredDesktopImage);
 
@@ -1212,7 +1057,7 @@ std::optional<std::vector<cv::Rect>> Screen::FindTooltips (cv::Mat screenshot)
         throw std::runtime_error ("Cannot find tooltip before initialization");
     }
 
-    std::lock_guard<std::mutex> lock (DNNLock);
+    std::lock_guard<std::mutex> Lock (DNNLock);
 
     if (screenshot.channels () == 4) {
         cv::cvtColor (screenshot, screenshot, cv::COLOR_BGRA2BGR);
@@ -1323,7 +1168,7 @@ std::string Screen::Read (cv::Mat region)
 
     // cv::imwrite ("tooltip.png", region);
 
-    std::lock_guard<std::mutex> lock (TesseractLock);
+    std::lock_guard<std::mutex> Lock (TesseractLock);
 
     cv::Mat processed = cv::Mat::zeros (
         region.size (), 
@@ -1427,108 +1272,6 @@ void Screen::D3DReportLiveObjects ()
         }
     }
 }
-
-// HWND Screen::FindGameWindow ()
-// {
-//     const char* Target = "Dark and Darker";
-//     HWND Result = nullptr;
-
-//     struct ParamsWrapper {
-//         const char* Target;
-//         HWND* Result;
-//     } Params = {Target, &Result};
-
-//     EnumWindows ([] (HWND Handle, LPARAM lParam) -> BOOL {
-//         auto* Params = reinterpret_cast<ParamsWrapper*>(lParam);
-//         char Title [256];
-
-//         if (GetWindowTextA (Handle, Title, sizeof (Title))) {
-//             if (strstr (Title, Params->Target) != nullptr) {
-//                 // Logger::log (
-//                 //     Logger::Level::E_INFO,
-//                 //     "Matched window: " + std::string (Title)
-//                 // );
-
-//                 *Params->Result = Handle;
-//                 return FALSE;
-//             }
-//         }
-
-//         return TRUE;
-//     }, reinterpret_cast<LPARAM>(&Params));
-
-//     return Result;
-// }
-
-HWND Screen::FindGameWindow ()
-{
-    const wchar_t* TARGET_PROCESS = L"DungeonCrawler.exe";
-    HWND Result = nullptr;
-
-    struct FindParams {
-        const wchar_t* TargetProcess;
-        HWND Result;
-    };
-
-    static FindParams Params = {
-        TARGET_PROCESS,
-        nullptr
-    };
-
-    Params.Result = nullptr;
-
-    EnumWindows([] (HWND hwnd, LPARAM lParam) -> BOOL {
-        auto* Params = reinterpret_cast<FindParams*> (lParam);
-        
-        if (!IsWindowVisible (hwnd)) {
-            return TRUE;
-        }
-
-        DWORD ProcessId;
-        GetWindowThreadProcessId (hwnd, &ProcessId);
-        
-        HANDLE ProcessHandle = OpenProcess (
-            PROCESS_QUERY_LIMITED_INFORMATION, 
-            FALSE, 
-            ProcessId
-        );
-        
-        if (ProcessHandle) {
-            wchar_t ProcessPath [MAX_PATH];
-            DWORD Size = MAX_PATH;
-            
-            if (QueryFullProcessImageNameW (ProcessHandle, 0, ProcessPath, &Size)) {
-                const wchar_t* ProcessName = ProcessPath;
-                
-                for (const wchar_t* p = ProcessPath; *p != L'\0'; ++p) {
-                    if (*p == L'\\' || *p == L'/') {
-                        ProcessName = p + 1;
-                    }
-                }
-                
-                if (_wcsicmp (ProcessName, Params->TargetProcess) == 0) {
-                    Params->Result = hwnd;
-                    CloseHandle (ProcessHandle);
-                    return FALSE;
-                }
-            }
-
-            CloseHandle (ProcessHandle);
-        }
-        
-        return true;
-    }, reinterpret_cast<LPARAM> (&Params));
-
-    if (!Params.Result) {
-        Logger::log (
-            Logger::Level::E_WARNING,
-            "Game window not found for DungeonCrawler.exe"
-        );
-    }
-
-    return Params.Result;
-}
-
 
 Microsoft::WRL::ComPtr<IDXGIOutputDuplication> Screen::GetDuplicationForMonitor (HMONITOR Monitor) 
 {

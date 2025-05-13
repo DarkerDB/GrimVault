@@ -1,3 +1,4 @@
+#include "logger.h"
 #include "util.h"
 
 std::string WideToUTF8 (const std::wstring& wide) {
@@ -60,105 +61,99 @@ std::wstring UTF8ToWide (const std::string& utf8) {
     return wide;
 }
 
-static BOOL CALLBACK EnumWindowsCallback (HWND hwnd, LPARAM lParam) 
+float GetScalingFactorForMonitor (HWND hwnd) 
 {
-    Window* Data = reinterpret_cast<Window*>(lParam);
-
-    Data->IsVisible = FALSE;
-    Data->Handle = NULL;
-    
-    if (!IsWindowVisible (hwnd)) {
-        return TRUE;
+    if (!hwnd) {
+        return 1.0f; // fallback
     }
+
+    HMONITOR Monitor = MonitorFromWindow (hwnd, MONITOR_DEFAULTTONEAREST);
     
-    WCHAR WindowTitle [256] = { 0 };
-
-    GetWindowTextW (hwnd, WindowTitle, 256);
-
-    if (wcslen (WindowTitle) == 0) {
-        return TRUE;
+    if (!Monitor) {
+        return 1.0f;
     }
-    
-    DWORD ProcessId;
 
-    GetWindowThreadProcessId (hwnd, &ProcessId);
-    
-    HANDLE ProcessHandle = OpenProcess (
-        PROCESS_QUERY_LIMITED_INFORMATION, 
-        FALSE, 
-        ProcessId
-    );
+    // Try using GetDpiForMonitor (Win8.1+)
+    UINT dpiX, dpiY;
 
-    if (!ProcessHandle) {
-        return TRUE;
+    if (SUCCEEDED (GetDpiForMonitor (Monitor, MDT_EFFECTIVE_DPI, &dpiX, &dpiY))) {
+        return static_cast<float> (dpiX) / 96.0f;
     }
-    
-    WCHAR ProcessPath [MAX_PATH];
-    DWORD PathSize = MAX_PATH;
 
-    BOOL Success = QueryFullProcessImageNameW (
-        ProcessHandle, 
-        0, 
-        ProcessPath, 
-        &PathSize
-    );
+    // Fallback (not DPI-aware context, legacy systems)
+    HDC Screen = GetDC (nullptr);
+    int dpi = GetDeviceCaps (Screen, LOGPIXELSX);
+    ReleaseDC(nullptr, Screen);
 
-    CloseHandle (ProcessHandle);
-    
-    if (!Success) {
-        return TRUE;
-    }
-    
-    WCHAR* Executable = wcsrchr (ProcessPath, L'\\');
-    std::wstring ExeName;
-    
-    if (Executable == nullptr) {
-        ExeName = ProcessPath;
-    } else {
-        ExeName = Executable + 1;
-    }
-    
-    std::string Utf8ExeName = WideToUTF8 (ExeName);
-    
-    std::transform (
-        Utf8ExeName.begin (), 
-        Utf8ExeName.end (), 
-        Utf8ExeName.begin (), 
-        ::tolower
-    );
-    
-    if (Utf8ExeName == Data->Executable) {
-        Data->IsVisible = TRUE;
-        Data->Handle = hwnd;
-        
-        GetWindowRect (hwnd, &Data->Bounds);  
-        
-        return FALSE;
-    }
-    
-    return TRUE;
+    return static_cast<float> (dpi) / 96.0f;
 }
 
-std::optional<Window> GetWindowBounds (const std::string& ProcessName) 
+HWND FindGameWindow ()
 {
-    std::string LowerProcessName = ProcessName;
+    const wchar_t* TARGET_PROCESS = L"DungeonCrawler.exe";
+    HWND Result = nullptr;
 
-    std::transform (
-        LowerProcessName.begin (), 
-        LowerProcessName.end (), 
-        LowerProcessName.begin (), 
-        ::tolower
-    );
-    
-    Window Data;
+    struct FindParams {
+        const wchar_t* TargetProcess;
+        HWND Result;
+    };
 
-    Data.Executable = LowerProcessName;
-    
-    EnumWindows (EnumWindowsCallback, reinterpret_cast<LPARAM> (&Data));
+    static FindParams Params = {
+        TARGET_PROCESS,
+        nullptr
+    };
 
-    if (!Data.Handle) {
-        return std::nullopt;
+    Params.Result = nullptr;
+
+    EnumWindows ([] (HWND hwnd, LPARAM lParam) -> BOOL {
+        auto* Params = reinterpret_cast<FindParams*> (lParam);
+        
+        if (!IsWindowVisible (hwnd)) {
+            return TRUE;
+        }
+
+        DWORD ProcessId;
+        GetWindowThreadProcessId (hwnd, &ProcessId);
+        
+        HANDLE ProcessHandle = OpenProcess (
+            PROCESS_QUERY_LIMITED_INFORMATION, 
+            FALSE, 
+            ProcessId
+        );
+        
+        if (ProcessHandle) {
+            wchar_t ProcessPath [MAX_PATH];
+            DWORD Size = MAX_PATH;
+            
+            if (QueryFullProcessImageNameW (ProcessHandle, 0, ProcessPath, &Size)) {
+                const wchar_t* ProcessName = ProcessPath;
+                
+                for (const wchar_t* p = ProcessPath; *p != L'\0'; ++p) {
+                    if (*p == L'\\' || *p == L'/') {
+                        ProcessName = p + 1;
+                    }
+                }
+                
+                if (_wcsicmp (ProcessName, Params->TargetProcess) == 0) {
+                    Params->Result = hwnd;
+                    CloseHandle (ProcessHandle);
+                    return FALSE;
+                }
+            }
+
+            CloseHandle (ProcessHandle);
+        }
+        
+        return true;
+    }, reinterpret_cast<LPARAM> (&Params));
+
+    if (!Params.Result) {
+        Logger::log (
+            Logger::Level::E_WARNING,
+            "Game window not found for DungeonCrawler.exe"
+        );
     }
 
-    return Data;
+    return Params.Result;
 }
+

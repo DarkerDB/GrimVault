@@ -1,7 +1,9 @@
 #include "logger.h"
 #include "screen.h"
+#include "util.h"
 #include <napi.h>
 #include <opencv2/core.hpp>
+#include <opencv2/opencv.hpp>
 #include <optional>
 #include <tesseract/baseapi.h>
 
@@ -37,6 +39,8 @@ class TooltipWorker : public Napi::AsyncWorker
                 }
 
                 cv::Mat screenshot = *maybeScreenshot;
+
+                // cv::imwrite ("screenshot.png", screenshot);
 
                 std::vector<cv::Rect> tooltips;
 
@@ -154,8 +158,18 @@ class TooltipWorker : public Napi::AsyncWorker
                 return deferred.Resolve (env.Null ());
             }
 
-            // float scale = GetScalingFactorForMonitor ();
             float scale = 1;
+
+            // HWND GameWindow = FindGameWindow ();
+            
+            // if (GameWindow) {
+            //     scale = GetScalingFactorForMonitor (GameWindow);
+
+            //     Logger::log (
+            //         Logger::Level::E_INFO,
+            //         "Scaling factor: " + std::to_string (scale)
+            //     );
+            // }
 
             Napi::Object result = Napi::Object::New (env);
 

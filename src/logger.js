@@ -1,12 +1,11 @@
 import electron from 'electron';
-const { app } = electron;
-
-import 'winston-daily-rotate-file';
 import { existsSync, mkdirSync } from 'node:fs';
-import { isDebug } from './util.js';
 import { join } from 'node:path';
 import winston from 'winston';
+import 'winston-daily-rotate-file';
+import { isDebug } from './config.js';
 
+const { app } = electron;
 const logPath = join (app.getPath ('userData'), 'logs');
 
 if (!existsSync (logPath)) {
@@ -52,5 +51,13 @@ if (isDebug ()) {
     )
   }));
 }
+
+// transport.on ('rotate', async (oldFile, newFile) => {
+//   if (isDebug ()) {
+//     return;
+//   }
+
+//   uploadLog (oldFile);
+// });
 
 export { logger, transport, logPath };

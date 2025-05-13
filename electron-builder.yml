@@ -25,7 +25,16 @@ win:
       to: resources/dlls/
       filter:
         - "*.dll"
-    - from: ../models/tesseract/
+    - from: src/native/.build
+      to: resources/
+      filter:
+        - "*.node"
+    - from: models/tesseract/
       to: resources/models/
-    - from: ../models/vision/runs/detect/train/weights/best.onnx
+    - from: models/vision/runs/detect/train/weights/best.onnx
       to: resources/models/tooltip.onnx
+nsis:
+  oneClick: false
+  perMachine: true
+  allowElevation: true
+  allowToChangeInstallationDirectory: true

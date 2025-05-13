@@ -73,36 +73,10 @@ Napi::Value GetTooltip (const Napi::CallbackInfo& Info)
     }
 }
 
-Napi::Value GetWindowInfoWrapper (const Napi::CallbackInfo& Info)
-{
-    Napi::Env Env = Info.Env ();
-    Napi::HandleScope scope (Env);
-
-    std::string ProcessName = Info [0].As<Napi::String> ().Utf8Value ();
-
-    std::optional<Window> Data = GetWindowBounds (ProcessName);
-
-    if (Data) {
-        auto Result = Napi::Object::New (Env);
-
-        Result.Set ("executable", Data->Executable);
-        Result.Set ("isVisible", Data->IsVisible);
-        Result.Set ("x", Data->Bounds.left);
-        Result.Set ("y", Data->Bounds.top);
-        Result.Set ("width", Data->Bounds.right - Data->Bounds.left);
-        Result.Set ("height", Data->Bounds.bottom - Data->Bounds.top);
-
-        return Result;
-    } else {
-        return Env.Undefined ();
-    }
-}
-
 Napi::Object Init (Napi::Env Env, Napi::Object Exports) 
 {
     Exports.Set ("initialize", Napi::Function::New (Env, Initialize));
     Exports.Set ("getTooltip", Napi::Function::New (Env, GetTooltip));
-    Exports.Set ("getWindow", Napi::Function::New (Env, GetWindowInfoWrapper));
 
     // Exports.Set ("startWindowEventListener", Napi::Function::New (Env, WindowEvents::StartWindowEventListener));
     // Exports.Set ("stopWindowEventListener", Napi::Function::New (Env, WindowEvents::StopWindowEventListener));

@@ -13,31 +13,31 @@
 }
 
 :root {
-  --dnd-gold: #ffd400;
+  --dnd-gold:       #ffd400;
   --dnd-light-gray: #989898;
 
-  --dnd-tan: #ffce79; /* Found by */
-  --dnd-feather: #b8ac9f; /* Slot type, Utility type */
-  --dnd-dust: #626262;
-  --dnd-teal: #8bd1d5;
-  --dnd-turquoise: #91dadf;
-  --dnd-aqua: #90d9de; /* Loot state */
-  --dnd-blue: #00aaee; /* Secondary stats */
-  --dnd-oak: #b18063; /* Description */
-  --dnd-chalk: #ecd99a;
-  --dnd-purple: #d067ff;
-  --dnd-green: #80d600;
-  --dnd-orange: #ff9a00;
-  --dnd-gray: #888888;
-  --dnd-white: #eeeeee;
+  --dnd-tan:        #ffce79; /* Found by */
+  --dnd-feather:    #b8ac9f; /* Slot type, Utility type */
+  --dnd-dust:       #626262;
+  --dnd-teal:       #8bd1d5;
+  --dnd-turquoise:  #91dadf;
+  --dnd-aqua:       #90d9de; /* Loot state */
+  --dnd-blue:       #00aaee; /* Secondary stats */
+  --dnd-oak:        #b18063; /* Description */
+  --dnd-chalk:      #ecd99a;
+  --dnd-purple:     #d067ff;
+  --dnd-green:      #80d600;
+  --dnd-orange:     #ff9a00;
+  --dnd-gray:       #888888;
+  --dnd-white:      #eeeeee;
   
-  --dnd-poor: var(--dnd-gray);
-  --dnd-common: var(--dnd-white);
-  --dnd-uncommon: var(--dnd-green);
-  --dnd-rare: var(--dnd-blue);
-  --dnd-epic: var(--dnd-purple);
+  --dnd-poor:      var(--dnd-gray);
+  --dnd-common:    var(--dnd-white);
+  --dnd-uncommon:  var(--dnd-green);
+  --dnd-rare:      var(--dnd-blue);
+  --dnd-epic:      var(--dnd-purple);
   --dnd-legendary: var(--dnd-orange);
-  --dnd-unique: var(--dnd-chalk);
+  --dnd-unique:    var(--dnd-chalk);
 }
 
 * {
@@ -46,20 +46,13 @@
 
 html,
 body {
-  margin: 0;
-  padding: 0;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  background: transparent;
-  position: relative;
-
-  color: #fff;
+  @apply m-0 p-0 overflow-hidden bg-transparent relative text-white;
   font-family: 'SaintKDG_Light';
+  font-size: clamp(8px, 0.7vw, 18px);
 
-  /* background-color: rgba(255, 0, 0, 0.1); */
+  width: 3440px;
+  height: 1440px;
 }
-
 
 .dotted {
   @apply flex;
@@ -70,18 +63,16 @@ body {
 }
 
 #marker {
-  position: absolute;
+  @apply absolute;
+}
+
+.debugging #marker {
+  @apply bg-blue-500/10 border border-yellow-500 border-2;
 }
 
 #tooltip,
 .popup {
-  display: inline-block;
-  position: relative;
-  text-align: center;
-
-  @apply min-w-80;
-  
-  /* min-width: 300px; */
+  @apply inline-block relative text-center min-w-80;
 
   background-image: url('@assets/images/Background_TooltipTexture.png');
   background-size: 100% 100%;
@@ -101,13 +92,11 @@ body {
 
 .tooltip-overlay {
   @apply absolute top-0 left-0 bottom-0 right-0;
-
   background-color: rgba(217, 210, 219, 0.025);
 }
 
 .tooltip-content {
-  @apply p-1;
-  text-align: center;
+  @apply p-1 text-center;
 }
 
 .tooltip-title {
@@ -124,9 +113,6 @@ body {
 
 .tooltip-body {
   @apply text-[1.25rem] pb-3 px-6;
-
-  /* padding: 24px; */
-  /* font-size: 16px; */
 }
 
 .tooltip-attribute {
@@ -155,58 +141,30 @@ body {
 }
 
 .tooltip-footer {
-  font-size: 9px;
-  text-align: right;  
+  @apply text-[0.5rem] text-right;
   color: var(--dnd-light-gray);
 }
 
 .line-item {
-  display: flex;
-  align-items: center;
+  @apply flex items-center;
 }
 
 .line-item:not(:last-child) {
-  margin-bottom: 10px;
+  @apply mb-3;
 }
 
 .line-item-label {
-  /* width: 70px; */
-  text-align: left;
+  @apply text-left;
 }
 
-/** **/
-
 .gold {
-  position: relative;
-  display: flex;
-  align-items: center;
-
+  @apply text-lg relative flex items-center;
   color: var(--dnd-gold); 
 }
 
 .gold:before {
-  content: '';
-  display: inline-block;
-
-  /* 71 x 64 */
-
-  width: 28px;
-  height: 24px;
-  margin-right: 4px;
-
+  @apply content-[''] inline-block w-6 h-5 mr-1;
   background-image: url('@assets/images/Icon_Gold.png');
   background-size: contain;
   background-repeat: no-repeat;
 }
-
-/* .gold span {
-  position: absolute;
-  font-size: 12px;
-  background-color: black;
-  color: white;
-  padding: 1px;
-  bottom: 0;
-  right: 0;
-  margin-left: 7.5px;
-  z-index: 5;
-} */

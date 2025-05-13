@@ -1,7 +1,7 @@
 import axios from 'axios';
 import electron from 'electron';
-import { isDebug } from "./util.js";
-import { logger } from "./logger.js";
+import { isDebug } from './config.js';
+import { logger } from './logger.js';
 
 import nmi from 'node-machine-id';
 const { machineIdSync } = nmi;
