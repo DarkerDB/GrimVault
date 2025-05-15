@@ -42,6 +42,7 @@ settings.general.capture_method = toEnum (settings.general.capture_method, [ 'wg
 settings.general.default_mode = toEnum (settings.general.default_mode, [ 'automatic', 'manual', 'disabled' ]);
 settings.general.alignment = toEnum (settings.general.alignment, [ 'attached', 'top-left', 'top-right', 'bottom-left', 'bottom-right' ]);
 settings.general.components = toList (settings.general.components, [ 'header', 'primary', 'secondary', 'details', 'pricing' ]);
+settings.general.scale = parseFloat (settings.general.scale || '1.0');
 
 settings.hotkeys.toggle_mode = toHotkey (settings.hotkeys.toggle_mode) || 'Ctrl+F6';
 settings.hotkeys.run_price_check = toHotkey (settings.hotkeys.run_price_check) || 'F5';

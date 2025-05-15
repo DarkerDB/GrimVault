@@ -11,7 +11,10 @@ const ALLOWED_WINDOWS = [
 
 let previousGameBounds = null;
 
-export async function pin (overlay) {
+let isActive = false;
+let isShown = false;
+
+export async function pin (overlay, debugging) {
   let shouldHide = true;
   let activeWindow = windowManager.getActiveWindow ();
 
@@ -25,6 +28,15 @@ export async function pin (overlay) {
     logger.debug (`Active window: ${activeWindowTitle}`);
 
     if (ALLOWED_WINDOWS.includes (activeWindowTitle)) {
+
+      // If we are already active, we don't need to rebind anything.
+      
+      if (isActive) {
+        return;
+      }
+
+      // Otherwise we became active and need to rebind the overlay.
+
       // The game window is not always the active window because GrimVault may
       // take active focus.
 
@@ -68,14 +80,20 @@ export async function pin (overlay) {
             height: bounds.height
           });
         }
+        
+        if (!isShown) {
+          overlay.setIgnoreMouseEvents (true, { forward: true });
+          overlay.setAlwaysOnTop (true, 'screen-saver');
+          overlay.setVisibleOnAllWorkspaces (true);
+          overlay.show ();
+          overlay.moveTop ();
 
-        overlay.setIgnoreMouseEvents (true, { forward: true });
-        overlay.setAlwaysOnTop (true, 'screen-saver');
-        overlay.setVisibleOnAllWorkspaces (true);
-        overlay.moveTop ();
-        overlay.show ();
+          isShown = true;
+        }
 
         previousGameBounds = bounds;
+
+        isActive = true;
         shouldHide = false;
       } else {
         logger.warn ('Found a valid active window but could not find the game window');
@@ -88,7 +106,15 @@ export async function pin (overlay) {
   }
 
   if (shouldHide) {
-    // overlay.hide ();
+    if (isShown) {
+      if (!debugging) {
+        overlay.hide ();
+      }
+      
+      isShown = false;
+    }
+
+    isActive = false;
     previousGameBounds = null;
   }
 }

@@ -46,12 +46,19 @@
 
 html,
 body {
+  --scale: 1;
+
   @apply m-0 p-0 overflow-hidden bg-transparent relative text-white;
   font-family: 'SaintKDG_Light';
-  font-size: clamp(8px, 0.7vw, 18px);
+  
+  font-size: clamp(
+    calc(12px * var(--scale)), 
+    calc(0.7vw * var(--scale)), 
+    calc(18px * var(--scale))
+  );
 
-  width: 3440px;
-  height: 1440px;
+  width: 100vw;
+  height: 100vh;
 }
 
 .dotted {
@@ -62,12 +69,12 @@ body {
   @apply px-5 text-white content-['•'];
 }
 
-#marker {
-  @apply absolute;
+.debugging #marker {
+  @apply bg-blue-500;
 }
 
-.debugging #marker {
-  @apply bg-blue-500/10 border border-yellow-500 border-2;
+.debugging #marker:before {
+  @apply block content-[''] bg-blue-500/10 border border-yellow-500 border-2 w-10 h-10 -translate-x-1/2 -translate-y-1/2;
 }
 
 #tooltip,

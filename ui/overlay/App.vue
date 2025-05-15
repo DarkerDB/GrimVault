@@ -11,7 +11,7 @@ const isDebugging = ref(false);
 
 let popupTimeout;
 
-watch(mode, () => {
+watch (mode, () => {
   popup.value = true;
 
   if (popupTimeout) {
@@ -20,18 +20,17 @@ watch(mode, () => {
 
   popupTimeout = setTimeout(() => {
     popup.value = false;
-  }, 2500);
+  }, 750);
 });
 
 electron.on ('settings', (config) => {
   logger.debug (`Client received settings: ${JSON.stringify(config, null, 4)}`);
-
   settings.value = config;
-
   mode.value = modes [config.general.default_mode];
+  document.documentElement.style.setProperty('--scale', config.general.scale);
 });
 
-electron.on("manual:toggle", () => {
+electron.on ('manual:toggle', () => {
   switch (mode.value) {
     case modes.automatic:
       mode.value = modes.manual;
@@ -46,7 +45,7 @@ electron.on("manual:toggle", () => {
       break;
   }
 
-  logger.debug(`Changed mode to: ${mode.value}`);
+  logger.debug (`Changed mode to: ${mode.value}`);
 });
 
 electron.on("manual:debugger", () => {

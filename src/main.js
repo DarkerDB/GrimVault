@@ -13,6 +13,8 @@ import { wire } from './frontend.js';
 const { app, BrowserWindow } = electron;
 const { autoUpdater } = updater;
 
+let debugging = false;
+
 logger.info ('Loaded settings: ', settings);
 
 process.on ('uncaughtException', (error) => {
@@ -91,39 +93,41 @@ app.on ('before-quit', () => {
 app.on ('ready', async () => {
   logSystemInformation ();
 
-  autoUpdater.setFeedURL ({
-    provider: 's3',
-    bucket: 'darkerdb.com',
-    path: 'GrimVault',
-    region: 'us-west-2'
-  });
+  if (settings.general.auto_updates) {
+    autoUpdater.setFeedURL ({
+      provider: 's3',
+      bucket: 'darkerdb.com',
+      path: 'GrimVault',
+      region: 'us-west-2'
+    });
 
-  autoUpdater.checkForUpdates ();
+    autoUpdater.checkForUpdates ();
 
-  // Update event handlers
-  autoUpdater.on ('checking-for-update', () => {
-    logger.info ('Checking for updates');
-  });
+    // Update event handlers
+    autoUpdater.on ('checking-for-update', () => {
+      logger.info ('Checking for updates');
+    });
 
-  autoUpdater.on ('update-available', (info) => {
-    logger.info ('Update available:', info);
-  });
+    autoUpdater.on ('update-available', (info) => {
+      logger.info ('Update available:', info);
+    });
 
-  autoUpdater.on ('update-not-available', (info) => {});
+    autoUpdater.on ('update-not-available', (info) => {});
 
-  autoUpdater.on ('download-progress', (progressObj) => {
-    logger.info (`Download speed: ${progressObj.bytesPerSecond}`);
-    logger.info (`Downloaded ${progressObj.percent}%`);
-  });
+    autoUpdater.on ('download-progress', (progressObj) => {
+      logger.info (`Download speed: ${progressObj.bytesPerSecond}`);
+      logger.info (`Downloaded ${progressObj.percent}%`);
+    });
 
-  autoUpdater.on ('update-downloaded', (info) => {
-    logger.info ('Installing update');
-    autoUpdater.quitAndInstall ();
-  });
+    autoUpdater.on ('update-downloaded', (info) => {
+      logger.info ('Installing update');
+      autoUpdater.quitAndInstall ();
+    });
 
-  autoUpdater.on ('error', (error) => {
-    logger.info (`Auto update error: ${error}`);
-  });
+    autoUpdater.on ('error', (error) => {
+      logger.info (`Auto update error: ${error}`);
+    });
+  }
 
   logger.info ('Setting up system tray');
 
@@ -198,7 +202,7 @@ app.on ('ready', async () => {
   logger.info ('Registering overlay pin');
 
   setInterval (() => {
-    pin (overlay);
+    pin (overlay, debugging);
   }, 1000);
 
   wire (overlay);
@@ -245,8 +249,6 @@ app.on ('ready', async () => {
       mode: 'detach'
     });
   }
-
-  let debugging = false;
 
   globalShortcut.register ('F7', () => {
     logger.info ('Toggling debugger');
