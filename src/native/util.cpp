@@ -1,159 +1,181 @@
 #include "logger.h"
 #include "util.h"
+#include <ScreenCapture.h>
 
-std::string WideToUTF8 (const std::wstring& wide) {
-    if (wide.empty ()) {
-        return "";
-    }
-
-    int utf8Length = WideCharToMultiByte (
-        CP_UTF8, 
-        0, 
-        wide.c_str (), 
-        wide.length (), 
-        nullptr, 
-        0, 
-        nullptr, 
-        nullptr
-    );
-
-    std::string utf8 (utf8Length, 0);
-    
-    WideCharToMultiByte (
-        CP_UTF8, 
-        0, 
-        wide.c_str (), 
-        wide.length (), 
-        &utf8 [0], 
-        utf8Length, 
-        nullptr, 
-        nullptr
-    );
-
-    return utf8;
-}
-
-std::wstring UTF8ToWide (const std::string& utf8) {
-    if (utf8.empty()) {
-        return L"";
-    }
-
-    int wideLength = MultiByteToWideChar (
-        CP_UTF8, 
-        0, 
-        utf8.c_str (), 
-        utf8.length (), 
-        nullptr, 
-        0
-    );
-
-    std::wstring wide (wideLength, 0);
-
-    MultiByteToWideChar (
-        CP_UTF8, 
-        0, 
-        utf8.c_str (), 
-        utf8.length (), 
-        &wide [0], 
-        wideLength
-    );
-
-    return wide;
-}
-
-float GetScalingFactorForMonitor (HWND hwnd) 
-{
-    if (!hwnd) {
-        return 1.0f; // fallback
-    }
-
-    HMONITOR Monitor = MonitorFromWindow (hwnd, MONITOR_DEFAULTTONEAREST);
-    
-    if (!Monitor) {
-        return 1.0f;
-    }
-
-    // Try using GetDpiForMonitor (Win8.1+)
-    UINT dpiX, dpiY;
-
-    if (SUCCEEDED (GetDpiForMonitor (Monitor, MDT_EFFECTIVE_DPI, &dpiX, &dpiY))) {
-        return static_cast<float> (dpiX) / 96.0f;
-    }
-
-    // Fallback (not DPI-aware context, legacy systems)
-    HDC Screen = GetDC (nullptr);
-    int dpi = GetDeviceCaps (Screen, LOGPIXELSX);
-    ReleaseDC(nullptr, Screen);
-
-    return static_cast<float> (dpi) / 96.0f;
-}
+std::mutex GameMonitorMutex;
+std::optional<int> GameMonitorId;
+std::chrono::steady_clock::time_point LastMonitorCheck = std::chrono::steady_clock::now ();
 
 HWND FindGameWindow ()
 {
-    const wchar_t* TARGET_PROCESS = L"DungeonCrawler.exe";
-    HWND Result = nullptr;
-
-    struct FindParams {
-        const wchar_t* TargetProcess;
-        HWND Result;
-    };
-
-    static FindParams Params = {
-        TARGET_PROCESS,
-        nullptr
-    };
-
-    Params.Result = nullptr;
-
-    EnumWindows ([] (HWND hwnd, LPARAM lParam) -> BOOL {
-        auto* Params = reinterpret_cast<FindParams*> (lParam);
-        
-        if (!IsWindowVisible (hwnd)) {
-            return TRUE;
-        }
-
-        DWORD ProcessId;
-        GetWindowThreadProcessId (hwnd, &ProcessId);
-        
-        HANDLE ProcessHandle = OpenProcess (
-            PROCESS_QUERY_LIMITED_INFORMATION, 
-            FALSE, 
-            ProcessId
-        );
-        
-        if (ProcessHandle) {
-            wchar_t ProcessPath [MAX_PATH];
-            DWORD Size = MAX_PATH;
+   const wchar_t* TargetProcess = L"DungeonCrawler.exe";
+   HWND Result = nullptr;
+   
+   struct FindParams {
+      const wchar_t* TargetProcess;
+      HWND Result;
+   };
+   
+   static FindParams Params = {
+      TargetProcess,
+      nullptr
+   };
+   
+   Params.Result = nullptr;
+   
+   EnumWindows ([] (HWND Hwnd, LPARAM LParam) -> BOOL {
+      auto* Params = reinterpret_cast<FindParams*> (LParam);
+      
+      if (!IsWindowVisible (Hwnd)) {
+         return true;
+      }
+      
+      DWORD ProcessId;
+      GetWindowThreadProcessId (Hwnd, &ProcessId);
+      
+      HANDLE ProcessHandle = OpenProcess (
+         PROCESS_QUERY_LIMITED_INFORMATION, 
+         FALSE, 
+         ProcessId
+      );
+      
+      if (ProcessHandle) {
+         wchar_t ProcessPath [MAX_PATH];
+         DWORD Size = MAX_PATH;
+         
+         if (QueryFullProcessImageNameW (ProcessHandle, 0, ProcessPath, &Size)) {
+            const wchar_t* ProcessName = ProcessPath;
             
-            if (QueryFullProcessImageNameW (ProcessHandle, 0, ProcessPath, &Size)) {
-                const wchar_t* ProcessName = ProcessPath;
-                
-                for (const wchar_t* p = ProcessPath; *p != L'\0'; ++p) {
-                    if (*p == L'\\' || *p == L'/') {
-                        ProcessName = p + 1;
-                    }
-                }
-                
-                if (_wcsicmp (ProcessName, Params->TargetProcess) == 0) {
-                    Params->Result = hwnd;
-                    CloseHandle (ProcessHandle);
-                    return FALSE;
-                }
+            for (const wchar_t* P = ProcessPath; *P != L'\0'; ++P) {
+               if (*P == L'\\' || *P == L'/') {
+                  ProcessName = P + 1;
+               }
             }
-
-            CloseHandle (ProcessHandle);
-        }
-        
-        return true;
-    }, reinterpret_cast<LPARAM> (&Params));
-
-    if (!Params.Result) {
-        Logger::log (
-            Logger::Level::E_WARNING,
-            "Game window not found for DungeonCrawler.exe"
-        );
-    }
-
-    return Params.Result;
+            
+            if (_wcsicmp (ProcessName, Params->TargetProcess) == 0) {
+               Params->Result = Hwnd;
+               CloseHandle (ProcessHandle);
+               return false;
+            }
+         }
+         
+         CloseHandle (ProcessHandle);
+      }
+      
+      return true;
+   }, reinterpret_cast<LPARAM> (&Params));
+   
+   if (!Params.Result) {
+      Logger::log (
+         Logger::Level::E_WARNING,
+         "Game window not found for DungeonCrawler.exe"
+      );
+   }
+   
+   return Params.Result;
 }
 
+std::optional<int> GetGameMonitorId ()
+{
+   auto Now = std::chrono::steady_clock::now ();
+   auto TimeSinceLastCheck = std::chrono::duration_cast<std::chrono::milliseconds> (Now - LastMonitorCheck).count ();
+   
+   // Only check for game window every 1000ms (1 second) to avoid performance impact
+   if (TimeSinceLastCheck < 1000) {
+      std::lock_guard<std::mutex> Lock (GameMonitorMutex);
+      return GameMonitorId;
+   }
+   
+   LastMonitorCheck = Now;
+   
+   HWND GameWindow = FindGameWindow ();
+   
+   if (!GameWindow) {
+      std::lock_guard<std::mutex> Lock (GameMonitorMutex);
+      GameMonitorId = std::nullopt;
+      return std::nullopt;
+   }
+   
+   HMONITOR Monitor = MonitorFromWindow (GameWindow, MONITOR_DEFAULTTONEAREST);
+   
+   if (!Monitor) {
+      std::lock_guard<std::mutex> Lock (GameMonitorMutex);
+      GameMonitorId = std::nullopt;
+      return std::nullopt;
+   }
+   
+   MONITORINFOEX MonitorInfo = {0};
+   MonitorInfo.cbSize = sizeof(MONITORINFOEX);
+
+   if (!GetMonitorInfo (Monitor, &MonitorInfo)) {
+      std::lock_guard<std::mutex> Lock (GameMonitorMutex);
+      GameMonitorId = std::nullopt;
+      return std::nullopt;
+   }
+   
+   auto Monitors = SL::Screen_Capture::GetMonitors ();
+   
+   for (const auto& M : Monitors) {
+      RECT MonitorRect = MonitorInfo.rcMonitor;
+      
+      int PhysicalWidth = MonitorRect.right - MonitorRect.left;
+      int PhysicalHeight = MonitorRect.bottom - MonitorRect.top;
+      
+      bool IsMatch = (M.OffsetX == MonitorRect.left && 
+                      M.OffsetY == MonitorRect.top && 
+                       (
+                        (M.Width == PhysicalWidth && M.Height == PhysicalHeight) ||
+                        (M.OriginalWidth == PhysicalWidth && M.OriginalHeight == PhysicalHeight)
+                       ));
+      
+      if (IsMatch) {
+         std::lock_guard<std::mutex> Lock (GameMonitorMutex);
+         GameMonitorId = M.Id;
+         
+         Logger::log (
+            Logger::Level::E_INFO,
+            "Found game window on monitor " + std::to_string (M.Id) + 
+            " (" + std::to_string (M.Width) + "x" + std::to_string (M.Height) + 
+            ", Original: " + std::to_string (M.OriginalWidth) + "x" + std::to_string (M.OriginalHeight) + 
+            ", Physical: " + std::to_string (PhysicalWidth) + "x" + std::to_string (PhysicalHeight) + 
+            ") at (" + std::to_string (M.OffsetX) + "," + std::to_string (M.OffsetY) + 
+            "), Scaling: " + std::to_string (M.Scaling)
+         );
+         
+         return M.Id;
+      }
+   }
+   
+   std::lock_guard<std::mutex> Lock (GameMonitorMutex);
+   GameMonitorId = std::nullopt;
+   return std::nullopt;
+}
+
+bool IsMonitorHDR (HMONITOR Monitor) 
+{
+   Microsoft::WRL::ComPtr<IDXGIFactory6> Factory;
+
+   if (FAILED (CreateDXGIFactory2(0, IID_PPV_ARGS (&Factory)))) {
+      return false;
+   }
+   
+   Microsoft::WRL::ComPtr<IDXGIAdapter1> Adapter;
+
+   for (UINT i = 0; Factory->EnumAdapterByGpuPreference (i, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS (&Adapter)) == S_OK; ++i) {
+       Microsoft::WRL::ComPtr<IDXGIOutput> Output;
+       
+       for (UINT j = 0; Adapter->EnumOutputs (j, &Output) == S_OK; ++j) {
+           Microsoft::WRL::ComPtr<IDXGIOutput6> Output6;
+           DXGI_OUTPUT_DESC1 Desc1;
+
+           if (SUCCEEDED (Output->QueryInterface(IID_PPV_ARGS (&Output6))) && 
+               SUCCEEDED (Output6->GetDesc1 (&Desc1)) && 
+               Desc1.Monitor == Monitor) {
+               return Desc1.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 || 
+                      Desc1.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709;
+           }
+       }
+   }
+
+   return false;
+}

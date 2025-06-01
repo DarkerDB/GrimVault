@@ -14,6 +14,12 @@ export function wire (overlay) {
 
   frontend.on ('ready', () => {
     logger.info ('Received frontend ready state');
+    
+    // If in safe mode, log it but don't send a notification
+    if (settings.general.safe_mode) {
+      logger.info('Running in safe mode with reduced performance');
+    }
+    
     send ('settings', settings);
   });
 
@@ -55,7 +61,7 @@ export function wire (overlay) {
 
 async function getItemStats (tooltipText) {
   try {
-    let response = await api.get ('/v1/price-check', {
+    let response = await api.get ('/v1/internal/grimvault/analyze', {
       params: {
         tooltip: tooltipText
       }

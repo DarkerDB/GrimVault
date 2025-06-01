@@ -21,8 +21,12 @@ const transport = new winston.transports.DailyRotateFile ({
   createSymlink: true
 });
 
+// In safe mode, use debug level logging regardless of debug state
+const safeMode = process.env.GRIMVAULT_SAFE_MODE === '1';
+
 const logger = winston.createLogger ({
-  level: isDebug () ? 'debug' : 'info',
+  // Use debug level in safe mode to capture more detailed logs
+  level: isDebug () || safeMode ? 'debug' : 'info',
   format: winston.format.combine (
     winston.format.timestamp (),
     winston.format.printf (({ level, message, timestamp, ... meta }) => {

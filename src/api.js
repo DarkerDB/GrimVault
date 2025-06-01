@@ -19,13 +19,13 @@ const api = axios.create ({
 });
 
 api.interceptors.request.use ((request) => {
-  logger.debug (`${request.method.toUpperCase ()} ${getUrl (request)}`);
+  logger.info (`${request.method.toUpperCase ()} ${getUrl (request)}`);
   return request;
 });
 
 api.interceptors.response.use(
   (response) => {
-    logger.debug (`${response.status} ${response.statusText} (${response.config.method.toUpperCase ()} ${getUrl (response.config)})`);
+    logger.info (`${response.status} ${response.statusText} (${response.config.method.toUpperCase ()} ${getUrl (response.config)})`);
     return response;
   },
 

@@ -23,8 +23,8 @@ process.on ('uncaughtException', (error) => {
 });
 
 process.on ('unhandledRejection', (reason, promise) => {
-  logger.error (`Unhandled Promise Rejection: ${reason.toString ()}`);
-  logger.error (`Stack trace: ${reason.stack}`);
+  logger.error(`Unhandled Promise Rejection: ${reason.toString()}`);
+  logger.error(`Stack trace: ${reason.stack}`);
 });
 
 process.on ('SIGTERM', () => {
@@ -47,7 +47,7 @@ process.on ('exit', () => {
 
 app.commandLine.appendSwitch ('high-dpi-support', 1);
 app.commandLine.appendSwitch ('force-device-scale-factor', 1);
-app.commandLine.appendSwitch ('enable-hardware-acceleration');
+app.commandLine.appendSwitch ('disable-crash-reporter');
 
 if (settings.general.launch_on_startup) {
   logger.info ('Registering app startup on login');
@@ -79,11 +79,11 @@ app.on ('second-instance', (event, argv, cwd) => {
 });
 
 app.on ('render-process-gone', (event, webContents, details) => {
-  logger.error (`Render process crashed: ${details}`);
+  logger.error (`Render process crashed: ${JSON.stringify (details)}`);
 });
 
 app.on ('child-process-gone', (event, details) => {
-  logger.error (`Child process crashed: ${details}`);
+  logger.error (`Child process crashed: ${JSON.stringify (details)}`);
 });
 
 app.on ('before-quit', () => {
@@ -191,6 +191,7 @@ app.on ('ready', async () => {
     transparent: true,
     alwaysOnTop: true,
     skipTaskbar: true,
+    type: 'toolbar',
     webPreferences: {
       preload: join (SOURCE, 'preload.cjs'),
       sandbox: false

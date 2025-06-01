@@ -2,5 +2,6 @@
 /node_modules
 /obsolete
 /src/native/.build
-/vcpkg_installed
 /ui/overlay/dist/
+/vcpkg_installed
+/vendor

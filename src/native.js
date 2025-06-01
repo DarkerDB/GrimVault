@@ -40,13 +40,12 @@ let onMessageCallback = (level, message) => {
   logger [level] (`[Native] ${message}`);
 };
 
-logger.info (`Initializing native screen module with mode: ${settings.general.capture_method}`);
+logger.info (`Initializing native screen module`);
 
 let success = native.initialize (
   tesseractModelPath,
   onnxModelPath,
-  onMessageCallback,
-  settings.general.capture_method
+  onMessageCallback
 );
 
 if (!success) {

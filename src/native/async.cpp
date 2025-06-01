@@ -3,208 +3,199 @@
 #include "util.h"
 #include <napi.h>
 #include <opencv2/core.hpp>
-#include <opencv2/opencv.hpp>
 #include <optional>
-#include <tesseract/baseapi.h>
 
 class TooltipWorker : public Napi::AsyncWorker 
 {
-    public:
-        TooltipWorker (const Napi::Env& env, Screen* screen) 
-            : Napi::AsyncWorker (env), 
-            deferred (Napi::Promise::Deferred::New (env)),
-            screen (screen)
-        {
-        }
+   public:
 
-        ~TooltipWorker () 
-        {
-        }
+   TooltipWorker (const Napi::Env& Env, Screen* ScreenPtr) : Napi::AsyncWorker (Env), 
+      Deferred (Napi::Promise::Deferred::New (Env)),
+      ScreenObj (ScreenPtr),
+      Screenshot (nullptr)
+   {
+   }
+   
+   ~TooltipWorker () 
+   {
+      if (Screenshot) {
+         delete Screenshot;
+         Screenshot = nullptr;
+      }
+   }
+   
+   void Execute () override
+   {
+      try {
+         Tooltip = std::nullopt;
 
-        void Execute () override
-        {
-            try {
-                tooltip = std::nullopt;
-
-                // Logger::log (
-                //     Logger::Level::E_DEBUG,
-                //     "Attempting screen capture"
-                // );
-
-                std::optional<cv::Mat> maybeScreenshot = screen->Capture ();
-
-                if (!maybeScreenshot) {
-                    error = "Failed to capture the screen";
-                    return;
-                }
-
-                cv::Mat screenshot = *maybeScreenshot;
-
-                // cv::imwrite ("screenshot.png", screenshot);
-
-                std::vector<cv::Rect> tooltips;
-
-                try {
-                    // Logger::log (
-                    //     Logger::Level::E_DEBUG,
-                    //     "Attempting to find tooltip in screenshot"
-                    // );
-
-                    std::optional<std::vector<cv::Rect>> maybeTooltips = screen->FindTooltips (screenshot);
-
-                    if (!maybeTooltips) {
-                        // Logger::log (
-                        //     Logger::Level::E_DEBUG,
-                        //     "No tooltip found"
-                        // );
-
-                        return;
-                    }
-
-                    tooltips = maybeTooltips.value ();
-                } catch (const cv::Exception& e) {
-                    error = std::string ("OpenCV error while finding tooltip: ") + e.what ();
-                    return;
-                }
-
-                try {
-                    // Logger::log (
-                    //     Logger::Level::E_DEBUG,
-                    //     "Attempting to run OCR against found tooltip"
-                    // );
-
-                    // text = screen->Read (screenshot (*tooltip));
-
-                    // Until we retrain the tooltip model to not recognize the GrimVault tooltip, 
-                    // we have to check the text to see if it is a valid tooltip.
-
-                    for (const auto& candidate : tooltips) {
-                        text = screen->Read (screenshot (candidate));
-                        
-                        // Logger::log (
-                        //     Logger::Level::E_DEBUG,
-                        //     "Found tooltip text: " + text
-                        // );
-
-                        if (text.find ("Item Statistics") == std::string::npos) {
-                            tooltip = candidate;
-                            break;
-                        }
-                    }
-                    
-                    if (!tooltip) {
-                        error = std::string ("All identified tooltips belong to GrimVault");
-                        return;
-                    }
-                } catch (const std::runtime_error& e) {
-                    error = std::string ("Tesseract error while reading text: ") + e.what ();
-                    return;
-                } catch (const cv::Exception& e) {
-                    error = std::string ("OpenCV error while processing region for OCR: ") + e.what ();
-                    return;
-                }
-            } catch (const std::exception& e) {
-                error = std::string ("Standard exception in TooltipWorker: ") + e.what ();
-            } catch (const cv::Exception& e) {
-                error = std::string ("OpenCV error in TooltipWorker: ") + e.what ();
-            } catch (const std::runtime_error& e) {
-                error = std::string ("Runtime error in TooltipWorker: ") + e.what ();
-            } catch (...) {
-                std::string exceptionTypeName;
-
-                try {
-                    exceptionTypeName = typeid (std::current_exception ()).name ();
-                } catch (...) {
-                    exceptionTypeName = "Unknown";
-                }
-
-                error = "Unknown exception in TooltipWorker (type: " + exceptionTypeName + ")";
-
-                DWORD errorCode = GetLastError ();
-
-                if (errorCode != 0) {
-                    LPSTR messageBuffer = nullptr;
-                
-                    size_t size = FormatMessageA (
-                        FORMAT_MESSAGE_ALLOCATE_BUFFER | 
-                        FORMAT_MESSAGE_FROM_SYSTEM |
-                        FORMAT_MESSAGE_IGNORE_INSERTS,
-                        nullptr,
-                        errorCode,
-                        MAKELANGID (LANG_NEUTRAL, SUBLANG_DEFAULT),
-                        (LPSTR) &messageBuffer,
-                        0,
-                        nullptr
-                    );
-                    
-                    if (messageBuffer) {
-                        error += "\nSystem error: " + std::string (messageBuffer, size);
-                        LocalFree (messageBuffer);
-                    }
-                }
-            }
-        }
-
-        void OnOK () override
-        {
-            Napi::Env env = Env ();
-
-            if (!error.empty ()) {
-                deferred.Reject (Napi::String::New (env, error));
-                return;
-            }
-
-            if (!tooltip) {
-                return deferred.Resolve (env.Null ());
-            }
-
-            float scale = 1;
-
-            // HWND GameWindow = FindGameWindow ();
+         // Logger::log (
+         //     Logger::Level::E_DEBUG,
+         //     "Attempting screen capture"
+         // );
+         
+         std::optional<cv::Mat> MaybeScreenshot = ScreenObj->Capture ();
+         
+         if (!MaybeScreenshot) {
+            Error = "Failed to capture the screen";
+            return;
+         }
+         
+         // Store screenshot in heap memory to avoid potential stack overflow
+         Screenshot = new cv::Mat (*MaybeScreenshot);
+         
+         std::vector<cv::Rect> Tooltips;
+         
+         try {
+            // Logger::log (
+            //     Logger::Level::E_DEBUG,
+            //     "Attempting to find tooltip in screenshot"
+            // );
             
-            // if (GameWindow) {
-            //     scale = GetScalingFactorForMonitor (GameWindow);
-
-            //     Logger::log (
-            //         Logger::Level::E_INFO,
-            //         "Scaling factor: " + std::to_string (scale)
-            //     );
-            // }
-
-            Napi::Object result = Napi::Object::New (env);
-
-            result.Set ("text", Napi::String::New (env, text));
-
-            result.Set ("x", Napi::Number::New (env, tooltip->x / scale));
-            result.Set ("y", Napi::Number::New (env, tooltip->y / scale));
-            result.Set ("width", Napi::Number::New (env, tooltip->width / scale));
-            result.Set ("height", Napi::Number::New (env, tooltip->height / scale));
-
-            deferred.Resolve (result);
-        }
-
-        void OnError (const Napi::Error& e) override
-        {
-            Logger::log (
-                Logger::Level::E_ERROR,
-                "Error in TooltipWorker: " + std::string (e.Message ())    
+            std::optional<std::vector<cv::Rect>> MaybeTooltips = ScreenObj->FindTooltips (*Screenshot);
+            
+            if (!MaybeTooltips) {
+               // Logger::log (
+               //     Logger::Level::E_DEBUG,
+               //     "No tooltip found"
+               // );
+               
+               return;
+            }
+            
+            Tooltips = MaybeTooltips.value ();
+         } catch (const cv::Exception& E) {
+            Error = std::string ("OpenCV error while finding tooltip: ") + E.what ();
+            return;
+         }
+         
+         try {
+            // Logger::log (
+            //     Logger::Level::E_DEBUG,
+            //     "Attempting to run OCR against found tooltip"
+            // );
+            
+            // Text = ScreenObj->Read (Screenshot (*Tooltip));
+            
+            // Until we retrain the tooltip model to not recognize the GrimVault tooltip, 
+            // we have to check the text to see if it is a valid tooltip.
+            
+            for (const auto& Candidate : Tooltips) {
+               Text = ScreenObj->Read ((*Screenshot) (Candidate));
+               
+               // Logger::log (
+               //     Logger::Level::E_DEBUG,
+               //     "Found tooltip text: " + Text
+               // );
+               
+               if (Text.find ("Item Statistics") == std::string::npos) {
+                  Tooltip = Candidate;
+                  break;
+               }
+            }
+            
+            if (!Tooltip) {
+               Error = std::string ("All identified tooltips belong to GrimVault");
+               return;
+            }
+         } catch (const std::runtime_error& E) {
+            Error = std::string ("Tesseract error while reading text: ") + E.what ();
+            return;
+         } catch (const cv::Exception& E) {
+            Error = std::string ("OpenCV error while processing region for OCR: ") + E.what ();
+            return;
+         }
+      } catch (const cv::Exception& E) {
+         Error = std::string ("OpenCV error in TooltipWorker: ") + E.what ();
+      } catch (const std::runtime_error& E) {
+         Error = std::string ("Runtime error in TooltipWorker: ") + E.what ();
+      } catch (const std::exception& E) {
+         Error = std::string ("Standard exception in TooltipWorker: ") + E.what ();
+      } catch (...) {
+         std::string ExceptionTypeName;
+         
+         try {
+            ExceptionTypeName = typeid (std::current_exception ()).name ();
+         } catch (...) {
+            ExceptionTypeName = "Unknown";
+         }
+         
+         Error = "Unknown exception in TooltipWorker (type: " + ExceptionTypeName + ")";
+         
+         DWORD ErrorCode = GetLastError ();
+         
+         if (ErrorCode != 0) {
+            LPSTR MessageBuffer = nullptr;
+            
+            size_t Size = FormatMessageA (
+               FORMAT_MESSAGE_ALLOCATE_BUFFER | 
+               FORMAT_MESSAGE_FROM_SYSTEM |
+               FORMAT_MESSAGE_IGNORE_INSERTS,
+               nullptr,
+               ErrorCode,
+               MAKELANGID (LANG_NEUTRAL, SUBLANG_DEFAULT),
+               (LPSTR) &MessageBuffer,
+               0,
+               nullptr
             );
+            
+            if (MessageBuffer) {
+               Error += "\nSystem error: " + std::string (MessageBuffer, Size);
+               LocalFree (MessageBuffer);
+            }
+         }
+      }
+   }
+   
+   void OnOK () override
+   {
+      Napi::Env EnvLocal = Env ();
+      
+      if (!Error.empty ()) {
+         Deferred.Reject (Napi::String::New (EnvLocal, Error));
+         return;
+      }
+      
+      if (!Tooltip) {
+         return Deferred.Resolve (EnvLocal.Null ());
+      }
+      
+      Napi::Object Result = Napi::Object::New (EnvLocal);
+      
+      Result.Set ("text", Napi::String::New (EnvLocal, Text));
+      
+      Result.Set ("x", Napi::Number::New (EnvLocal, Tooltip->x));
+      Result.Set ("y", Napi::Number::New (EnvLocal, Tooltip->y));
+      Result.Set ("width", Napi::Number::New (EnvLocal, Tooltip->width));
+      Result.Set ("height", Napi::Number::New (EnvLocal, Tooltip->height));
+      
+      Deferred.Resolve (Result);
+   }
+   
+   void OnError (const Napi::Error& E) override
+   {
+      Logger::log (
+         Logger::Level::E_ERROR,
+         "Error in TooltipWorker: " + std::string (E.Message ())    
+      );
+      
+      Deferred.Reject (E.Value ());
+   }
+   
+   Napi::Promise GetPromise () const
+   {
+      return Deferred.Promise ();
+   }
+   
+   private:
 
-            deferred.Reject (e.Value ());
-        }
-
-        Napi::Promise GetPromise () const
-        {
-            return deferred.Promise ();
-        }
-
-    private:
-        Screen* screen;
-
-        Napi::Promise::Deferred deferred;
-
-        std::optional<cv::Rect> tooltip;
-
-        std::string error;
-        std::string text;
+   Screen* ScreenObj;
+   
+   Napi::Promise::Deferred Deferred;
+   
+   std::optional<cv::Rect> Tooltip;
+   cv::Mat* Screenshot;
+   
+   std::string Error;
+   std::string Text;
 };

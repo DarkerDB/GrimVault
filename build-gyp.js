@@ -15,7 +15,17 @@ const binding = {
         "src/native/logger.cpp",
         "src/native/main.cpp",
         "src/native/screen.cpp",
-        "src/native/util.cpp"
+        "src/native/util.cpp",
+        "src/native/wgc.cpp",
+        "vendor/screen_capture_lite/src_cpp/windows/GetMonitors.cpp",
+        "vendor/screen_capture_lite/src_cpp/windows/GetWindows.cpp",
+        "vendor/screen_capture_lite/src_cpp/windows/ThreadRunner.cpp", 
+        "vendor/screen_capture_lite/src_cpp/windows/DXFrameProcessor.cpp",
+        "vendor/screen_capture_lite/src_cpp/windows/GDIFrameProcessor.cpp",
+        "vendor/screen_capture_lite/src_cpp/windows/GDIMouseProcessor.cpp",
+        "vendor/screen_capture_lite/src_cpp/ScreenCapture.cpp",
+        "vendor/screen_capture_lite/src_cpp/SCCommon.cpp",
+        "vendor/screen_capture_lite/src_cpp/ThreadManager.cpp"
       ],
       "dependencies": [
         "<!(node -p \"require('node-addon-api').targets\"):node_addon_api"
@@ -23,7 +33,9 @@ const binding = {
       "include_dirs": [
         "<(module_root_dir)/node_modules/node-addon-api",
         "<(module_root_dir)/vcpkg_installed/x64-windows/include",
-        "<(module_root_dir)/vcpkg_installed/x64-windows/include/opencv4"
+        "<(module_root_dir)/vcpkg_installed/x64-windows/include/opencv4",
+        "<(module_root_dir)/vendor/screen_capture_lite/include",
+        "<(module_root_dir)/vendor/screen_capture_lite/include/windows"
       ],
       "configurations": {},
       "msvs_settings": {
@@ -53,6 +65,7 @@ if (DEBUG) {
       "DirectXTK.lib",
       "dxgi.lib",
       "dxguid.lib",
+      "dwmapi.lib",
       "leptonica-1.84.1d.lib",
       "opencv_core4d.lib",
       "opencv_dnn4d.lib",
@@ -96,6 +109,7 @@ if (DEBUG) {
     "DirectXTK.lib",
     "dxgi.lib",
     "dxguid.lib",
+    "dwmapi.lib",
     "leptonica-1.84.1.lib",
     "opencv_core4.lib",
     "opencv_dnn4.lib",
