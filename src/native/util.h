@@ -1,5 +1,4 @@
-#ifndef _UTIL_H
-#define _UTIL_H
+#pragma once
 
 #include <optional>
 #include <windows.h>
@@ -11,5 +10,3 @@
 HWND FindGameWindow ();
 std::optional<int> GetGameMonitorId ();
 bool IsMonitorHDR (HMONITOR Monitor);
-
-#endif 

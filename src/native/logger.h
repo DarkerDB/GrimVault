@@ -1,5 +1,4 @@
-#ifndef LOGGER_H
-#define LOGGER_H
+#pragma once
 
 #include <napi.h>
 #include <string>
@@ -27,5 +26,3 @@ class Logger
    
    static std::string levelToString (Level Level);
 };
-
-#endif

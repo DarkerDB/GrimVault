@@ -2,6 +2,16 @@
 #include "util.h"
 #include <ScreenCapture.h>
 
+
+
+
+// -- -- //
+
+
+
+
+
+
 std::mutex GameMonitorMutex;
 std::optional<int> GameMonitorId;
 std::chrono::steady_clock::time_point LastMonitorCheck = std::chrono::steady_clock::now ();
@@ -67,7 +77,7 @@ HWND FindGameWindow ()
    
    if (!Params.Result) {
       Logger::log (
-         Logger::Level::E_WARNING,
+         Logger::Level::E_DEBUG,
          "Game window not found for DungeonCrawler.exe"
       );
    }
@@ -80,8 +90,8 @@ std::optional<int> GetGameMonitorId ()
    auto Now = std::chrono::steady_clock::now ();
    auto TimeSinceLastCheck = std::chrono::duration_cast<std::chrono::milliseconds> (Now - LastMonitorCheck).count ();
    
-   // Only check for game window every 1000ms (1 second) to avoid performance impact
-   if (TimeSinceLastCheck < 1000) {
+   // Only check for game window every 10000ms (1 second) to avoid performance impact
+   if (TimeSinceLastCheck < 10000) {
       std::lock_guard<std::mutex> Lock (GameMonitorMutex);
       return GameMonitorId;
    }

@@ -17,6 +17,7 @@ const binding = {
         "src/native/screen.cpp",
         "src/native/util.cpp",
         "src/native/wgc.cpp",
+        "src/native/windows.cpp",
         "vendor/screen_capture_lite/src_cpp/windows/GetMonitors.cpp",
         "vendor/screen_capture_lite/src_cpp/windows/GetWindows.cpp",
         "vendor/screen_capture_lite/src_cpp/windows/ThreadRunner.cpp", 

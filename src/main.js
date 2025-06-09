@@ -204,7 +204,7 @@ app.on ('ready', async () => {
 
   setInterval (() => {
     pin (overlay, debugging);
-  }, 1000);
+  }, 2500);
 
   wire (overlay);
 

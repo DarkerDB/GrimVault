@@ -2,7 +2,6 @@ import electron from 'electron';
 import { join } from 'node:path';
 import { RESOURCES, ROOT, SOURCE } from './config.js';
 import { logger } from './logger.js';
-import { settings } from './settings.js';
 import { createRequire } from 'module';
 
 const { app } = electron;
@@ -54,9 +53,13 @@ if (!success) {
 }
 
 let {
-  getTooltip
+  getTooltip,
+  getActiveWindow,
+  getGameWindow
 } = native;
 
 export {
-  getTooltip, 
+  getTooltip,
+  getActiveWindow,
+  getGameWindow
 };

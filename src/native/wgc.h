@@ -1,5 +1,4 @@
-#ifndef WGC_H
-#define WGC_H
+#pragma once
 
 #include <windows.h>
 #include <winrt/base.h>
@@ -56,5 +55,3 @@ private:
     
     static winrt::IDirect3DDevice CreateDirect3DDevice (IDXGIDevice* DxgiDevice);
 };
-
-#endif

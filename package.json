@@ -1,6 +1,6 @@
 {
   "name": "grimvault",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "description": "GrimVault",
   "author": "DarkerDB",
   "type": "module",
@@ -23,7 +23,7 @@
     "electron-updater": "^6.3.9",
     "form-data": "^4.0.2",
     "ini": "^5.0.0",
-    "node-addon-api": "^8.3.0",
+    "node-addon-api": "^8.3.1",
     "node-machine-id": "^1.1.12",
     "node-window-manager": "^2.2.4",
     "vue": "^3.2.13",

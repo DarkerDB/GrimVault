@@ -180,6 +180,11 @@ bool Screen::Initialize ()
       Cleanup ();
       return false;
    }
+
+   Logger::log (
+      Logger::Level::E_INFO,
+      "Screen successfully initialized"
+   );
 }
 
 void Screen::Cleanup () 
@@ -198,6 +203,7 @@ void Screen::Cleanup ()
    
    std::lock_guard<std::mutex> Lock (FrameMutex);
    LatestFrame = cv::Mat ();
+   BackupFrame = cv::Mat ();
    HasNewFrame = false;
    
    if (Tesseract) {
@@ -249,14 +255,25 @@ std::optional<cv::Mat> Screen::Capture ()
    std::lock_guard<std::mutex> FrameLock (FrameMutex);
    
    if (!HasNewFrame || LatestFrame.empty ()) {
+      // Check if we have a backup frame to use
+      if (!BackupFrame.empty ()) {
+         Logger::log (
+            Logger::Level::E_DEBUG, 
+            "No new frame available, using backup frame"
+         );
+         return BackupFrame.clone ();
+      }
+      
       Logger::log (
          Logger::Level::E_DEBUG, 
-         "No new available frame has been buffered for capture"
+         "No new available frame has been buffered for capture and no backup frame exists"
       );
          
       return std::nullopt;
    }
 
+   // Save current frame as backup before returning
+   BackupFrame = LatestFrame.clone ();
    HasNewFrame = false;
    return LatestFrame.clone ();
 }
@@ -467,19 +484,15 @@ bool Screen::InitializeScreenCaptureLite ()
    auto Config = SL::Screen_Capture::CreateCaptureConfiguration (GetMonitorsCallback);
 
    Config->onNewFrame ([this] (const SL::Screen_Capture::Image& Img, const SL::Screen_Capture::Monitor& Monitor) {
-      // Check if this is the monitor with the game
       std::optional<int> CurrentGameMonitorId = GetGameMonitorId ();
-      
-      // Only process the frame if it's from the monitor with the game
+
       if (!CurrentGameMonitorId.has_value () || CurrentGameMonitorId.value () == Monitor.Id) {
          int Height = SL::Screen_Capture::Height (Img);
          int Width = SL::Screen_Capture::Width (Img);
          
-         // Get original dimensions from the monitor (not the scaled ones)
          int TargetWidth = Monitor.OriginalWidth;
          int TargetHeight = Monitor.OriginalHeight;
          
-         // Log sizes for debugging
          // Logger::log (
          //    Logger::Level::E_DEBUG,
          //    "Processing frame: " + std::to_string (Width) + "x" + std::to_string (Height) +
@@ -488,15 +501,21 @@ bool Screen::InitializeScreenCaptureLite ()
          //    ", scaling factor: " + std::to_string (Monitor.Scaling)
          // );
          
-         // Create buffer for the image data
-         std::vector<uint8_t> Buffer (Width * Height * 4); // 4 bytes per pixel (BGRA)
+         // 4 bytes per pixel (BGRA)
+         std::vector<uint8_t> Buffer (Width * Height * 4); 
          
-         // Extract the pixel data
-         SL::Screen_Capture::Extract (Img, Buffer.data (), Buffer.size ());
-         
-         // Create Mat from the buffer
-         cv::Mat Frame (Height, Width, CV_8UC4, Buffer.data ());
-         
+         SL::Screen_Capture::Extract (
+            Img, 
+            Buffer.data (), 
+            Buffer.size ()
+         );
+
+         cv::Mat Frame (
+            Height, 
+            Width, 
+            CV_8UC4, 
+            Buffer.data ()
+         );
          
          std::lock_guard<std::mutex> Lock (FrameMutex);
          LatestFrame = Frame.clone ();

@@ -1,6 +1,7 @@
 #include "async.cpp"
 #include "screen.h"
 #include "util.h"
+#include "windows.h"
 #include <napi.h>
 #include <string>
 
@@ -84,10 +85,26 @@ Napi::Value GetTooltip (const Napi::CallbackInfo& Info)
    }
 }
 
+Napi::Value FetchActiveWindow (const Napi::CallbackInfo& Info) 
+{
+   auto* Worker = new ActiveWindowWorker (Info.Env ());
+   Worker->Queue ();
+   return Worker->GetPromise ();
+}
+
+Napi::Value FetchGameWindow (const Napi::CallbackInfo& Info) 
+{
+   auto* Worker = new GameWindowWorker (Info.Env ());
+   Worker->Queue ();
+   return Worker->GetPromise ();
+}
+
 Napi::Object Init (Napi::Env Env, Napi::Object Exports) 
 {
    Exports.Set ("initialize", Napi::Function::New (Env, Initialize));
    Exports.Set ("getTooltip", Napi::Function::New (Env, GetTooltip));
+   Exports.Set ("getActiveWindow", Napi::Function::New (Env, FetchActiveWindow));
+   Exports.Set ("getGameWindow", Napi::Function::New (Env, FetchGameWindow));
    
    return Exports;
 }

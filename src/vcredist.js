@@ -1,6 +1,6 @@
 import Registry from 'winreg';
 
-import { exec, execFile } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { app, dialog } from 'electron';
@@ -12,11 +12,11 @@ import { logger } from './logger.js';
 const VC_REDIST_KEYS = [
   {
       key: '\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64',
-      name: 'Version'
+      name: 'Installed'
   },
   {
       key: '\\SOFTWARE\\WOW6432Node\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64',
-      name: 'Version'
+      name: 'Installed'
   }
 ];
 
@@ -41,17 +41,14 @@ async function checkRegistry (regKey) {
 
         resolve (false);
         return;
-      } 
+      }
 
       resolve (true);
     });
   });
-
 }
 
 async function isVCRedistInstalled () {
-  logger.info ('Checking registry for VC++ redistributable');
-
   for (const key of VC_REDIST_KEYS) {
     if (await checkRegistry (key)) {
       return true;

@@ -76,7 +76,6 @@ function toList (s, values) {
   if (!s) {
     return values;
   }
-  console.log (s);
 
   s = s.split (/ *, */g);
   s = s.filter (v => values.includes (v));

@@ -55,7 +55,8 @@ void Logger::log (Level Level, const std::string &Message)
    }
 }
 
-std::string Logger::levelToString (Level Level) {
+std::string Logger::levelToString (Level Level) 
+{
    switch (Level) {
       case Level::E_DEBUG:
          return "debug";
@@ -70,6 +71,7 @@ std::string Logger::levelToString (Level Level) {
    }
 }
 
-void Logger::initialize (Napi::ThreadSafeFunction Callback) {
+void Logger::initialize (Napi::ThreadSafeFunction Callback) 
+{
    Logger::callback = Callback;
 }

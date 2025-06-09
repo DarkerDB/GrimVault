@@ -1,5 +1,4 @@
-#ifndef SCREEN_H
-#define SCREEN_H
+#pragma once
 
 #include "wgc.h"
 #include <atomic>
@@ -77,6 +76,7 @@ class Screen
    
    // Common capture data
    cv::Mat LatestFrame;
+   cv::Mat BackupFrame;  // Backup frame for when no new frame is available
    std::mutex FrameMutex;
    std::atomic<bool> HasNewFrame = false;
    
@@ -85,5 +85,3 @@ class Screen
    
    void Cleanup ();
 };
-
-#endif

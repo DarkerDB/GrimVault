@@ -14,6 +14,7 @@ import {
 } from "../lib/mouse.js";
 
 import { modes } from "../lib/modes.js";
+import { interpolateColor } from "../lib/util.js";
 
 const props = defineProps({
   mode: {
@@ -58,6 +59,7 @@ const item = ref({
     secondary: [],
   },
 
+  demand: null,
   quality: null,
   // relativeQuality: null,
   // numSimilarSoldRecently: null,
@@ -128,10 +130,12 @@ onMounted(() => {
     // }
 
     item.value.prices.market = data.pricing.market;
+    item.value.prices.density = data.pricing.density;
     item.value.prices.vendor = data.pricing.vendor;
 
     // item.value.numSimilarSoldRecently = data.num_similar_sold_recently;
     // item.value.relativeQuality = data.relative_quality;
+    item.value.demand = data.demand;
     item.value.quality = data.quality;
     item.value.adventurePoints = data.adventure_points;
     // item.value.experience = data.experience;
@@ -330,6 +334,7 @@ function getGradeColor(grade) {
                     props.components.includes('details') &&
                     (item.quality ||
                       item.relativeQuality ||
+                      item.demand ||
                       item.numSimilarSoldRecently)
                   "
                 >
@@ -341,6 +346,13 @@ function getGradeColor(grade) {
                       <span>Similar Sold Recently:</span>
                       <span>{{ item.numSimilarSoldRecently }}</span>
                     </div> -->
+                    <div v-if="item.demand" class="tooltip-stat">
+                      <span>Demand:</span>
+                      <span
+                        :style="{ color: interpolateColor(item.demand, 10) }"
+                        >{{ item.demand }} / 10</span
+                      >
+                    </div>
                     <div v-if="item.adventurePoints" class="tooltip-stat">
                       <span>Adventure Points:</span>
                       <span>{{ item.adventurePoints }}</span>
@@ -390,6 +402,13 @@ function getGradeColor(grade) {
                   >
                     <span>Vendor:</span>
                     <span class="gold ml-2">{{ item.prices.vendor }}</span>
+                  </div>
+                  <div
+                    class="flex items-center"
+                    v-if="item.prices.density !== null"
+                  >
+                    <span>Density:</span>
+                    <span class="gold ml-2">{{ item.prices.density }}</span>
                   </div>
                 </div>
 
