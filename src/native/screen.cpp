@@ -21,7 +21,7 @@ Screen::~Screen ()
    Cleanup ();
 }
 
-Screen::Screen () : IsInitialized (false)
+Screen::Screen () : IsInitialized (false), MainThreadId (std::this_thread::get_id ())
 {
 }
 
@@ -162,6 +162,13 @@ bool Screen::Initialize ()
       }
 
       IsInitialized = true;
+      
+      Logger::log (
+         Logger::Level::E_INFO,
+         "Screen successfully initialized with capture method: " + 
+         std::to_string(static_cast<int>(CurrentCaptureMethod))
+      );
+      
       return true;
    } catch (std::exception& E) {
       Logger::log (
@@ -194,12 +201,18 @@ void Screen::Cleanup ()
       "Cleaning up all screen resources"
    );
    
+   if (CaptureManager) {
+      try {
+         // Give callbacks time to complete before cleanup
+         std::this_thread::sleep_for (std::chrono::milliseconds (100));
+      } catch (...) {
+      }
+   }
+   
    CaptureManager = nullptr;
    
-   if (WGCInstance) {
-      delete WGCInstance;
-      WGCInstance = nullptr;
-   }
+   // WGCInstance cleanup handled by unique_ptr
+   WGCInstance.reset();
    
    std::lock_guard<std::mutex> Lock (FrameMutex);
    LatestFrame = cv::Mat ();
@@ -223,6 +236,11 @@ std::optional<cv::Mat> Screen::Capture ()
    if (!IsInitialized) {
       throw std::runtime_error ("Cannot capture screen before initialization");
    }
+   
+   Logger::log (
+      Logger::Level::E_DEBUG,
+      "Capture called, method: " + std::to_string (static_cast<int>(CurrentCaptureMethod))
+   );
    
    std::lock_guard<std::mutex> Lock (CaptureLock);
    
@@ -253,6 +271,13 @@ std::optional<cv::Mat> Screen::Capture ()
    }
    
    std::lock_guard<std::mutex> FrameLock (FrameMutex);
+   
+   // Logger::log (
+   //    Logger::Level::E_DEBUG,
+   //    "ScreenCaptureLite - HasNewFrame: " + std::to_string(HasNewFrame) + 
+   //    ", LatestFrame empty: " + std::to_string (LatestFrame.empty ()) +
+   //    ", BackupFrame empty: " + std::to_string (BackupFrame.empty ())
+   // );
    
    if (!HasNewFrame || LatestFrame.empty ()) {
       // Check if we have a backup frame to use
@@ -483,7 +508,12 @@ bool Screen::InitializeScreenCaptureLite ()
 
    auto Config = SL::Screen_Capture::CreateCaptureConfiguration (GetMonitorsCallback);
 
-   Config->onNewFrame ([this] (const SL::Screen_Capture::Image& Img, const SL::Screen_Capture::Monitor& Monitor) {
+   Config->onNewFrame ([ this ] (const SL::Screen_Capture::Image& Img, const SL::Screen_Capture::Monitor& Monitor) {
+      // Logger::log (
+      //    Logger::Level::E_DEBUG,
+      //    "ScreenCaptureLite callback triggered for monitor " + std::to_string(Monitor.Id)
+      // );
+      
       std::optional<int> CurrentGameMonitorId = GetGameMonitorId ();
 
       if (!CurrentGameMonitorId.has_value () || CurrentGameMonitorId.value () == Monitor.Id) {
@@ -534,8 +564,26 @@ bool Screen::InitializeScreenCaptureLite ()
       return false;
    }
 
+   Logger::log (
+      Logger::Level::E_INFO,
+      "Screen capture manager started successfully"
+   );
+
    // 100ms = 0.1s = 10 FPS
    CaptureManager->setFrameChangeInterval (std::chrono::milliseconds (100));
+   
+   Logger::log (
+      Logger::Level::E_INFO,
+      "Frame interval set to 100ms"
+   );
+   
+   // Give the capture system time to start and capture the first frame
+   std::this_thread::sleep_for (std::chrono::milliseconds (200));
+   
+   Logger::log (
+      Logger::Level::E_INFO,
+      "Screen Capture Lite initialization complete"
+   );
    
    return true;
 }
@@ -547,7 +595,7 @@ bool Screen::InitializeWindowsGraphicsCapture ()
       "Initializing Windows Graphics Capture"
    );
    
-   WGCInstance = new WindowsGraphicsCapture ();
+   WGCInstance = std::make_unique<WindowsGraphicsCapture> ();
    
    if (!WGCInstance->Initialize ()) {
       Logger::log (
@@ -555,8 +603,7 @@ bool Screen::InitializeWindowsGraphicsCapture ()
          "Failed to initialize WGC"
       );
 
-      delete WGCInstance;
-      WGCInstance = nullptr;
+      WGCInstance.reset ();
       return false;
    }
    

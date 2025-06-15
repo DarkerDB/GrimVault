@@ -58,6 +58,7 @@ class Screen
    const double NMS_THRESHOLD = 0.50;
    
    std::atomic<bool> IsInitialized;
+   std::thread::id MainThreadId;
    
    std::mutex CaptureLock;
    std::mutex DNNLock;
@@ -72,7 +73,7 @@ class Screen
    // Screen capture lite implementation
    std::shared_ptr<SL::Screen_Capture::IScreenCaptureManager> CaptureManager;
    
-   WindowsGraphicsCapture* WGCInstance = nullptr;
+   std::unique_ptr<WindowsGraphicsCapture> WGCInstance;
    
    // Common capture data
    cv::Mat LatestFrame;

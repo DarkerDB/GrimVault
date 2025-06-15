@@ -87,6 +87,7 @@ app.on ('child-process-gone', (event, details) => {
 });
 
 app.on ('before-quit', () => {
+  logger.info ('App preparing to quit, cleaning up resources');
   globalShortcut.unregisterAll ();
 });
 

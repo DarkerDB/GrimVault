@@ -4,12 +4,14 @@
 #include <napi.h>
 #include <opencv2/core.hpp>
 #include <optional>
+#include <memory>
+#include <combaseapi.h>
 
 class TooltipWorker : public Napi::AsyncWorker 
 {
    public:
 
-   TooltipWorker (const Napi::Env& Env, Screen* ScreenPtr) : Napi::AsyncWorker (Env), 
+   TooltipWorker (const Napi::Env& Env, std::shared_ptr<Screen> ScreenPtr) : Napi::AsyncWorker (Env), 
       Deferred (Napi::Promise::Deferred::New (Env)),
       ScreenObj (ScreenPtr),
       Screenshot (nullptr)
@@ -18,14 +20,25 @@ class TooltipWorker : public Napi::AsyncWorker
    
    ~TooltipWorker () 
    {
-      if (Screenshot) {
-         delete Screenshot;
-         Screenshot = nullptr;
-      }
+      // Screenshot managed by unique_ptr
    }
    
    void Execute () override
    {
+      // Initialize COM for this thread to safely access COM objects
+      HRESULT comResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+      bool comInitialized = SUCCEEDED(comResult);
+      
+      // Ensure COM cleanup on exit
+      auto comCleanup = std::unique_ptr<void, std::function<void(void*)>>(
+         &comResult,
+         [comInitialized](void*) {
+            if (comInitialized) {
+               CoUninitialize();
+            }
+         }
+      );
+      
       try {
          Tooltip = std::nullopt;
 
@@ -41,8 +54,8 @@ class TooltipWorker : public Napi::AsyncWorker
             return;
          }
          
-         // Store screenshot in heap memory to avoid potential stack overflow
-         Screenshot = new cv::Mat (*MaybeScreenshot);
+         // Store screenshot in heap memory using smart pointer
+         Screenshot = std::make_unique<cv::Mat> (*MaybeScreenshot);
          
          std::vector<cv::Rect> Tooltips;
          
@@ -189,12 +202,12 @@ class TooltipWorker : public Napi::AsyncWorker
    
    private:
 
-   Screen* ScreenObj;
+   std::shared_ptr<Screen> ScreenObj;
    
    Napi::Promise::Deferred Deferred;
    
    std::optional<cv::Rect> Tooltip;
-   cv::Mat* Screenshot;
+   std::unique_ptr<cv::Mat> Screenshot;
    
    std::string Error;
    std::string Text;

@@ -57,10 +57,10 @@ export async function pin (overlay, debugging) {
           let monitor = gameInfo.monitor;
           let scale = monitor.scale;
 
-          bounds.x *= scale;
-          bounds.y *= scale;
-          bounds.width *= scale;
-          bounds.height *= scale;
+          // bounds.x *= scale;
+          // bounds.y *= scale;
+          // bounds.width *= scale;
+          // bounds.height *= scale;
 
           overlay.webContents.send ('game:bounds', {
             ... bounds,

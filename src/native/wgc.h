@@ -13,6 +13,7 @@
 #include <optional>
 #include <mutex>
 #include <atomic>
+#include <thread>
 
 namespace winrt
 {
@@ -36,6 +37,9 @@ public:
 private:
     std::mutex CaptureLock;
     std::atomic<bool> IsInitialized = false;
+    
+    // Thread safety - ensure D3D11 is only used from creating thread
+    std::thread::id CreatingThreadId;
     
     // D3D11 resources
     Microsoft::WRL::ComPtr<ID3D11Device> Device;

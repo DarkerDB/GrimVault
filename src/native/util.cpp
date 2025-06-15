@@ -163,11 +163,19 @@ std::optional<int> GetGameMonitorId ()
 
 bool IsMonitorHDR (HMONITOR Monitor) 
 {
-   Microsoft::WRL::ComPtr<IDXGIFactory6> Factory;
-
-   if (FAILED (CreateDXGIFactory2(0, IID_PPV_ARGS (&Factory)))) {
-      return false;
+   // Use cached DXGI factory to prevent resource exhaustion
+   static Microsoft::WRL::ComPtr<IDXGIFactory6> CachedFactory;
+   static std::mutex FactoryMutex;
+   
+   std::lock_guard<std::mutex> lock(FactoryMutex);
+   
+   if (!CachedFactory) {
+      if (FAILED (CreateDXGIFactory2(0, IID_PPV_ARGS (&CachedFactory)))) {
+         return false;
+      }
    }
+   
+   auto Factory = CachedFactory;
    
    Microsoft::WRL::ComPtr<IDXGIAdapter1> Adapter;
 

@@ -2,6 +2,9 @@
 #include "logger.h"
 #include <thread>
 #include <chrono>
+#include <functional>
+#include <memory>
+#include <combaseapi.h>
 
 // Include Windows.Graphics.Capture.Interop.h
 extern "C"
@@ -47,6 +50,16 @@ bool WindowsGraphicsCapture::Initialize ()
         return true;
     }
     
+    // Ensure COM is initialized on this thread
+    HRESULT comResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    if (FAILED(comResult) && comResult != RPC_E_CHANGED_MODE) {
+        Logger::log (
+            Logger::Level::E_ERROR,
+            "Failed to initialize COM for WGC"
+        );
+        return false;
+    }
+    
     Logger::log (
         Logger::Level::E_INFO,
         "Initializing Windows Graphics Capture"
@@ -86,6 +99,9 @@ bool WindowsGraphicsCapture::Initialize ()
             );
             return false;
         }
+        
+        // Store the creating thread ID for safety checks
+        CreatingThreadId = std::this_thread::get_id ();
         
         IsInitialized = true;
         
@@ -338,6 +354,29 @@ std::optional<cv::Mat> WindowsGraphicsCapture::CaptureWindow (HWND GameWindow)
             return std::nullopt;
         }
         
+        // Ensure texture is unmapped in all paths - use safe RAII guard
+        struct UnmapGuard {
+            Microsoft::WRL::ComPtr<ID3D11DeviceContext> ctx;
+            winrt::com_ptr<ID3D11Texture2D> texture;
+            bool shouldUnmap;
+            
+            UnmapGuard (Microsoft::WRL::ComPtr<ID3D11DeviceContext> c, winrt::com_ptr<ID3D11Texture2D> t) 
+                : ctx (c), texture (t), shouldUnmap (true) {}
+            
+            ~UnmapGuard () {
+                if (shouldUnmap && ctx && texture) {
+                    try {
+                        ctx->Unmap (texture.get (), 0);
+                    } catch (...) {
+                    }
+                }
+            }
+            
+            void release () { shouldUnmap = false; }
+        };
+        
+        UnmapGuard unmapGuard (Context, StagingTexture);
+        
         cv::Mat Screenshot (
             Desc.Height,
             Desc.Width,
@@ -348,7 +387,7 @@ std::optional<cv::Mat> WindowsGraphicsCapture::CaptureWindow (HWND GameWindow)
         
         cv::Mat Result = Screenshot.clone ();
         
-        Context->Unmap (StagingTexture.get (), 0);
+        // Unmap is handled automatically by RAII guard
         
         Surface.Close ();
         Frame.Close ();
