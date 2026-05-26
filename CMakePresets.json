@@ -1,0 +1,111 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 28, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "windows-msvc-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "VCPKG_HOST_TRIPLET":   "x64-windows",
+        "CMAKE_CXX_STANDARD":   "23"
+      },
+      "condition": {
+        "type":  "equals",
+        "lhs":   "${hostSystemName}",
+        "rhs":   "Windows"
+      },
+      "environment": {
+        "VCPKG_FEATURE_FLAGS": "manifests,versions,binarycaching"
+      }
+    },
+    {
+      "name":        "windows-msvc-debug",
+      "inherits":    "windows-msvc-base",
+      "displayName": "Windows MSVC Debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "BUILD_TESTING":    "OFF"
+      }
+    },
+    {
+      "name":        "windows-msvc-release",
+      "inherits":    "windows-msvc-base",
+      "displayName": "Windows MSVC Release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE":                "Release",
+        "CMAKE_INTERPROCEDURAL_OPTIMIZATION": "ON",
+        "BUILD_TESTING":                    "OFF"
+      }
+    },
+    {
+      "name":        "windows-msvc-test",
+      "inherits":    "windows-msvc-base",
+      "displayName": "Windows MSVC Test",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "BUILD_TESTING":    "ON"
+      }
+    },
+    {
+      "name":        "release-windows",
+      "inherits":    "windows-msvc-release",
+      "displayName": "CI Release (Windows)",
+      "cacheVariables": {
+        "BUILD_TESTING":           "ON",
+        "GRIMVAULT_BUILD_E2E":     "ON",
+        "GRIMVAULT_ENABLE_SIGNING": "ON"
+      }
+    },
+    {
+      "name":        "release-windows-dev",
+      "inherits":    "release-windows",
+      "displayName": "CI Release (Windows, env=dev)",
+      "cacheVariables": { "GRIMVAULT_ENV": "dev" }
+    },
+    {
+      "name":        "release-windows-qa",
+      "inherits":    "release-windows",
+      "displayName": "CI Release (Windows, env=qa)",
+      "cacheVariables": { "GRIMVAULT_ENV": "qa" }
+    },
+    {
+      "name":        "release-windows-prod",
+      "inherits":    "release-windows",
+      "displayName": "CI Release (Windows, env=prod)",
+      "cacheVariables": { "GRIMVAULT_ENV": "prod" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "windows-msvc-debug",   "configurePreset": "windows-msvc-debug"   },
+    { "name": "windows-msvc-release", "configurePreset": "windows-msvc-release" },
+    { "name": "windows-msvc-test",    "configurePreset": "windows-msvc-test"    },
+    { "name": "release-windows",      "configurePreset": "release-windows"      },
+    { "name": "release-windows-dev",  "configurePreset": "release-windows-dev"  },
+    { "name": "release-windows-qa",   "configurePreset": "release-windows-qa"   },
+    { "name": "release-windows-prod", "configurePreset": "release-windows-prod" }
+  ],
+  "testPresets": [
+    {
+      "name":            "unit",
+      "configurePreset": "windows-msvc-test",
+      "output":          { "outputOnFailure": true },
+      "filter":          { "include": { "label": "unit" } }
+    },
+    {
+      "name":            "e2e",
+      "configurePreset": "windows-msvc-test",
+      "output":          { "outputOnFailure": true },
+      "filter":          { "include": { "label": "e2e" } }
+    },
+    {
+      "name":            "integration",
+      "configurePreset": "windows-msvc-test",
+      "output":          { "outputOnFailure": true },
+      "filter":          { "include": { "label": "integration" } }
+    }
+  ]
+}

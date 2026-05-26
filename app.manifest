@@ -8,11 +8,14 @@
   />
   <description>Grimvault Application</description>
 
-  <!-- Request administrator privileges -->
+  <!-- Run as the invoking user. GrimVault does not need elevation; WGC
+       capture works fine unelevated. Requiring admin would also force a
+       UAC prompt on every launch and worsen the SmartScreen reputation
+       situation for our OV-signed installer. -->
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>
-        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
       </requestedPrivileges>
     </security>
   </trustInfo>

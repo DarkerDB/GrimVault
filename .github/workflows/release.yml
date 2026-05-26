@@ -1,0 +1,134 @@
+# Thin caller that fires on a published GitHub Release and invokes the
+# hearth reusable workflow once per env (dev, qa, prod). All build / sign /
+# publish logic lives in:
+#
+#    katforge/hearth/.github/workflows/release-template-desktop-windows.yml
+#
+# Per GrimVault MVP contract (docs/architecture/grimvault-mvp.md §10), each
+# env produces a separate installer with its own client_id and API base URL
+# baked in at compile time via -DGRIMVAULT_ENV=<env> (see cmake/Env.cmake).
+# The three matrix arms differ ONLY in:
+#
+#    build_preset    selects per-env CMake preset (bakes GRIMVAULT_ENV)
+#    installer_glob  per-env build dir
+#    s3_prefix       env-scoped S3 namespace so appcasts don't collide
+#    appcast_path    same filename, different prefix (one appcast per env)
+#
+# S3 layout after a release for tag vX.Y.Z:
+#
+#    s3://katforge-releases/grimvault/dev/vX.Y.Z/GrimVault-Setup-vX.Y.Z.exe
+#    s3://katforge-releases/grimvault/dev/appcast.xml
+#    s3://katforge-releases/grimvault/qa/vX.Y.Z/GrimVault-Setup-vX.Y.Z.exe
+#    s3://katforge-releases/grimvault/qa/appcast.xml
+#    s3://katforge-releases/grimvault/vX.Y.Z/GrimVault-Setup-vX.Y.Z.exe
+#    s3://katforge-releases/grimvault/appcast.xml          ← prod, unchanged URL
+#
+# Prod's S3 prefix (`grimvault`, unsuffixed) matches the existing appcast
+# URL baked into the binary; dev/qa get nested under their env so the prod
+# appcast URL doesn't change.
+#
+# KNOWN FOLLOW-UP: the shared template's `Attach to GitHub Release` step
+# does `gh release upload "$TAG" "$f"`. All three matrix arms produce an
+# installer with the same filename (GrimVault-Setup-vX.Y.Z.exe), which will
+# collide on GitHub Release attach. Either the CPack output name needs to
+# bake the env (engineer change) or the template needs an env-aware filename
+# step. Flagged separately to Anders.
+#
+# Adding a new platform target = add another `with: ...` block calling the
+# corresponding template (release-template-desktop-macos, -linux, -steam).
+
+name: Release
+
+on:
+   release:
+      types: [ published ]
+
+jobs:
+
+   # -------------------------------------------------------------------------
+   windows-dev:
+      uses: katforge/hearth/.github/workflows/release-template-desktop-windows.yml@master
+      with:
+         service:         grimvault
+         build_preset:    release-windows-dev
+         installer_glob:  build/release-windows-dev/GrimVault-Setup-*.exe
+         e2e_cmd:         build/release-windows-dev/tests/grimvault_e2e_tests.exe
+         e2e_resolutions: '["1920x1080", "2560x1440", "3840x2160"]'
+         e2e_modes:       '["normal", "high_roller", "ruins", "inferno", "goblin_caves"]'
+         fixtures_source: s3://grimvault-fixtures/v1/
+         appcast_kind:    winsparkle
+         appcast_path:    ${{ github.event.release.prerelease && 'appcast-beta.xml' || 'appcast.xml' }}
+         s3_bucket:       katforge-releases
+         s3_prefix:       grimvault/dev
+         channel:         ${{ github.event.release.prerelease && 'beta' || 'stable' }}
+         sign_provider:   ssl_com_esigner
+      secrets:
+         KATFORGE_GITHUB_TOKEN: ${{ secrets.KATFORGE_GITHUB_TOKEN }}
+         SSL_COM_USERNAME:      ${{ secrets.SSL_COM_USERNAME }}
+         SSL_COM_PASSWORD:      ${{ secrets.SSL_COM_PASSWORD }}
+         SSL_COM_CREDENTIAL_ID: ${{ secrets.SSL_COM_CREDENTIAL_ID }}
+         SSL_COM_TOTP_SECRET:   ${{ secrets.SSL_COM_TOTP_SECRET }}
+         AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+         AWS_REGION:            ${{ secrets.AWS_REGION }}
+         APPCAST_ED25519_PRIV:  ${{ secrets.APPCAST_ED25519_PRIV }}
+
+   # -------------------------------------------------------------------------
+   windows-qa:
+      # Gated off during build-out; flip to true when QA infra exists (see §10.4).
+      if: false
+      uses: katforge/hearth/.github/workflows/release-template-desktop-windows.yml@master
+      with:
+         service:         grimvault
+         build_preset:    release-windows-qa
+         installer_glob:  build/release-windows-qa/GrimVault-Setup-*.exe
+         e2e_cmd:         build/release-windows-qa/tests/grimvault_e2e_tests.exe
+         e2e_resolutions: '["1920x1080", "2560x1440", "3840x2160"]'
+         e2e_modes:       '["normal", "high_roller", "ruins", "inferno", "goblin_caves"]'
+         fixtures_source: s3://grimvault-fixtures/v1/
+         appcast_kind:    winsparkle
+         appcast_path:    ${{ github.event.release.prerelease && 'appcast-beta.xml' || 'appcast.xml' }}
+         s3_bucket:       katforge-releases
+         s3_prefix:       grimvault/qa
+         channel:         ${{ github.event.release.prerelease && 'beta' || 'stable' }}
+         sign_provider:   ssl_com_esigner
+      secrets:
+         KATFORGE_GITHUB_TOKEN: ${{ secrets.KATFORGE_GITHUB_TOKEN }}
+         SSL_COM_USERNAME:      ${{ secrets.SSL_COM_USERNAME }}
+         SSL_COM_PASSWORD:      ${{ secrets.SSL_COM_PASSWORD }}
+         SSL_COM_CREDENTIAL_ID: ${{ secrets.SSL_COM_CREDENTIAL_ID }}
+         SSL_COM_TOTP_SECRET:   ${{ secrets.SSL_COM_TOTP_SECRET }}
+         AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+         AWS_REGION:            ${{ secrets.AWS_REGION }}
+         APPCAST_ED25519_PRIV:  ${{ secrets.APPCAST_ED25519_PRIV }}
+
+   # -------------------------------------------------------------------------
+   windows-prod:
+      # Gated off until prod cutover lands; flip to true when activating (see §10.4).
+      if: false
+      uses: katforge/hearth/.github/workflows/release-template-desktop-windows.yml@master
+      with:
+         service:         grimvault
+         build_preset:    release-windows-prod
+         installer_glob:  build/release-windows-prod/GrimVault-Setup-*.exe
+         e2e_cmd:         build/release-windows-prod/tests/grimvault_e2e_tests.exe
+         e2e_resolutions: '["1920x1080", "2560x1440", "3840x2160"]'
+         e2e_modes:       '["normal", "high_roller", "ruins", "inferno", "goblin_caves"]'
+         fixtures_source: s3://grimvault-fixtures/v1/
+         appcast_kind:    winsparkle
+         appcast_path:    ${{ github.event.release.prerelease && 'appcast-beta.xml' || 'appcast.xml' }}
+         s3_bucket:       katforge-releases
+         s3_prefix:       grimvault
+         channel:         ${{ github.event.release.prerelease && 'beta' || 'stable' }}
+         sign_provider:   ssl_com_esigner
+      secrets:
+         KATFORGE_GITHUB_TOKEN: ${{ secrets.KATFORGE_GITHUB_TOKEN }}
+         SSL_COM_USERNAME:      ${{ secrets.SSL_COM_USERNAME }}
+         SSL_COM_PASSWORD:      ${{ secrets.SSL_COM_PASSWORD }}
+         SSL_COM_CREDENTIAL_ID: ${{ secrets.SSL_COM_CREDENTIAL_ID }}
+         SSL_COM_TOTP_SECRET:   ${{ secrets.SSL_COM_TOTP_SECRET }}
+         AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+         AWS_REGION:            ${{ secrets.AWS_REGION }}
+         APPCAST_ED25519_PRIV:  ${{ secrets.APPCAST_ED25519_PRIV }}
