@@ -31,7 +31,7 @@ class OauthClient
 {
 public:
    struct Config {
-      std::string client_id;     // e.g. "grimvault-desktop-dev"
+      std::string client_id;     // single OAuth client across all envs: "grimvault"
       std::string api_base_url;  // e.g. "https://api.dev.darkerdb.com"
       std::string spa_base_url;  // e.g. "https://dev.darkerdb.com"
       std::string scope        = "grimvault.read grimvault.write";
