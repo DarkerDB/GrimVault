@@ -86,6 +86,18 @@ logs/               %APPDATA%\GrimVault\logs\
 settings.ini        %APPDATA%\GrimVault\settings.ini  (auto-migrated to DB, renamed .migrated)
 ```
 
+## Working on Windows + WSL
+
+If you have this repo checked out on a Windows path (e.g. `C:\Users\…\Projects\grimvault-cpp`) and also touch it from a WSL shell over the `/mnt/c/` mount, run this once per clone:
+
+```bash
+git config core.fileMode false
+```
+
+The WSL `/mnt/c/` mount reports every file as executable (mode 755), but the underlying NTFS volume has no concept of POSIX exec bits. Without this setting, every tracked asset (fonts, PNGs, settings.ini, etc.) will show up as modified in `git status` with a `mode 100644 → 100755` flip, polluting diffs and PRs. Setting `core.fileMode false` tells git to ignore mode changes for this clone; the setting is per-clone (not committed), so each contributor sets it locally.
+
+If you do an `ls` inside WSL and see Windows `Game.json:Zone.Identifier` files in `i18n/<lang>/`, those are NTFS Alternate Data Stream metadata files (Mark-of-the-Web tags) leaking through to the WSL view. They're gitignored, so they won't get committed, but you can safely `rm` them.
+
 ## When something breaks
 
 The script filters CMake/MSVC output for the first useful error and tails
