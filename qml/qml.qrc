@@ -1,0 +1,20 @@
+<RCC>
+   <qresource prefix="/qml">
+      <file>qmldir</file>
+      <file>Palette.qml</file>
+      <file>Tooltip.qml</file>
+   </qresource>
+   <qresource prefix="/assets/images">
+      <file alias="Background_TooltipBorder.png">../assets/images/Background_TooltipBorder.png</file>
+      <file alias="Background_TooltipTexture.png">../assets/images/Background_TooltipTexture.png</file>
+      <file alias="Tooltip_SeparatorThick.png">../assets/images/Tooltip_SeparatorThick.png</file>
+      <file alias="Tooltip_SeparatorThin.png">../assets/images/Tooltip_SeparatorThin.png</file>
+      <file alias="Icon_Gold.png">../assets/images/Icon_Gold.png</file>
+      <file alias="Icon-324x356.png">../assets/images/Icon-324x356.png</file>
+   </qresource>
+   <qresource prefix="/assets/fonts">
+      <file alias="SaintKDG_Light.ttf">../assets/fonts/SaintKDG_Light.ttf</file>
+      <file alias="SaintKDG_Medium.ttf">../assets/fonts/SaintKDG_Medium.ttf</file>
+      <file alias="Pelagiad.ttf">../assets/fonts/Pelagiad.ttf</file>
+   </qresource>
+</RCC>

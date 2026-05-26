@@ -1,0 +1,39 @@
+#pragma once
+
+#include <gv/core/result.h>
+
+#include <chrono>
+#include <optional>
+#include <string>
+
+namespace gv::auth {
+
+// One-shot token snapshot. The store is the source of truth on disk
+// (Windows Credential Manager, DPAPI-protected). Callers either pull a
+// fresh snapshot or write a new one; there is no in-place mutation.
+struct TokenSet {
+   std::string                           access_token;
+   std::string                           refresh_token;
+   std::string                           scope;
+   std::chrono::system_clock::time_point expires_at { };
+
+   bool empty () const noexcept { return access_token.empty () && refresh_token.empty (); }
+};
+
+// Windows Credential Manager-backed token store. One blob under the target
+// name "GrimVault:tokens" (per contract §7.1). On non-Windows builds every
+// call returns an Io error so the source still configures for dev.
+class TokenStore
+{
+public:
+   // Load the stored token blob. Missing = std::nullopt (not an error).
+   static core::Result<std::optional<TokenSet>> load ();
+
+   // Atomically replace the stored token blob.
+   static core::Result<void> save (const TokenSet& tokens);
+
+   // Clear the stored blob. Idempotent: returns success if nothing was stored.
+   static core::Result<void> clear ();
+};
+
+} // namespace gv::auth

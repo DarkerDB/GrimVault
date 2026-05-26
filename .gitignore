@@ -6,3 +6,14 @@
 /ui/overlay/dist/
 /vcpkg_installed
 /vendor
+
+# CMake / native build
+/build
+/cmake-build-*
+/.cache
+/.cmake
+/CMakeUserPresets.json
+compile_commands.json
+
+# Windows NTFS Alternate Data Stream metadata (leaks through to WSL view)
+**/*:Zone.Identifier
