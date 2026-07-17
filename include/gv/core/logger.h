@@ -15,7 +15,7 @@ namespace gv::core {
 
 // Facade over spdlog. Routes to:
 //    - stdout (color, %^%l%$ level)
-//    - daily-rotated file at <log_dir>/YYYY-MM-DD.log (7-day keep)
+//    - daily-rotated file at <log_dir>/grimvault_YYYY-MM-DD.txt (7-day keep)
 //    - in-memory ring buffer (last 1024 lines) for the Diagnostics page
 //
 // Initialize once at app start via Logger::init(). Modules either call the

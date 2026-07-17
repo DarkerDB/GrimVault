@@ -302,6 +302,7 @@ struct WgcStrategy::Impl
          .monitor_id = monitor_id,
          .window_id  = window_id,
          .timestamp  = std::chrono::steady_clock::now (),
+         .cursor     = cursor_now (),
       };
    }
 };
@@ -411,7 +412,11 @@ std::string_view WgcStrategy::name () const noexcept
 
 std::string_view WgcStrategy::reason () const noexcept
 {
-   return impl_ ? impl_->reason_text : "";
+   // No ternary with "" here — mixed std::string/const char* operands make
+   // the ternary yield a temporary std::string, and the returned view would
+   // dangle.
+   if (!impl_) return {};
+   return impl_->reason_text;
 }
 
 bool WgcStrategy::borderless () const noexcept
@@ -507,6 +512,7 @@ core::Result<void> WgcStrategy::start_continuous (void* target, bool is_window)
                .monitor_id = impl_->cont_monitor_id,
                .window_id  = impl_->cont_window_id,
                .timestamp  = std::chrono::steady_clock::now (),
+               .cursor     = cursor_now (),
             };
 
             {

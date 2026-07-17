@@ -1,11 +1,13 @@
 #include <gv/api/darkerdb_client.h>
 #include <gv/app/controller.h>
+#include <gv/app/settings_sync.h>
 #include <gv/auth/oauth_client.h>
 #include <gv/auth/session.h>
 #include <gv/capture/capture_service.h>
 #include <gv/cli/cli.h>
 #include <gv/core/crash_handler.h>
 #include <gv/core/env.h>
+#include <gv/core/env_resolver.h>
 #include <gv/core/hotkey_manager.h>
 #include <gv/core/ini_migrator.h>
 #include <gv/core/logger.h>
@@ -18,7 +20,9 @@
 #include <gv/db/repos/user_settings_repo.h>
 #include <gv/ocr/language_registry.h>
 #include <gv/ocr/pipeline.h>
+#include <gv/ui/debug_overlay.h>
 #include <gv/ui/overlay_window.h>
+#include <gv/ui/status_badge.h>
 #include <gv/ui/tray_icon.h>
 #include <gv/update/update_service.h>
 #include <gv/vision/tooltip_detector.h>
@@ -29,6 +33,7 @@
 #include <QDesktopServices>
 #include <QDir>
 #include <QFontDatabase>
+#include <QPointer>
 #include <QStandardPaths>
 #include <QStringList>
 #include <QSystemTrayIcon>
@@ -39,17 +44,21 @@
 #ifdef _WIN32
    #include <Windows.h>
    #include <ShellScalingApi.h>
+   #include <crtdbg.h>
    #include <io.h>
    #include <fcntl.h>
 #endif
 
+#include <exception>
+
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
-#include <fstream>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -60,24 +69,100 @@ namespace {
    // ---- console attach for CLI on Windows ----
    //
    // The binary is linked as a WINDOWS subsystem app so GUI launch never
-   // shows a console flash. CLI invocations need explicit AttachConsole +
-   // stdout/stderr reopen so output makes it back to the parent terminal.
+   // shows a console flash. Any invocation from an existing terminal (CLI
+   // subcommands, GUI runs watching stdout logs) needs explicit
+   // AttachConsole + stdout/stderr reopen so output makes it back to the
+   // parent terminal. No-op when there is no parent console (double-click,
+   // autostart), so GUI launches stay flash-free.
    void attach_parent_console ()
    {
 #ifdef _WIN32
+      // Snapshot redirection state BEFORE AttachConsole — attaching installs
+      // fresh console handles, which would make every stream look "already
+      // valid" even though the CRT streams of a WINDOWS-subsystem app start
+      // dead. Only streams the parent didn't redirect (pipe, file, WSL
+      // interop) get reopened onto the console; redirected ones keep their
+      // inherited handle or `grimvault status > out.txt` would write to the
+      // console instead of the file.
+      auto redirected = [] (DWORD std_handle) {
+         HANDLE h = ::GetStdHandle (std_handle);
+         return h != nullptr && h != INVALID_HANDLE_VALUE && ::GetFileType (h) != FILE_TYPE_UNKNOWN;
+      };
+
+      const bool out_redirected = redirected (STD_OUTPUT_HANDLE);
+      const bool err_redirected = redirected (STD_ERROR_HANDLE);
+      const bool in_redirected  = redirected (STD_INPUT_HANDLE);
+
       if (::AttachConsole (ATTACH_PARENT_PROCESS)) {
          FILE* dummy = nullptr;
-         freopen_s (&dummy, "CONOUT$", "w", stdout);
-         freopen_s (&dummy, "CONOUT$", "w", stderr);
-         freopen_s (&dummy, "CONIN$",  "r", stdin);
+
+         if (!out_redirected) freopen_s (&dummy, "CONOUT$", "w", stdout);
+         if (!err_redirected) freopen_s (&dummy, "CONOUT$", "w", stderr);
+         if (!in_redirected)  freopen_s (&dummy, "CONIN$",  "r", stdin);
          std::ios::sync_with_stdio ();
       }
 #endif
    }
 
+   // Fatal-path visibility. Debug-CRT asserts and aborts pop interactive
+   // dialogs by default — they bypass WER and the SEH crash handler, so an
+   // uncaught exception reads as silent process death with the last log
+   // lines still buffered. Route CRT reports to stderr and log the active
+   // exception from std::terminate, flushing before going down.
+   void install_fatal_handlers ()
+   {
+#if defined (_WIN32) && defined (_DEBUG)
+      _CrtSetReportMode (_CRT_ASSERT, _CRTDBG_MODE_FILE);
+      _CrtSetReportFile (_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+      _CrtSetReportMode (_CRT_ERROR,  _CRTDBG_MODE_FILE);
+      _CrtSetReportFile (_CRT_ERROR,  _CRTDBG_FILE_STDERR);
+#endif
+
+      std::set_terminate ([] {
+         std::string what = "std::terminate (no active exception)";
+
+         if (auto ex = std::current_exception ()) {
+            try { std::rethrow_exception (ex); }
+            catch (const std::exception& e) {
+               what = std::string { "uncaught exception: " } + e.what ();
+            }
+            catch (...) {
+               what = "uncaught non-std exception";
+            }
+         }
+
+         gv::core::Logger::error ("FATAL: {}", what);
+         gv::core::Logger::shutdown ();
+         std::abort ();
+      });
+   }
+
+#ifdef _WIN32
+   // Ctrl+C / Ctrl+Break from an attached terminal: route through the Qt
+   // event loop so shutdown runs cleanly (tray icon removed, pipeline
+   // stopped) instead of the default handler's abrupt ExitProcess, which
+   // leaves a ghost tray icon behind.
+   BOOL WINAPI console_ctrl_handler (DWORD type)
+   {
+      switch (type) {
+         case CTRL_C_EVENT:
+         case CTRL_BREAK_EVENT:
+            if (auto* app = QCoreApplication::instance ()) {
+               QMetaObject::invokeMethod (app,
+                  &QCoreApplication::quit, Qt::QueuedConnection);
+               return TRUE;
+            }
+            return FALSE;
+         default:
+            return FALSE;
+      }
+   }
+#endif
+
    std::filesystem::path app_data_dir ()
    {
-      auto qpath = QStandardPaths::writableLocation (QStandardPaths::AppDataLocation);
+      auto qpath = QStandardPaths::writableLocation (QStandardPaths::GenericDataLocation)
+         + QStringLiteral ("/GrimVault");
       QDir ().mkpath (qpath);
       return std::filesystem::path { qpath.toStdWString () };
    }
@@ -107,9 +192,17 @@ namespace {
 
    void register_app_fonts ()
    {
-      QFontDatabase::addApplicationFont (QStringLiteral (":/assets/fonts/SaintKDG_Light.ttf"));
-      QFontDatabase::addApplicationFont (QStringLiteral (":/assets/fonts/SaintKDG_Medium.ttf"));
-      QFontDatabase::addApplicationFont (QStringLiteral (":/assets/fonts/Pelagiad.ttf"));
+      for (const auto* path : {
+         ":/assets/fonts/SaintKDG_Light.ttf",
+         ":/assets/fonts/SaintKDG_Medium.ttf",
+         ":/assets/fonts/Pelagiad.ttf",
+      }) {
+         const int id = QFontDatabase::addApplicationFont (QString::fromLatin1 (path));
+         gv::core::Logger::info ("fonts: {} -> [{}]", path,
+            id >= 0
+               ? QFontDatabase::applicationFontFamilies (id).join (", ").toStdString ()
+               : std::string { "LOAD FAILED" });
+      }
    }
 
    // Route Qt's qDebug/qWarning/qCritical/qFatal into our logger so QML
@@ -131,32 +224,167 @@ namespace {
 
    // ---- GUI run loop ----
 
-   int run_gui (int argc, char** argv)
+   struct GuiOptions {
+      bool   no_auto_login = false;
+      bool   debug         = false;
+      bool   highlight_objects = false;
+      bool   highlight_game    = false;
+      bool   detect_only   = false;
+      double fcr           = 0.0;   // frames/s while active; 0 = default
+   };
+
+   void apply_debug_option (GuiOptions& opts, std::string_view arg)
    {
+      opts.debug = true;
+      if (arg == "--debug") return;
+
+      constexpr std::string_view prefix = "--debug=";
+      if (!arg.starts_with (prefix)) return;
+
+      std::string_view selectors = arg.substr (prefix.size ());
+      while (!selectors.empty ()) {
+         const auto comma = selectors.find (',');
+         const auto item  = selectors.substr (0, comma);
+
+         if (item == "highlight:objects") opts.highlight_objects = true;
+         else if (item == "highlight:game") opts.highlight_game = true;
+         else if (!item.empty ()) {
+            std::fprintf (stderr, "unknown --debug selector: %.*s\n",
+               static_cast<int> (item.size ()), item.data ());
+         }
+
+         if (comma == std::string_view::npos) break;
+         selectors.remove_prefix (comma + 1);
+      }
+   }
+
+   // Consume `--fcr <n>` / `--fcr=<n>` from args; returns 0 when absent.
+   // Clamped to [1, 60] — below 1 the overlay feels dead, above 60 the
+   // detector can't keep up anyway and the capture thread just spins.
+   double consume_fcr (std::vector<std::string>& args)
+   {
+      double fcr = 0.0;
+
+      for (std::size_t i = 0; i < args.size (); ++i) {
+         std::string value;
+
+         if (args [i] == "--fcr" && i + 1 < args.size ()) {
+            value = args [i + 1];
+            args.erase (args.begin () + static_cast<std::ptrdiff_t> (i),
+                        args.begin () + static_cast<std::ptrdiff_t> (i) + 2);
+         } else if (args [i].rfind ("--fcr=", 0) == 0) {
+            value = args [i].substr (6);
+            args.erase (args.begin () + static_cast<std::ptrdiff_t> (i));
+         } else {
+            continue;
+         }
+
+         try { fcr = std::stod (value); } catch (...) { fcr = 0.0; }
+         break;
+      }
+
+      if (fcr <= 0.0) return 0.0;
+      return std::clamp (fcr, 1.0, 60.0);
+   }
+
+#ifdef _WIN32
+   // `grimvault --detached`: relaunch without the flag, detached from this
+   // console, and exit. The default (foreground) run keeps the invoking
+   // terminal and streams logs to it; this is the opt-out.
+   int relaunch_detached (const std::vector<std::string>& args)
+   {
+      wchar_t exe [MAX_PATH] {};
+      ::GetModuleFileNameW (nullptr, exe, MAX_PATH);
+
+      std::wstring cmd = L"\"";
+      cmd += exe;
+      cmd += L"\"";
+
+      for (const auto& a : args) {
+         if (a == "--detached") continue;
+         cmd += L" \"";
+         cmd += std::filesystem::path { a }.wstring ();
+         cmd += L"\"";
+      }
+
+      STARTUPINFOW        si { .cb = sizeof (STARTUPINFOW) };
+      PROCESS_INFORMATION pi {};
+
+      const BOOL ok = ::CreateProcessW (
+         nullptr, cmd.data (), nullptr, nullptr, FALSE,
+         DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+         nullptr, nullptr, &si, &pi);
+
+      if (!ok) {
+         std::fprintf (stderr, "failed to relaunch detached (error %lu)\n", ::GetLastError ());
+         return 1;
+      }
+
+      ::CloseHandle (pi.hThread);
+      ::CloseHandle (pi.hProcess);
+      std::printf ("grimvault started in the background (pid %lu)\n", pi.dwProcessId);
+      return 0;
+   }
+#endif
+
+   int run_gui (int argc, char** argv, GuiOptions opts)
+   {
+      attach_parent_console ();
+
       auto single_instance = gv::core::SingleInstanceGuard::acquire (k_single_instance_mutex);
       if (!single_instance) {
          gv::core::SingleInstanceGuard::notify_existing (k_surface_message);
          return 0;
       }
 
-      gv::api::DarkerDbClient::global_init ();
+      gv::api::DDBClient::global_init ();
+
+      // Qt Quick's threaded render loop can deadlock main in polishAndSync
+      // when small always-on-top windows (status badge, debug overlay) get
+      // exposed/re-stacked in bursts as the game window appears. The QML
+      // surfaces here are tiny; the single-threaded loop costs nothing and
+      // removes that whole hazard class.
+      qputenv ("QSG_RENDER_LOOP", "basic");
 
       QApplication app (argc, argv);
       app.setApplicationName    (QStringLiteral ("GrimVault"));
-      app.setOrganizationName   (QStringLiteral ("DarkerDB"));
+      app.setOrganizationName   (QStringLiteral ("DDB"));
       app.setOrganizationDomain (QStringLiteral ("darkerdb.com"));
       app.setApplicationVersion (QString::fromLatin1 (gv::core::version::string));
       app.setQuitOnLastWindowClosed (false);
       app.setWindowIcon (QIcon (QStringLiteral (":/assets/images/Icon-324x356.png")));
 
+#ifdef _WIN32
+      ::SetConsoleCtrlHandler (&console_ctrl_handler, TRUE);
+#endif
+
       const auto data_dir = app_data_dir ();
 
-      gv::core::Logger::init (data_dir / "logs", /*verbose=*/ false);
+      gv::core::Logger::init (data_dir / "logs", /*verbose=*/ opts.debug);
       qInstallMessageHandler (&qt_message_handler);
-      gv::core::Logger::info ("GrimVault {} (env={}, api={})",
+
+      if (opts.debug) {
+#ifdef _WIN32
+         // Pipeline reads this at first scan; dumps land in %TEMP%\grimvault-ocr.
+         ::_putenv_s ("GRIMVAULT_OCR_DEBUG", "1");
+         ::_putenv_s ("GRIMVAULT_ANCHOR_DIAGNOSTICS",
+            (data_dir / "logs" / "anchoring").string ().c_str ());
+#endif
+         gv::core::Logger::info ("debug mode: verbose logs + OCR stage dumps enabled");
+         gv::core::Logger::info ("debug highlights: objects={}, game={}",
+            opts.highlight_objects, opts.highlight_game);
+      }
+
+      const auto& active_env = gv::core::active_env ();
+      gv::core::Logger::info ("GrimVault {} (env={}, api={}, auth={})",
          gv::core::version::string,
-         gv::core::env,
-         gv::core::api_base_url);
+         std::string { active_env.name },
+         std::string { active_env.api_base_url },
+         std::string { active_env.auth_base_url });
+      if (active_env.name == "dev") {
+         gv::core::Logger::warn (
+            "TLS verification disabled for env=dev (self-signed certs allowed)");
+      }
 
       gv::core::CrashHandler::install (data_dir / "logs");
 
@@ -182,20 +410,41 @@ namespace {
 
       // ---- Auth wiring ----
       gv::auth::OauthClient::Config oauth_cfg;
-      oauth_cfg.client_id    = gv::core::client_id;
-      oauth_cfg.api_base_url = gv::core::api_base_url;
-      oauth_cfg.spa_base_url = gv::core::spa_base_url;
+      oauth_cfg.client_id     = std::string { active_env.client_id };
+      oauth_cfg.api_base_url  = std::string { active_env.api_base_url };
+      oauth_cfg.auth_base_url = std::string { active_env.auth_base_url };
+      oauth_cfg.spa_base_url  = std::string { active_env.spa_base_url };
       auto oauth = std::make_shared<gv::auth::OauthClient> (std::move (oauth_cfg));
 
       gv::auth::Session session { oauth };
 
       // ---- Overlay + capture pipeline ----
-      gv::ui::OverlayWindow overlay;
+      //
+      // WebView2's virtual-host mapping wants a local drive: in dev the
+      // resources root is a network mapping (W: -> WSL), which Chromium
+      // treats differently. The post-build step stages web/ next to the
+      // exe, so prefer that copy when present.
+      auto web_dir = install_dir / "web";
+      if (const auto staged = std::filesystem::path {
+             QCoreApplication::applicationDirPath ().toStdWString () } / "web";
+          std::filesystem::exists (staged / "augment.html")) {
+         web_dir = staged;
+      }
 
-      gv::api::DarkerDbClient::Config api_cfg;
-      api_cfg.base_url  = gv::core::api_base_url;
-      api_cfg.client_id = gv::core::client_id;
-      gv::api::DarkerDbClient api_client { api_cfg, &session, db->get () };
+      gv::ui::OverlayWindow::Config overlay_cfg {
+         .web_dir       = std::move (web_dir),
+         .user_data_dir = data_dir / "webview2",
+      };
+      if (auto v = settings_repo.get ("overlay:renderer"); v.has_value () && v->has_value ()) {
+         overlay_cfg.renderer = **v;
+      }
+      gv::ui::OverlayWindow overlay { std::move (overlay_cfg) };
+      gv::ui::DebugOverlay  debug_overlay;
+
+      gv::api::DDBClient::Config api_cfg;
+      api_cfg.base_url  = std::string { active_env.api_base_url };
+      api_cfg.client_id = std::string { active_env.client_id };
+      gv::api::DDBClient api_client { api_cfg, &session, db->get () };
 
       gv::vision::TooltipDetector detector;
       if (auto r = detector.initialize (install_dir / "models" / "tooltip.onnx"); !r.has_value ()) {
@@ -214,8 +463,24 @@ namespace {
 
       std::unique_ptr<gv::ocr::Pipeline> pipeline;
       if (capture) {
+         gv::ocr::Pipeline::Config pipe_cfg;
+         if (opts.fcr > 0.0) {
+            pipe_cfg.active_fps = opts.fcr;
+            gv::core::Logger::info ("pipeline: frame capture rate {} fps (--fcr)", opts.fcr);
+         }
+         if (opts.debug) {
+            pipe_cfg.sample_inbox = data_dir / "ocr-samples" / "inbox";
+            gv::core::Logger::info ("OCR sample inbox: {}",
+               pipe_cfg.sample_inbox.string ());
+         }
+
          pipeline = std::make_unique<gv::ocr::Pipeline> (
-            *capture, detector, langs, gv::ocr::Pipeline::Config {});
+            *capture, detector, langs, pipe_cfg);
+
+         if (opts.detect_only) {
+            pipeline->set_detect_only (true);
+            gv::core::Logger::info ("pipeline: detect-only mode (OCR / lookup / augment disabled)");
+         }
       }
 
       std::unique_ptr<gv::core::HotkeyManager> hotkeys;
@@ -235,6 +500,9 @@ namespace {
          .pipeline      = pipeline.get (),
          .hotkeys       = hotkeys.get (),
          .overlay       = &overlay,
+         .debug         = &debug_overlay,
+         .highlight_game = opts.highlight_game,
+         .highlight_objects = opts.highlight_objects,
       };
       gv::app::Controller controller { deps };
 
@@ -250,6 +518,15 @@ namespace {
       }
 
       if (pipeline) {
+         // Badge pulse at detection time (vision thread) — OCR + lookup can
+         // take seconds in debug builds; without this the badge sits idle
+         // while visibly "nothing happens".
+         pipeline->on_activity ([&controller] {
+            QMetaObject::invokeMethod (&controller, [&controller] {
+               emit controller.scanActivity ();
+            }, Qt::QueuedConnection);
+         });
+
          auto start_r = pipeline->start ([&controller] (const gv::ocr::RecognizedTooltip& rt) {
             controller.on_tooltip (rt);
          });
@@ -281,42 +558,50 @@ namespace {
       gv::ui::TrayIcon tray;
       tray.set_signed_in (session.signed_in ());
 
-      // Per contract §7.2: presence of settings.toml IS the first-run flag.
-      // We greet on first launch, then drop a header-only stub so subsequent
-      // launches skip the welcome notification regardless of whether the
-      // user actually signed in. Returning users (file exists) get the
-      // narrower "sign in to enable lookups" nudge iff they're still
-      // signed out. Deleting the file resets the first-run state.
-      //
-      // The stub's contents will be replaced wholesale by the first-run
-      // wizard's confirmed values (hotkey + capture region) when that
-      // surface is built post-MVP.
-      const auto settings_path = data_dir / "settings.toml";
-      const bool first_run = !std::filesystem::exists (settings_path);
-      if (first_run) {
-         tray.showMessage (QStringLiteral ("GrimVault"),
-            QStringLiteral ("Welcome — right-click the tray icon to sign in."),
-            QSystemTrayIcon::Information, 6000);
+      // In-game corner badge: pinned bottom-right of the game window, shows
+      // sign-in dot + scan mode, pulses on pipeline activity.
+      gv::ui::StatusBadge badge;
+      badge.set_signed_in (session.signed_in ());
+      QObject::connect (&controller, &gv::app::Controller::gameWindowChanged,
+         &badge, &gv::ui::StatusBadge::set_game);
+      QObject::connect (&controller, &gv::app::Controller::scanActivity,
+         &badge, &gv::ui::StatusBadge::pulse);
+      QObject::connect (&controller, &gv::app::Controller::modeChanged,
+         &badge, [&badge] (gv::app::Mode m) {
+            badge.set_auto (m == gv::app::Mode::Auto);
+         });
 
-         std::ofstream f { settings_path };
-         if (f) {
-            f << "# GrimVault settings — written on first launch.\n"
-              << "# Defaults apply for any key not set here.\n"
-              << "# See docs/architecture/grimvault-mvp.md §7.2 for the schema.\n";
-         } else {
-            gv::core::Logger::warn ("first-run: could not create {}",
-               settings_path.string ());
-         }
-      } else if (!session.signed_in ()) {
-         tray.showMessage (QStringLiteral ("GrimVault"),
-            QStringLiteral ("Sign in to DarkerDB to enable price lookups."),
-            QSystemTrayIcon::Information, 6000);
-      }
+      // ---- Settings sync ----
+      // Dashboard-controlled settings polled from /v2/grimvault/settings and
+      // mirrored into UserSettingsRepo. Starts on sign-in, stops on sign-out.
+      gv::app::SettingsSync settings_sync { &api_client, &session, &settings_repo };
+      QObject::connect (&settings_sync, &gv::app::SettingsSync::settings_changed,
+         &app, [] (const QString& key, const QString& value) {
+            gv::core::log::app.info ("settings updated: {} = {}",
+               key.toStdString (), value.toStdString ());
+         });
+
+      // Canonical signed-in state as the GUI last reconciled it. Updated by
+      // the in-process sign-in/out handlers below and by the external-change
+      // watcher, so neither double-reacts to a flip the other already handled.
+      auto signed_state = std::make_shared<bool> (session.signed_in ());
+      std::unordered_set<QThread*> oauth_workers;
+      bool sign_in_active = false;
 
       // ---- Sign-in: run the OAuth flow off the Qt main thread so the UI
       // stays responsive while the loopback server blocks on the callback.
-      QObject::connect (&tray, &gv::ui::TrayIcon::sign_in_requested, &app, [&] {
-         auto* worker = QThread::create ([&] {
+      auto do_sign_in = [&] {
+         if (sign_in_active) {
+            gv::core::log::app.debug ("sign-in already in progress");
+            return;
+         }
+         sign_in_active = true;
+
+         tray.showMessage (QStringLiteral ("GrimVault"),
+            QStringLiteral ("Opening your browser to sign in…"),
+            QSystemTrayIcon::Information, 4000);
+
+         auto* worker = QThread::create ([&, oauth] {
             auto resp = oauth->authorize ();
             QMetaObject::invokeMethod (&app, [&, resp = std::move (resp)] () mutable {
                if (!resp.has_value ()) {
@@ -332,19 +617,32 @@ namespace {
                      QSystemTrayIcon::Critical, 8000);
                   return;
                }
+               *signed_state = true;
                tray.set_signed_in (true);
+               badge.set_signed_in (true);
                tray.showMessage (QStringLiteral ("Signed in"),
-                  QStringLiteral ("GrimVault is now connected to DarkerDB."),
+                  QStringLiteral ("GrimVault is now connected to DDB."),
                   QSystemTrayIcon::Information, 5000);
+               settings_sync.start ();
             }, Qt::QueuedConnection);
          });
-         QObject::connect (worker, &QThread::finished, worker, &QObject::deleteLater);
+         oauth_workers.insert (worker);
+         QObject::connect (worker, &QThread::finished, &app, [&, worker] {
+            oauth_workers.erase (worker);
+            sign_in_active = false;
+            worker->deleteLater ();
+         });
          worker->start ();
-      });
+      };
+
+      QObject::connect (&tray, &gv::ui::TrayIcon::sign_in_requested, &app, do_sign_in);
 
       QObject::connect (&tray, &gv::ui::TrayIcon::sign_out_requested, &app, [&] {
+         settings_sync.stop ();
          auto r = session.sign_out (/*local_only=*/ false);
+         *signed_state = false;
          tray.set_signed_in (false);
+         badge.set_signed_in (false);
          if (r.has_value ()) {
             tray.showMessage (QStringLiteral ("Signed out"),
                QStringLiteral ("Tokens cleared."),
@@ -356,8 +654,51 @@ namespace {
          }
       });
 
-      QObject::connect (&tray, &gv::ui::TrayIcon::open_dashboard_requested, &app, [] {
-         const QString url = QString::fromLatin1 (gv::core::spa_base_url)
+      // Watch for sign-in state changes made outside this process — the CLI
+      // (`grimvault login` / `logout`) writes the same token store but can't
+      // signal us. Poll the session and reconcile the tray + settings sync
+      // whenever the state flips.
+      auto* auth_watch = new QTimer (&app);
+      auth_watch->setInterval (10'000);
+      QObject::connect (auth_watch, &QTimer::timeout, &app, [&, signed_state] {
+
+         const bool now = session.signed_in ();
+         if (now == *signed_state) return;
+         *signed_state = now;
+
+         gv::core::log::app.info ("auth state changed externally: {}",
+            now ? "signed in" : "signed out");
+         tray.set_signed_in (now);
+         badge.set_signed_in (now);
+
+         if (now) {
+            settings_sync.start ();
+            tray.showMessage (QStringLiteral ("Signed in"),
+               QStringLiteral ("GrimVault is now connected to DDB."),
+               QSystemTrayIcon::Information, 5000);
+         } else {
+            settings_sync.stop ();
+         }
+      });
+      auth_watch->start ();
+
+      // Auto-launch the OAuth flow when starting up signed-out, unless the
+      // operator passed --no-auto-login. Already-signed-in users skip
+      // straight to settings sync.
+      if (session.signed_in ()) {
+         settings_sync.start ();
+      } else if (opts.no_auto_login) {
+         tray.showMessage (QStringLiteral ("GrimVault"),
+            QStringLiteral ("Sign in via the tray to enable lookups. (Auto-login disabled.)"),
+            QSystemTrayIcon::Information, 6000);
+      } else {
+         // Fire after the event loop is running so QMetaObject::invokeMethod
+         // callbacks land cleanly.
+         QTimer::singleShot (0, &app, do_sign_in);
+      }
+
+      QObject::connect (&tray, &gv::ui::TrayIcon::settings_requested, &app, [&active_env] {
+         const QString url = QString::fromStdString (std::string { active_env.spa_base_url })
             + QStringLiteral ("/dashboard/grimvault");
          QDesktopServices::openUrl (QUrl (url));
       });
@@ -390,6 +731,16 @@ namespace {
 
       const int rc = app.exec ();
 
+      // OAuth owns a blocking loopback wait and HTTP exchange. Keep every
+      // object captured by those workers alive and do not clean up libcurl
+      // until the workers have returned.
+      for (auto* worker : oauth_workers) {
+         worker->wait ();
+         delete worker;
+      }
+      oauth_workers.clear ();
+
+      settings_sync.stop ();
       if (pipeline) pipeline->stop ();
       tracker.reset ();
       hotkeys.reset ();
@@ -397,7 +748,7 @@ namespace {
 
       gv::core::Logger::info ("GrimVault exiting with code {}", rc);
       gv::core::Logger::shutdown ();
-      gv::api::DarkerDbClient::global_cleanup ();
+      gv::api::DDBClient::global_cleanup ();
       return rc;
    }
 
@@ -411,10 +762,10 @@ namespace {
 
       QCoreApplication app (argc, argv);
       app.setApplicationName    (QStringLiteral ("GrimVault"));
-      app.setOrganizationName   (QStringLiteral ("DarkerDB"));
+      app.setOrganizationName   (QStringLiteral ("DDB"));
       app.setOrganizationDomain (QStringLiteral ("darkerdb.com"));
 
-      gv::api::DarkerDbClient::global_init ();
+      gv::api::DDBClient::global_init ();
 
       // CLI logging goes to file but not stdout so we don't crowd subcommand
       // output. Init quietly.
@@ -424,7 +775,7 @@ namespace {
       const int rc = gv::cli::run (cli_args);
 
       gv::core::Logger::shutdown ();
-      gv::api::DarkerDbClient::global_cleanup ();
+      gv::api::DDBClient::global_cleanup ();
       return rc;
    }
 
@@ -432,6 +783,7 @@ namespace {
 
 int main (int argc, char** argv)
 {
+   install_fatal_handlers ();
    enable_per_monitor_dpi ();
 
    // Force the static-lib .qrc initializers to link in. Without this, MSVC's
@@ -441,17 +793,53 @@ int main (int argc, char** argv)
    Q_INIT_RESOURCE (auth);
 
    // Dual-mode dispatch:
-   //    - argc == 1 → GUI mode (tray + overlay)
-   //    - argc >  1 → CLI mode (subcommand + flags)
+   //    - argc == 1                → GUI mode (tray + overlay)
+   //    - argv contains only flags
+   //      consumed by run_gui      → GUI mode
+   //    - otherwise                → CLI mode (subcommand + flags)
    //
-   // The one wrinkle: the OS launches us with "--hidden" when the autostart
-   // entry fires. Treat that as GUI mode too.
+   // Recognized GUI-only flags: --hidden (from autostart entry),
+   // --no-auto-login (skip the on-launch OAuth prompt), --debug (verbose
+   // logs + OCR stage dumps), --debug=highlight:objects,highlight:game
+   // (explicit diagnostic borders), --detached (relaunch in the
+   // background and return immediately), --detect-only (stop the pipeline
+   // after detection; no OCR / lookup / augment), --fcr <n> (active frame
+   // capture rate, 1-60 fps).
    std::vector<std::string> cli_args;
    for (int i = 1; i < argc; ++i) cli_args.emplace_back (argv [i]);
 
-   const bool gui_only_flag = (cli_args.size () == 1 && cli_args [0] == "--hidden");
-   if (cli_args.empty () || gui_only_flag) {
-      return run_gui (argc, argv);
+   // Resolve the active env up front so both GUI and CLI dispatch see the
+   // same value. --env / --env=<name> is consumed from cli_args here.
+   gv::core::set_active_env (gv::core::resolve_active_env (cli_args));
+
+   const double fcr = consume_fcr (cli_args);
+
+   const auto is_gui_flag = [] (const std::string& a) {
+      return a == "--hidden" || a == "--no-auto-login"
+          || a == "--debug"  || a.rfind ("--debug=", 0) == 0
+          || a == "--detached"
+          || a == "--detect-only";
+   };
+
+   const bool all_gui_flags = !cli_args.empty () &&
+      std::all_of (cli_args.begin (), cli_args.end (), is_gui_flag);
+
+   if (cli_args.empty () || all_gui_flags) {
+#ifdef _WIN32
+      if (std::find (cli_args.begin (), cli_args.end (), "--detached") != cli_args.end ()) {
+         attach_parent_console ();
+         return relaunch_detached (cli_args);
+      }
+#endif
+
+      GuiOptions opts;
+      opts.fcr = fcr;
+      for (const auto& a : cli_args) {
+         if (a == "--no-auto-login") opts.no_auto_login = true;
+         if (a == "--debug" || a.rfind ("--debug=", 0) == 0) apply_debug_option (opts, a);
+         if (a == "--detect-only")   opts.detect_only   = true;
+      }
+      return run_gui (argc, argv, opts);
    }
    return run_cli (argc, argv, cli_args);
 }

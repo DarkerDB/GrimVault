@@ -8,7 +8,7 @@ LanguageRegistry::LanguageRegistry (std::filesystem::path models_root, std::size
      max_resident_ (max_resident)
 {}
 
-core::Result<PaddleRecognizer*> LanguageRegistry::acquire (LanguageFamily family)
+core::Result<LanguageRegistry::Lease> LanguageRegistry::acquire (LanguageFamily family)
 {
    std::lock_guard lock { lock_ };
 
@@ -16,14 +16,17 @@ core::Result<PaddleRecognizer*> LanguageRegistry::acquire (LanguageFamily family
 
    if (it != by_family_.end ()) {
       order_.splice (order_.begin (), order_, it->second);
-      return it->second->rec.get ();
+      return it->second->rec;
    }
 
    const auto base    = models_root_ / "paddle" / std::string { family_dir (family) };
-   const auto model   = base / "rec.onnx";
-   const auto dictpth = base / "dict.txt";
+   const bool font_model = family == LanguageFamily::English
+                        && std::filesystem::exists (base / "rec_font.onnx")
+                        && std::filesystem::exists (base / "font_dict.txt");
+   const auto model   = base / (font_model ? "rec_font.onnx" : "rec.onnx");
+   const auto dictpth = base / (font_model ? "font_dict.txt" : "dict.txt");
 
-   auto rec = std::make_unique<PaddleRecognizer> ();
+   auto rec = std::make_shared<PaddleRecognizer> ();
    rec->set_family (family);
 
    auto r = rec->initialize (model, dictpth);
@@ -39,10 +42,10 @@ core::Result<PaddleRecognizer*> LanguageRegistry::acquire (LanguageFamily family
    order_.push_front (Entry { .family = family, .rec = std::move (rec) });
    by_family_ [family] = order_.begin ();
 
-   core::Logger::info ("language_registry: loaded {} (resident={})",
-      family_dir (family), order_.size ());
+   core::Logger::info ("language_registry: loaded {} model={} (resident={})",
+      family_dir (family), model.filename ().string (), order_.size ());
 
-   return order_.front ().rec.get ();
+   return order_.front ().rec;
 }
 
 void LanguageRegistry::evict_lru_locked ()

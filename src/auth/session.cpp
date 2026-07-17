@@ -12,6 +12,12 @@ bool Session::signed_in () const
 {
    std::lock_guard lk { lock_ };
    if (!cache_loaded_) load_locked ();
+
+   // A signed-out cache can be stale: the CLI is a separate process that
+   // writes the shared token store without notifying us. Re-read before
+   // reporting signed-out so an external `grimvault login` is picked up.
+   if (!cache_.has_value () || cache_->refresh_token.empty ()) load_locked ();
+
    return cache_.has_value () && !cache_->refresh_token.empty ();
 }
 
@@ -47,7 +53,24 @@ core::Result<void> Session::refresh_locked ()
          "session: no refresh token"));
    }
 
-   auto r = oauth_->refresh (cache_->refresh_token);
+   const auto attempted = cache_->refresh_token;
+
+   auto r = oauth_->refresh (attempted);
+
+   if (!r.has_value () && r.error ().kind == core::ErrorKind::Permission) {
+      // The CLI runs in a separate process against the same token store and
+      // rotates the refresh token on every refresh — our in-memory copy may
+      // simply be the superseded one. Re-read the store and retry once with
+      // whatever is current before treating this as a real revocation.
+      load_locked ();
+
+      if (cache_.has_value () && !cache_->refresh_token.empty ()
+            && cache_->refresh_token != attempted) {
+         core::log::api.info ("session: refresh token rotated externally, retrying with stored token");
+         r = oauth_->refresh (cache_->refresh_token);
+      }
+   }
+
    if (!r.has_value ()) {
       // invalid_grant — drop to signed-out.
       if (r.error ().kind == core::ErrorKind::Permission) {

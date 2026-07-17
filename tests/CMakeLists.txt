@@ -10,8 +10,16 @@ if (unit_sources)
       gv::core
       gv::db
       gv::capture
+      gv::vision
+      gv::ocr
+      nlohmann_json::nlohmann_json
       GTest::gtest
       GTest::gtest_main
+   )
+
+   target_compile_definitions (grimvault_unit_tests PRIVATE
+      GRIMVAULT_TEST_MODELS_DIR="${CMAKE_SOURCE_DIR}/models"
+      GRIMVAULT_TEST_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
    )
 
    set_target_properties (grimvault_unit_tests PROPERTIES

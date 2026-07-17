@@ -26,7 +26,48 @@ param (
 )
 
 $ErrorActionPreference = "Stop"
+
+# Invoked from a WSL shell via Linux pwsh: this is a Windows build, so
+# re-exec under Windows PowerShell through the W: mapping (see DEV.md).
+if ($IsLinux) {
+   $winScript = if ($PSCommandPath -like '/mnt/*') { wslpath -w $PSCommandPath }
+                else                               { 'W:' + ($PSCommandPath -replace '/', '\') }
+
+   $fwd = @(foreach ($kv in $PSBoundParameters.GetEnumerator()) {
+      if ($kv.Value -is [System.Management.Automation.SwitchParameter]) {
+         if ($kv.Value) { "-$($kv.Key)" }
+      } else {
+         "-$($kv.Key)"; "$($kv.Value)"
+      }
+   })
+
+   # Snap-confined Linux pwsh has no Windows PATH; resolve the host binary
+   # explicitly (pwsh 7 preferred, Windows PowerShell 5.1 fallback).
+   $hostPs = @(
+      (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source
+      "/mnt/c/Program Files/PowerShell/7/pwsh.exe"
+      "/mnt/c/Users/$env:USER/AppData/Local/Microsoft/WindowsApps/pwsh.exe"
+      "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+   ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+
+   if (-not $hostPs) {
+      Write-Host "FAIL:  no Windows PowerShell reachable from WSL" -ForegroundColor Red
+      exit 1
+   }
+
+   & $hostPs -NoProfile -File $winScript @fwd
+   exit $LASTEXITCODE
+}
+
 $root                  = (Resolve-Path "$PSScriptRoot\..").Path
+
+# Build tree stays on a local Windows drive when the source lives in WSL
+# (W: mapping of \\wsl.localhost\Ubuntu; see DEV.md): MSVC and Qt tooling
+# spawn cmd.exe (no UNC cwd), and build-output writes over 9P are slow.
+$remote = ($root -like '\\*') -or
+          ((Get-PSDrive -Name (Split-Path -Qualifier $root).TrimEnd(':')).DisplayRoot -like '\\*')
+$out = if ($remote) { "$env:LOCALAPPDATA\GrimVault\build\$Preset" }
+       else         { Join-Path $root "build\$Preset" }
 
 function Fail ([string] $msg) {
    Write-Host "FAIL:  $msg" -ForegroundColor Red
@@ -67,15 +108,14 @@ if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
 if (-not $Tests) {
    Write-Host "`n==> Configure ($Preset)" -ForegroundColor Cyan
 
-   $configLog = Join-Path $root "build\$Preset\configure.log"
-   $configDir = Split-Path $configLog
-   New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+   $configLog = Join-Path $out "configure.log"
+   New-Item -ItemType Directory -Force -Path $out | Out-Null
 
-   $cfgArgs = @("--preset", $Preset)
+   $cfgArgs = @("-S", $root, "--preset", $Preset, "-B", $out)
 
-   $proc = Start-Process -FilePath "cmake" -ArgumentList $cfgArgs -WorkingDirectory $root `
+   $proc = Start-Process -FilePath "cmake" -ArgumentList $cfgArgs -WorkingDirectory $env:LOCALAPPDATA `
       -NoNewWindow -PassThru -RedirectStandardOutput $configLog -RedirectStandardError "$configLog.err"
-   $proc.WaitForExit ()
+   $proc.WaitForExit()
 
    if ($proc.ExitCode -ne 0) {
       Write-Host "`n--- configure errors (last 40 lines) ---" -ForegroundColor Red
@@ -90,10 +130,10 @@ if (-not $Tests) {
 
    Write-Host "`n==> Build" -ForegroundColor Cyan
 
-   $buildLog = Join-Path $root "build\$Preset\build.log"
-   $proc = Start-Process -FilePath "cmake" -ArgumentList @("--build", "--preset", $Preset) `
-      -WorkingDirectory $root -NoNewWindow -PassThru -RedirectStandardOutput $buildLog -RedirectStandardError "$buildLog.err"
-   $proc.WaitForExit ()
+   $buildLog = Join-Path $out "build.log"
+   $proc = Start-Process -FilePath "cmake" -ArgumentList @("--build", $out) `
+      -WorkingDirectory $env:LOCALAPPDATA -NoNewWindow -PassThru -RedirectStandardOutput $buildLog -RedirectStandardError "$buildLog.err"
+   $proc.WaitForExit()
 
    if ($proc.ExitCode -ne 0) {
       Write-Host "`n--- build errors (last 40 lines) ---" -ForegroundColor Red
@@ -108,7 +148,7 @@ if (-not $Tests) {
 
 Write-Host "`n==> Unit tests" -ForegroundColor Cyan
 
-Push-Location (Join-Path $root "build\$Preset")
+Push-Location $out
 try {
    & ctest --output-on-failure --label-regex unit
    if ($LASTEXITCODE -ne 0) {

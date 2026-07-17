@@ -7,6 +7,7 @@
 #include <gv/db/repos/user_hotkeys_repo.h>
 #include <gv/db/repos/user_settings_repo.h>
 #include <gv/ocr/pipeline.h>
+#include <gv/ui/debug_overlay.h>
 #include <gv/ui/overlay_window.h>
 
 #include <SQLiteCpp/SQLiteCpp.h>
@@ -19,7 +20,9 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <mutex>
+#include <optional>
 #include <thread>
 
 namespace gv::app {
@@ -63,15 +66,163 @@ struct Controller::Impl
    std::thread            mouse_thread;
    std::atomic<bool>      mouse_running { false };
 
+   // Network analysis never blocks an OCR worker. A single latest-only slot
+   // coalesces rapid hover changes while an older request is in flight; the
+   // generation checks on both sides of the request prevent stale reveals.
+   struct AnalysisJob {
+      ocr::RecognizedTooltip tooltip;
+      std::string            language;
+   };
+   std::thread                analysis_thread;
+   std::mutex                 analysis_lock;
+   std::condition_variable    analysis_ready;
+   std::optional<AnalysisJob> pending_analysis;
+   bool                       analysis_stopping = false;
+
    // Cache of currently bound accelerators by action id.
    std::mutex                                  hk_lock;
    std::unordered_map<std::string, std::string> accels;
+
+   // Game locale for OCR model selection and the lookup `language` param
+   // (`game:language` setting; read at startup, applied to the pipeline).
+   std::string game_language { "en" };
+
+   // Latest anchor from the pipeline, Qt-thread only. Re-applied when the
+   // game window moves so the Augment presenter gets fresh bounds.
+   ocr::Pipeline::AnchorEvent live_anchor {};
+   bool                       has_live_anchor = false;
+
+   void apply_anchor ()
+   {
+      core::WindowEvent ev;
+      {
+         std::lock_guard lk { state_lock };
+         ev = last_event;
+      }
+      if (!ev.visible) return;
+
+      const QRect  game   { ev.bounds.x, ev.bounds.y, ev.bounds.w, ev.bounds.h };
+      const QPoint offset { live_anchor.offset_x, live_anchor.offset_y };
+      const QSize  tip    { live_anchor.w, live_anchor.h };
+      const QPoint pin    { live_anchor.pin_x, live_anchor.pin_y };
+
+      if (deps.overlay) deps.overlay->anchor_shown (
+         game, offset, tip, live_anchor.pinned_x, live_anchor.pinned_y, pin);
+      if (deps.debug && debug_overlay.load ()) {
+         deps.debug->set_anchor (
+            offset, tip, live_anchor.pinned_x, live_anchor.pinned_y, pin);
+      }
+   }
 
    explicit Impl (Controller& s, Dependencies d) : self (s), deps (std::move (d)) {}
 
    ~Impl ()
    {
+      stop_analysis_worker ();
       stop_mouse_watcher ();
+   }
+
+   void start_analysis_worker ()
+   {
+      analysis_thread = std::thread { [this] { analysis_loop (); } };
+   }
+
+   void stop_analysis_worker ()
+   {
+      {
+         std::lock_guard lk { analysis_lock };
+         analysis_stopping = true;
+         pending_analysis.reset ();
+      }
+      analysis_ready.notify_one ();
+      if (analysis_thread.joinable ()) analysis_thread.join ();
+   }
+
+   void enqueue_analysis (const ocr::RecognizedTooltip& rt)
+   {
+      {
+         std::lock_guard lk { analysis_lock };
+         pending_analysis = AnalysisJob { rt, game_language };
+      }
+      analysis_ready.notify_one ();
+   }
+
+   void analysis_loop ()
+   {
+      for (;;) {
+         AnalysisJob job;
+         {
+            std::unique_lock lk { analysis_lock };
+            analysis_ready.wait (lk, [this] {
+               return analysis_stopping || pending_analysis.has_value ();
+            });
+            if (analysis_stopping) return;
+            job = std::move (*pending_analysis);
+            pending_analysis.reset ();
+         }
+
+         if (!deps.api) continue;
+         if (deps.pipeline && !deps.pipeline->is_current (job.tooltip.generation)) continue;
+
+         auto result = deps.api->analyze_tooltip (
+            job.tooltip.text, job.language, job.tooltip.confidence);
+
+         if (deps.pipeline && !deps.pipeline->is_current (job.tooltip.generation)) {
+            core::log::ocr.event ("analysis_discarded", {
+               { "reason", "stale_generation" },
+               { "generation", std::to_string (job.tooltip.generation) },
+            });
+            continue;
+         }
+         if (!result.has_value ()) {
+            core::Logger::debug ("controller: analysis failed: {}", result.error ().message);
+            continue;
+         }
+
+         auto lookup = std::move (*result);
+         core::log::api.event ("analysis.ready", {
+            { "generation", std::to_string (job.tooltip.generation) },
+            { "item_id", lookup.item_id },
+            { "request_id", lookup.request_id },
+            { "comps", std::to_string (lookup.pricing.sample_size) },
+            { "confidence", lookup.pricing.confidence },
+         });
+         persist_find (lookup);
+
+         QPointer<Controller> guard { &self };
+         QMetaObject::invokeMethod (&self,
+            [guard, lookup = std::move (lookup), rect = job.tooltip.rect,
+             generation = job.tooltip.generation] () mutable {
+               if (!guard || !guard->impl_->deps.overlay) return;
+               if (guard->impl_->deps.pipeline
+                   && !guard->impl_->deps.pipeline->is_current (generation)) return;
+               if (!guard->impl_->has_live_anchor
+                   || guard->impl_->live_anchor.generation != generation) return;
+
+               core::WindowRect bounds;
+               bool active;
+               {
+                  std::lock_guard lk { guard->impl_->state_lock };
+                  bounds = guard->impl_->last_event.bounds;
+                  active = guard->impl_->last_event.visible
+                        && guard->impl_->last_event.focused;
+               }
+               if (!active) return;
+
+               const QRect game {
+                  bounds.x, bounds.y, bounds.w, bounds.h
+               };
+               const QRect anchor {
+                  bounds.x + rect.x, bounds.y + rect.y, rect.w, rect.h
+               };
+
+               // This is the first and only visible render for the generation:
+               // complete API data has arrived and the hidden renderer will
+               // still wait for its final size + bitmap before revealing it.
+               guard->impl_->deps.overlay->present (lookup, game, anchor, true);
+               emit guard->overlayPresented ();
+            }, Qt::QueuedConnection);
+      }
    }
 
    void start_mouse_watcher ()
@@ -151,7 +302,7 @@ struct Controller::Impl
          ins.bind (2, lookup.rarity);
          ins.bind (3, lookup.raw.dump ());
          ins.bind (4, static_cast<long long> (lookup.pricing.median));
-         ins.bind (5, static_cast<long long> (lookup.pricing.low));
+         ins.bind (5, static_cast<long long> (lookup.utility.vendor_value));
          ins.bind (6, lookup.canonical_name);   // fingerprint placeholder
          ins.exec ();
       } catch (const std::exception& e) {
@@ -164,7 +315,59 @@ Controller::Controller (Dependencies deps, QObject* parent)
    : QObject (parent), impl_ (std::make_unique<Impl> (*this, std::move (deps)))
 {
    qRegisterMetaType<Mode> ("gv::app::Mode");
+
+   const bool highlights_enabled = impl_->deps.highlight_game
+                                || impl_->deps.highlight_objects;
+   impl_->debug_overlay.store (highlights_enabled);
+   if (impl_->deps.debug) {
+      impl_->deps.debug->set_highlights (
+         impl_->deps.highlight_game, impl_->deps.highlight_objects);
+      impl_->deps.debug->set_enabled (highlights_enabled);
+   }
+
+   if (impl_->deps.settings_repo) {
+      if (auto v = impl_->deps.settings_repo->get ("game:language");
+          v.has_value () && v->has_value () && !(*v)->empty ()) {
+         impl_->game_language = **v;
+      }
+   }
+
+   if (impl_->deps.pipeline) {
+      impl_->deps.pipeline->set_language (ocr::family_of (impl_->game_language));
+   }
+   core::Logger::info ("controller: game language '{}' (ocr family '{}')",
+      impl_->game_language,
+      std::string { ocr::family_dir (ocr::family_of (impl_->game_language)) });
+
+   // Anchor events -> Augment card and (debug mode) the region overlay.
+   // Fired from the vision thread; marshalled to the Qt thread.
+   if (impl_->deps.pipeline) {
+      QPointer<Controller> self { this };
+
+      impl_->deps.pipeline->on_anchor (
+         [self] (const ocr::Pipeline::AnchorEvent& ev) {
+            if (!self) return;
+            QMetaObject::invokeMethod (self, [self, ev] {
+               if (!self) return;
+               self->impl_->live_anchor     = ev;
+               self->impl_->has_live_anchor = true;
+               self->impl_->apply_anchor ();
+            }, Qt::QueuedConnection);
+         });
+
+      impl_->deps.pipeline->on_anchor_lost ([self] (bool immediate) {
+         if (!self) return;
+         QMetaObject::invokeMethod (self, [self, immediate] {
+            if (!self) return;
+            self->impl_->has_live_anchor = false;
+            if (self->impl_->deps.overlay) self->impl_->deps.overlay->anchor_lost (immediate);
+            if (self->impl_->deps.debug)   self->impl_->deps.debug->clear_anchor ();
+         }, Qt::QueuedConnection);
+      });
+   }
+
    impl_->start_mouse_watcher ();
+   impl_->start_analysis_worker ();
 }
 
 Controller::~Controller () = default;
@@ -195,7 +398,7 @@ int Controller::bind_hotkeys_from_repo ()
    for (const auto& row : k_defaults) {
       if (!rows.contains (row.action)) {
          rows.emplace (row.action, row.accelerator);
-         impl_->deps.hotkeys_repo->set (row.action, row.accelerator);
+         (void) impl_->deps.hotkeys_repo->set (row.action, row.accelerator);
       }
    }
 
@@ -285,9 +488,28 @@ void Controller::action_toggle_mode ()
 void Controller::action_debug_toggle ()
 {
    QMetaObject::invokeMethod (this, [this] {
+      if (!impl_->deps.highlight_game && !impl_->deps.highlight_objects) {
+         core::Logger::info (
+            "hotkey: debug highlights unavailable (start with --debug=highlight:...)");
+         return;
+      }
       const bool next = !impl_->debug_overlay.load ();
       impl_->debug_overlay.store (next);
       core::Logger::info ("hotkey: debug overlay {}", next ? "on" : "off");
+
+      if (impl_->deps.debug) {
+         core::WindowEvent ev;
+         {
+            std::lock_guard lk { impl_->state_lock };
+            ev = impl_->last_event;
+         }
+         impl_->deps.debug->set_enabled (next);
+         impl_->deps.debug->set_region (
+            QRect { ev.bounds.x, ev.bounds.y, ev.bounds.w, ev.bounds.h },
+            ev.visible);
+
+         if (next && impl_->has_live_anchor) impl_->apply_anchor ();
+      }
    }, Qt::QueuedConnection);
 }
 
@@ -301,55 +523,60 @@ void Controller::action_clear_overlay ()
 
 void Controller::on_window_event (const core::WindowEvent& ev)
 {
+   core::WindowRect prev;
    {
       std::lock_guard lk { impl_->state_lock };
+      prev = impl_->last_event.bounds;
       impl_->last_event = ev;
    }
 
    const bool active = ev.visible && ev.focused;
+   const bool moved  = prev.x != ev.bounds.x || prev.y != ev.bounds.y
+                    || prev.w != ev.bounds.w || prev.h != ev.bounds.h;
 
    // Marshal to main thread; pipeline.set_active_window is safe to call here
    // (atomic), but overlay reposition / hide must be on the Qt thread.
    QPointer<Controller> self { this };
-   QMetaObject::invokeMethod (this, [self, ev, active] {
+   QMetaObject::invokeMethod (this, [self, ev, active, moved] {
       if (!self) return;
       if (self->impl_->deps.pipeline) {
          self->impl_->deps.pipeline->set_active_window (active ? ev.hwnd : nullptr);
       }
-      if (!active && self->impl_->deps.overlay && !self->impl_->debug_overlay.load ()) {
+
+      // Hide the card when the game loses focus/visibility. A moved or
+      // resized window keeps the anchor: re-apply it so the presenter gets
+      // the fresh bounds.
+      if (!active && self->impl_->deps.overlay) {
          self->impl_->deps.overlay->clear ();
+      } else if (moved && self->impl_->has_live_anchor) {
+         self->impl_->apply_anchor ();
       }
+
+      // Debug overlay tracks the capture region: visible whenever the game
+      // window is (capture works unfocused via WGC).
+      if (self->impl_->deps.debug && self->impl_->debug_overlay.load ()) {
+         self->impl_->deps.debug->set_region (
+            QRect { ev.bounds.x, ev.bounds.y, ev.bounds.w, ev.bounds.h },
+            ev.visible);
+      }
+
+      emit self->gameWindowChanged (
+         QRect { ev.bounds.x, ev.bounds.y, ev.bounds.w, ev.bounds.h }, active);
    }, Qt::QueuedConnection);
 }
 
 void Controller::on_tooltip (const ocr::RecognizedTooltip& rt)
 {
-   // Currently called from the OCR worker thread. Do the (blocking) API
-   // call here so it doesn't block the Qt event loop, then marshal the
-   // resulting present() over.
-   if (!impl_->deps.api) return;
-
-   const std::string text { rt.text };
-   const int x = rt.rect.x;
-   const int y = rt.rect.y;
-
-   auto res = impl_->deps.api->lookup_tooltip (text, "en");
-   if (!res.has_value ()) {
-      core::Logger::debug ("controller: lookup failed: {}", res.error ().message);
-      return;
+   {
+      QPointer<Controller> self { this };
+      QMetaObject::invokeMethod (this, [self] {
+         if (self) emit self->scanActivity ();
+      }, Qt::QueuedConnection);
    }
 
-   auto lookup = std::move (*res);
-   impl_->persist_find (lookup);
-
-   QPointer<Controller> self { this };
-   QMetaObject::invokeMethod (this, [self, lookup = std::move (lookup), x, y] () mutable {
-      if (!self) return;
-      if (self->impl_->deps.overlay) {
-         self->impl_->deps.overlay->present (lookup, x, y);
-         emit self->overlayPresented ();
-      }
-   }, Qt::QueuedConnection);
+   if (!impl_->deps.api || rt.preliminary) return;
+   if (impl_->deps.pipeline && !impl_->deps.pipeline->is_current (rt.generation)) return;
+   impl_->enqueue_analysis (rt);
 }
 
 } // namespace gv::app

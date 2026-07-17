@@ -89,6 +89,7 @@ namespace {
          .monitor_id = monitor_id,
          .window_id  = window_id,
          .timestamp  = std::chrono::steady_clock::now (),
+         .cursor     = cursor_now (),
       };
    }
 

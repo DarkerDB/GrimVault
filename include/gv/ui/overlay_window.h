@@ -1,32 +1,56 @@
 #pragma once
 
-#include <QQuickView>
+#include <QObject>
+#include <QRect>
 
+#include <filesystem>
 #include <memory>
+#include <string>
 
 namespace gv::api { struct TooltipLookup; }
 
 namespace gv::ui {
 
-// Frameless transparent always-on-top QML overlay that draws the
-// Diablo-esque tooltip on top of the game. The tooltip payload comes from
-// gv::api::TooltipLookup — parsing happens server-side, the client just
-// renders.
-class OverlayWindow : public QQuickView
+// The overlay surface that draws the Augment beside the in-game tooltip.
+// Renderer is the DDB SDK in a permanently hidden WebView2, captured to a
+// bitmap and presented by a disabled native window. The QML card remains as
+// fallback (`overlay:renderer` = webview | qml).
+//
+// present()/clear() are the whole contract; Controller and main() are
+// renderer-agnostic. Both rects are physical (Win32) screen pixels: game
+// is the game window, anchor the detected tooltip box.
+class OverlayWindow : public QObject
 {
    Q_OBJECT
 
 public:
-   explicit OverlayWindow (QWindow* parent = nullptr);
+   struct Config
+   {
+      // Directory holding augment.html + the vendored ddb-tooltips dist.
+      std::filesystem::path web_dir;
+
+      // WebView2 user-data folder (under %APPDATA%\GrimVault).
+      std::filesystem::path user_data_dir;
+
+      // "webview" (hidden snapshot renderer, default) or "qml".
+      std::string renderer = "webview";
+   };
+
+   explicit OverlayWindow (Config config, QObject* parent = nullptr);
    ~OverlayWindow () override;
 
-   // Position the overlay near a screen point and present a new item.
-   void present (const gv::api::TooltipLookup& lookup, int screen_x, int screen_y);
-
-   // Hide the overlay (cleared on focus loss, mode disabled, etc.).
+   void present (const gv::api::TooltipLookup& lookup,
+                 const QRect& game, const QRect& anchor, bool animate = true);
    void clear ();
 
+   // Anchoring passthrough (WebView2 renderer only; QML is lookup-driven).
+   void anchor_shown (const QRect& game, const QPoint& offset, const QSize& tip,
+                      bool pinned_x, bool pinned_y, const QPoint& pin);
+   void anchor_lost (bool immediate);
+
 private:
+   void fall_back_to_qml ();
+
    struct Impl;
    std::unique_ptr<Impl> impl_;
 };

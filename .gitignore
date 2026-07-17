@@ -7,6 +7,15 @@
 /vcpkg_installed
 /vendor
 
+# Generated OCR training data, checkpoints, and local environments.
+/tools/ocr-train/.venv
+/tools/ocr-train/__pycache__
+/tools/ocr-train/output
+/tools/ocr-train/real-crops
+/tools/ocr-train/cache
+/tools/ocr-train/inbox-dataset-*
+/tools/ocr-train/inbox-review.tsv
+
 # CMake / native build
 /build
 /cmake-build-*
