@@ -1,0 +1,149 @@
+<!doctype html>
+<!--
+   Hidden WebView2 render host. The native client supplies a structured DDB
+   entity; the vendored tooltip SDK owns all card markup and presentation.
+   This page owns only the transparent host, measurement bridge, and capture
+   behavior used by the native snapshot window.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="preload" as="font" type="font/woff2" href="tooltips/assets/SaintKDG_Light.woff2" crossorigin>
+<link rel="preload" as="font" type="font/woff2" href="tooltips/assets/SaintKDG_Medium.woff2" crossorigin>
+<link rel="preload" as="font" type="font/woff2" href="tooltips/assets/Pelagiad.woff2" crossorigin>
+<style>
+   :root {
+      /* Transparent capture headroom prevents transforms from clipping. */
+      --aug-pad: 20px;
+   }
+
+   html, body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: transparent;
+      pointer-events: none;
+      user-select: none;
+   }
+
+   #augment-wrap {
+      display: inline-block;
+      padding: var(--aug-pad);
+      pointer-events: none;
+   }
+
+   #augment {
+      display: inline-block;
+      pointer-events: none;
+   }
+
+   #augment .ddb-tip-description {
+      white-space: pre-line;
+   }
+
+   /* The WebView is a hidden renderer. Capture the stable final frame; the
+      native snapshot window owns the visible entrance animation. */
+   html.snapshot #augment.ddb-tooltip {
+      animation: none;
+      opacity: 1;
+      transform: none;
+   }
+</style>
+<script src="tooltips/tooltip.min.js"></script>
+</head>
+<body>
+<div id="augment-wrap"><div id="augment"></div></div>
+<script>
+   'use strict';
+
+   document.documentElement.classList.add ('snapshot');
+
+   const target = document.getElementById ('augment');
+   const wrap   = document.getElementById ('augment-wrap');
+   const bridge = window.chrome && window.chrome.webview;
+
+   let seq = 0;
+
+   if (window.DDB && DDB.tooltips.configure) {
+      DDB.tooltips.configure ({ linkBase: null });
+   }
+
+   function postSize () {
+      if (!bridge || !seq) return;
+
+      const w = target.offsetWidth;
+      const h = target.offsetHeight;
+      if (w < 1 || h < 1) return;
+
+      const pad = parseFloat (getComputedStyle (wrap).paddingLeft) || 0;
+      bridge.postMessage ({
+         type: 'size',
+         seq,
+         w: Math.ceil (w),
+         h: Math.ceil (h),
+         pad: Math.ceil (pad),
+      });
+   }
+
+   /* Fonts and card art are warmed before real content. One stable layout
+      confirmation keeps the API-to-display path fast; ResizeObserver starts
+      another confirmation if a genuinely late resource changes the card. */
+   let poll = null;
+   let lastW = -1;
+   let lastH = -1;
+   let stable = 0;
+
+   function measureStable () {
+      const w = target.offsetWidth;
+      const h = target.offsetHeight;
+
+      if (w === lastW && h === lastH) {
+         if (++stable >= 1) {
+            poll = null;
+            postSize ();
+            return;
+         }
+      } else {
+         stable = 0;
+         lastW = w;
+         lastH = h;
+      }
+
+      poll = setTimeout (measureStable, 8);
+   }
+
+   function remeasure () {
+      if (poll) clearTimeout (poll);
+      lastW = -1;
+      lastH = -1;
+      stable = 0;
+      measureStable ();
+   }
+
+   new ResizeObserver (remeasure).observe (wrap);
+
+   if (bridge) bridge.postMessage ({ type: 'hello', ddb: typeof window.DDB });
+
+   if (bridge) bridge.addEventListener ('message', (event) => {
+      const msg = event.data || {};
+
+      if (msg.type === 'clear') {
+         seq = 0;
+         target.replaceChildren ();
+         target.removeAttribute ('class');
+         return;
+      }
+
+      if (msg.type !== 'render') return;
+      seq = msg.seq || 0;
+
+      try {
+         DDB.tooltips.render (target, msg.entity, msg.params);
+         remeasure ();
+      } catch (err) {
+         bridge.postMessage ({ type: 'error', seq, message: String (err) });
+      }
+   });
+</script>
+</body>
+</html>

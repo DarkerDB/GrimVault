@@ -4,16 +4,17 @@
 #include <gv/core/window_tracker.h>
 
 #include <QObject>
+#include <QRect>
 
 #include <atomic>
 #include <memory>
 #include <string>
 
 namespace gv::db  { class Database; class UserHotkeysRepo; class UserSettingsRepo; }
-namespace gv::api { class DarkerDbClient; }
+namespace gv::api { class DDBClient; }
 namespace gv::ocr { class Pipeline; struct RecognizedTooltip; }
 namespace gv::core { class HotkeyManager; }
-namespace gv::ui  { class OverlayWindow; }
+namespace gv::ui  { class DebugOverlay; class OverlayWindow; }
 
 namespace gv::app {
 
@@ -47,10 +48,13 @@ public:
       gv::db::Database*           db            = nullptr;
       gv::db::UserHotkeysRepo*    hotkeys_repo  = nullptr;
       gv::db::UserSettingsRepo*   settings_repo = nullptr;
-      gv::api::DarkerDbClient*    api           = nullptr;
+      gv::api::DDBClient*         api           = nullptr;
       gv::ocr::Pipeline*          pipeline      = nullptr;
       gv::core::HotkeyManager*    hotkeys       = nullptr;
       gv::ui::OverlayWindow*      overlay       = nullptr;
+      gv::ui::DebugOverlay*       debug         = nullptr;
+      bool                        highlight_game = false;
+      bool                        highlight_objects = false;
    };
 
    explicit Controller (Dependencies deps, QObject* parent = nullptr);
@@ -86,6 +90,14 @@ signals:
    void overlayPresented  ();
    void overlayCleared    ();
    void hotkeysChanged    ();
+
+   // Game window moved / resized / focus-flipped. `active` == visible AND
+   // focused; consumers (status badge) hide themselves when it drops.
+   void gameWindowChanged (QRect bounds, bool active);
+
+   // A tooltip made it through detection + OCR (whether or not the lookup
+   // then succeeded) — UI feedback that the pipeline is alive.
+   void scanActivity      ();
 
 private:
    struct Impl;

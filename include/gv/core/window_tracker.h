@@ -27,8 +27,14 @@ struct WindowEvent {
    bool       focused  = false;      // GetForegroundWindow() == hwnd
 };
 
-// Tracks a single Win32 window by title substring and emits a WindowEvent
-// whenever it moves, resizes, gains/loses focus, or is minimized/restored.
+// Tracks a single Win32 window and emits a WindowEvent whenever it moves,
+// resizes, gains/loses focus, is minimized/restored, or is destroyed.
+//
+// A window must pass all three checks to become the target: title contains
+// title_substring, window class equals window_class, and the owning process
+// image name equals process_name (the latter two skipped when empty). Title
+// alone is not enough — a browser tab or chat window mentioning the game
+// title must never capture the overlay.
 //
 // Owns a dedicated message-pump thread because SetWinEventHook with
 // WINEVENT_OUTOFCONTEXT delivers events through the registering thread's
@@ -40,7 +46,10 @@ public:
 
    struct Config {
       std::string title_substring = "Dark and Darker";
-      bool        emit_on_start   = true;     // FindWindowW probe at start
+      std::string window_class    = "UnrealWindow";        // "" = skip check
+      std::string process_name    = "DungeonCrawler.exe";  // "" = skip check
+      bool        emit_on_start   = true;     // EnumWindows probe at start
+      unsigned    reconcile_interval_ms = 500; // 0 disables missed-event polling
    };
 
    ~WindowTracker ();

@@ -82,7 +82,7 @@ client change.
                 │   /v1/oauth/authorize/validate, /v1/oauth/authorize
                 │   /v1/oauth/grants, /v1/oauth/grants/:client_id[/revoke]
                 │   /v1/gateway/login/url
-                │   /v2/grimvault/lookup, /v2/grimvault/ping
+                │   /v2/grimvault/analyze, /lookup, /ping
                 ▼
    +-------------------------------------------------------------------+
    |     api.katforge.com (Symfony) — single codebase, single deploy   |
@@ -505,14 +505,52 @@ On each `grant_type=refresh_token`:
 
 ## 4. `/v2/grimvault/*` contracts
 
-Two endpoints in MVP: `lookup` (the runtime path, **stub-implemented
-for MVP**) and `ping` (auth sanity check, used by CLI `doctor`).
+Three endpoints are retained: `analyze` is the runtime overlay path,
+`lookup` is the legacy-shaped compatibility path, and `ping` is the auth
+sanity check used by CLI `doctor`.
 
 Public path prefix is `/v2/` on `api.darkerdb.com` (per
 `config/routes/darkerdb.yaml`'s `darkerdb_shadow` mount). The same
 controllers are also reachable at `/v1/realms/darkerdb/grimvault/*`
 on `api.katforge.com` for KATforge-canonical access; the desktop
 client only uses the `api.darkerdb.com` host.
+
+### 4.0 `POST /v2/grimvault/analyze`
+
+The desktop sends the complete OCR tooltip using the request in §4.2. The
+server resolves localized text against the current item catalog and returns
+one atomic analysis containing:
+
+- the canonical item and parsed roll vector;
+- similarity- and recency-weighted sold-comparable valuation, quick-list
+  guidance, active listings, trend, liquidity, median sale time, days of
+  supply, roll-aware price stability, and confidence;
+- per-roll quality, a market-relative percentile, and the strongest observed
+  value driver measured against that roll's legal minimum;
+- vendor, quest, recipe, adventure-point, gear-score, stack-size, and
+  market-value-per-inventory-slot context;
+- cached best-drop provenance (including zero- and 500-luck rates) for
+  stackable items, or merchant acquisition context for non-tradeable items;
+- the highest-valued legal one- and two-gem replacements, evaluated at the
+  item's maximum enchanted ranges with socket fees included.
+
+The analytical core always returns the complete premium result. Product
+entitlements may redact capabilities at an API presentation boundary later;
+pricing and gem logic must not contain plan checks.
+
+Live market reads are deliberately bounded: at most the 250 newest sold
+comparables from the prior 30 days are loaded, price-sorted once, and reused
+for every counterfactual. Sold comparables cache for 30 seconds, active asks
+for 15 seconds, and patch-derived catalog/range/gem/source data for five
+minutes to one hour. The endpoint's warm-response budget is 300 ms; adding an
+unbounded query or a per-comparable database lookup violates this contract.
+
+The client caches a response for at most `valuation.ttl_seconds`, coalesces
+pending hover work, and reveals no card until the complete response has been
+laid out and captured. Results from a stale OCR/anchor generation are dropped.
+
+`lookup` remains available for backward compatibility, but new desktop code
+must use `analyze`.
 
 ### 4.1 `POST /v2/grimvault/lookup`
 
@@ -526,7 +564,7 @@ client only uses the `api.darkerdb.com` host.
 | Content-Type (res) | `application/json` |
 | Idempotent | Yes. Same request body → same response within cache TTL. |
 | Cacheable | Yes (client side, in `prices.sqlite`). |
-| **Implementation status** | **Stub for MVP.** See §4.1.1. |
+| **Implementation status** | Legacy compatibility endpoint. Runtime uses §4.0. |
 
 #### 4.1.1 MVP stub behavior
 
@@ -745,7 +783,8 @@ lives in the API. The pages above are URL contracts only.
 | GET | `/v1/oauth/grants/:client_id` | session | Fetch one grant. 404 = not connected. Used by `/dashboard/grimvault`. |
 | POST | `/v1/oauth/grants/:client_id/revoke` | session + CSRF | Revoke a grant. Called by SPA Disconnect buttons. |
 | GET | `/v1/gateway/login/url` | none | Provider-agnostic sign-in URL. Returns `{ url }`. Replaces the discord-only path. |
-| POST | `/v2/grimvault/lookup` | Bearer, `grimvault.read`, `aud=darkerdb:grimvault` | Price lookup (stub-implemented; §4.1). |
+| POST | `/v2/grimvault/analyze` | Bearer, `grimvault.read`, `aud=darkerdb:grimvault` | Complete roll-aware valuation and gem optimization (§4.0). |
+| POST | `/v2/grimvault/lookup` | Bearer, `grimvault.read`, `aud=darkerdb:grimvault` | Legacy-shaped compatibility lookup (§4.1). |
 | POST | `/v2/grimvault/ping` | Bearer, `grimvault.read`, `aud=darkerdb:grimvault` | Auth-validation probe. Used by CLI `doctor`. |
 | GET | `/.well-known/jwks.json` | none | JWKS endpoint. Returns the public-key set used to verify access-token signatures. See §3.8 for why it lives on this host. |
 
@@ -803,7 +842,7 @@ containing the shapes referenced in their per-row descriptions above.
 |---|---|
 | `%LOCALAPPDATA%\Programs\GrimVault\` | Install root (binaries). Unchanged from `docs/release.md`. |
 | `%APPDATA%\GrimVault\settings.toml` | All OS-bound user preferences. |
-| `%APPDATA%\GrimVault\prices.sqlite` | Cached `/v2/grimvault/lookup` responses. |
+| `%LOCALAPPDATA%\GrimVault\grimvault.db` | Cached `/v2/grimvault/analyze` and legacy lookup responses. |
 | `%APPDATA%\GrimVault\logs\grimvault.log` | spdlog rotating sink. |
 | `%APPDATA%\GrimVault\crashes\*.dmp` | Crash minidumps. |
 | Windows Credential Manager: `GrimVault:tokens` | OAuth tokens. |
@@ -1223,7 +1262,7 @@ traceability.
 | 12 | JWT issuer build-out specifics? | **Build on existing Lexik foundation.** Adds: public JWKS at `api.{env.}darkerdb.com/.well-known/jwks.json` (see ruling 19), `iss` matching JWKS host per OIDC convention, `aud` / `nbf` / `jti` claims, per-controller `#[RequireAudience]` and `#[RequireScope]` attributes, refresh-token rotation table with family-wide reuse detection, Postgres `revoked_jtis` denylist with APCu cache. | §3.8, §3.9 |
 | 13 | JWT `sub` claim: `user_id` or `player_id`? | **`player_id`** (universal identity; works for guest players). Optional `user_id` claim when the player has a registered user. Per-product code reads `user_id` and handles its absence explicitly. | §3.8, §4.7 |
 | 14 | Host topology for SPA vs API? | **Split.** `darkerdb.com` = Vue/Vite SPA (consent, dashboard, connected-apps). `api.darkerdb.com` = Symfony API (OAuth endpoints, grants, grimvault). Per-env: `api.{dev,qa}.darkerdb.com`. Grimvault API paths use `/v2/*` prefix on the darkerdb host. | §2, §2.1, §3, §4, §5, §10.1 |
-| 15 | `/v2/grimvault/lookup` MVP scope? | **Stub-implemented.** Response shape is the contract; implementation returns plausible-shaped pricing data. Client must wire to the schema, not the stub's specific numbers. Real pricing is post-MVP. | §4.1.1 |
+| 15 | Runtime item-analysis endpoint? | **`/v2/grimvault/analyze`.** It returns live roll-aware pricing and premium gem plans atomically. `/lookup` remains compatibility-only. | §4.0 |
 | 16 | Dashboard connected-state content? | **Disconnect + Manage link only.** No Download CTA. Download stays in the not-connected state. | §9.2 |
 | 17 | Scope description registry? | **First-class architectural element.** KATforge owns one registry mapping `scope_id → description`. Exposed via `/v1/oauth/authorize/validate` response. Consent screen renders read-only from registry. MVP scopes: `grimvault.read` ("Look up item prices on your behalf."), `grimvault.write` ("Submit price observations on your behalf."). | §4.8 |
 | 18 | Additional API endpoints needed by SPA? | **Four added.** `GET /v1/oauth/grants`, `GET /v1/oauth/grants/:client_id`, `POST /v1/oauth/grants/:client_id/revoke`, `GET /v1/gateway/login/url`. Grant-revoke is the user-facing surface; `POST /oauth/revoke` remains as the RFC 7009 token-revoke surface used by the desktop. Both routes feed the denylist. | §5.2, §3.4 |

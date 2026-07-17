@@ -30,7 +30,7 @@ struct Request {
 };
 
 // One-shot libcurl wrapper used by the OAuth + bearer-authed API paths.
-// Caller is responsible for global_init / global_cleanup; DarkerDbClient
+// Caller is responsible for global_init / global_cleanup; DDBClient
 // already does this in main, so the auth module piggybacks on it.
 core::Result<Response> perform (const Request& req);
 

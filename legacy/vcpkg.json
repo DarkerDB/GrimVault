@@ -1,0 +1,9 @@
+{
+  "dependencies": [
+    "cppwinrt",
+    "directxtex",
+    "directxtk",
+    "opencv",
+    "onnxruntime-gpu"
+  ]
+}

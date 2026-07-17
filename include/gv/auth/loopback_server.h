@@ -39,9 +39,20 @@ public:
 
    // Block until one /callback hit matching `expected_state` lands, or
    // `timeout` elapses, or the server is closed.
+   //
+   // `success_redirect` and `error_redirect` are absolute URLs the
+   // server sends as a 302 Location after the callback fires (success
+   // or RFC 6749 error / state mismatch). When either is empty the
+   // server falls back to the embedded close_page_html () body.
+   //
+   // The realm SPA's `/grimvault/callback` page renders the branded
+   // "you're signed in" surface, so the user sees DDB chrome
+   // instead of the loopback's bare HTML.
    core::Result<CallbackResult> await_callback (
       std::string_view     expected_state,
-      std::chrono::seconds timeout
+      std::chrono::seconds timeout,
+      std::string_view     success_redirect = {},
+      std::string_view     error_redirect   = {}
    );
 
    // Idempotent close. Called automatically from the destructor.
