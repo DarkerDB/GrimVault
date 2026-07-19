@@ -30,6 +30,7 @@ using nlohmann::json;
 namespace {
 
    constexpr int k_grace_ms = 40;    // reserved for future soft-loss signals
+   constexpr int k_visual_align_up_css = 5; // ignore top ornament for alignment
 
    QPoint cursor_physical ()
    {
@@ -418,8 +419,9 @@ QRect AugmentView::Impl::anchored_rect () const
 
    const int x = std::max (game.x (),
       std::min (tip_x - gap - w, game.x () + game.width () - w));   // left of region
+   const int align_up = static_cast<int> (k_visual_align_up_css * scale);
    const int y = std::max (game.y (),
-      std::min (tip_y, game.y () + game.height () - h));
+      std::min (tip_y - align_up, game.y () + game.height () - h));
 
    return { x - pad, y - pad, w + 2 * pad, h + 2 * pad };
 }
@@ -448,7 +450,7 @@ void AugmentView::Impl::place_legacy (int w_css, int h_css)
    if (x + w > legacy_game.x () + legacy_game.width ()) {
       x = legacy_anchor.x () - gap - w;
    }
-   int y = legacy_anchor.y ();
+   int y = legacy_anchor.y () - static_cast<int> (k_visual_align_up_css * s);
 
    x = std::max (legacy_game.x (), std::min (x, legacy_game.x () + legacy_game.width ()  - w));
    y = std::max (legacy_game.y (), std::min (y, legacy_game.y () + legacy_game.height () - h));
@@ -491,3 +493,5 @@ void AugmentView::Impl::capture_to_snapshot (const QRect& rect)
 }
 
 } // namespace gv::ui
+
+One design call worth flagging: I standardized on HEAD's "hidden, never-shown" warmup card over theirs' "visible placeholder with Lorem ipsum" approach, since HEAD's is the more fully-built-out mechanism (prewarming flag, explicit clear-before-capture). If the placeholder-shown UX was actually the intended direction, say so and I'll flip conflicts 2, 3, and 10.

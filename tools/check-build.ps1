@@ -65,7 +65,8 @@ $root                  = (Resolve-Path "$PSScriptRoot\..").Path
 # (W: mapping of \\wsl.localhost\Ubuntu; see DEV.md): MSVC and Qt tooling
 # spawn cmd.exe (no UNC cwd), and build-output writes over 9P are slow.
 $remote = ($root -like '\\*') -or
-          ((Get-PSDrive -Name (Split-Path -Qualifier $root).TrimEnd(':')).DisplayRoot -like '\\*')
+          ((Get-PSDrive -Name (Split-Path -Qualifier $root).TrimEnd(':')).DisplayRoot -like '\\*') -or
+          ((New-Object System.IO.DriveInfo ($root)).DriveType -eq 'Network')
 $out = if ($remote) { "$env:LOCALAPPDATA\GrimVault\build\$Preset" }
        else         { Join-Path $root "build\$Preset" }
 
