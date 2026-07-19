@@ -119,11 +119,11 @@ record acquisition, confirmed loss, replacement candidates/rejections, frame
 age, locator cost, and hash-distance summaries in:
 
 ```text
-%LOCALAPPDATA%\GrimVault\logs\
+%APPDATA%\GrimVault\logs\
 ```
 
 From WSL/Codex the same directory is directly readable at
-`/mnt/c/Users/Ethan/AppData/Local/GrimVault/logs`; no log copy/paste is
+`/mnt/c/Users/Ethan/AppData/Roaming/GrimVault/logs`; no log copy/paste is
 needed. Summarize the newest session with:
 
 ```bash
@@ -137,7 +137,7 @@ tools\anchor-log-summary.ps1
 ```
 
 `--debug` additionally saves frames for replacement candidates and settled
-replacements under `%LOCALAPPDATA%\GrimVault\logs\anchoring\`. PNG writes occur on
+replacements under `%APPDATA%\GrimVault\logs\anchoring\`. PNG writes occur on
 detached workers after the immediate UI event, and retention is capped at the
 newest 40 frames.
 

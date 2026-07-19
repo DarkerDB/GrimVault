@@ -119,7 +119,7 @@ Item {
 
                Text {
                   width:            parent.width
-                  text:             "GrimVault"
+                  text:             "Item Statistics"
                   color:            Theme.legendary
                   font.family:      Theme.fontMedium
                   font.pixelSize:   19
