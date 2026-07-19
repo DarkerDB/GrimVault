@@ -815,7 +815,20 @@ containing the shapes referenced in their per-row descriptions above.
 |---|---|---|
 | GET | `/v2/grimvault/history` | reserved |
 | GET | `/v2/grimvault/stats` | reserved |
-| GET/PUT | `/v2/grimvault/settings` | reserved (cloud-synced settings) |
+
+`GET/PATCH/DELETE /v2/grimvault/settings` has shipped ahead of this doc's
+original MVP scope (§6 called it "later") — cloud-synced settings, nested
+wire contract (`overlay`/`tooltip`/`pricing`/`behavior`/`hotkeys`), flat
+colon-namespaced storage internally. `tooltip.analysis.*` covers the
+GrimVault Analysis augment's per-section visibility toggles (added
+alongside a redesign of that card's layout). The same contract is served on
+two auth surfaces: the desktop app uses its Bearer token at
+`/v2/grimvault/settings`; the darkerdb.com dashboard uses the signed-in
+user's own session at `GET/PATCH/DELETE /v1/grimvault/settings` (identical
+body/response, session auth instead of `aud=darkerdb:grimvault`). See the
+settings reference pages under
+`docs.katforge.com/reference/realms/darkerdb/grimvault-settings*` for the
+full contract — this doc no longer tracks it as the source of truth.
 
 ---
 
@@ -825,12 +838,11 @@ containing the shapes referenced in their per-row descriptions above.
 |---|---|---|
 | `access_token`, `refresh_token`, `expires_at` | Windows Credential Manager (DPAPI), single JSON blob, target `GrimVault:tokens` | OS-level protection, per-user, survives reinstall, integrates with Windows account lock. |
 | `pkce_verifier`, `state` (in flight) | Process memory only | Discarded after `/token` exchange. Never written to disk. |
-| User preferences (hotkey, region, OCR tuning) | `%APPDATA%\GrimVault\settings.toml` | OS-bound by definition. Plain text, user-readable. |
+| All user preferences (overlay, tooltip section toggles, pricing, behavior, hotkeys) | Cloud only — `/v2/grimvault/settings` | **Superseded MVP decision**: no `settings.toml`, no OS-bound preferences at all. Sign-in is now mandatory to use the app (§13), so there's no unauthenticated state that would need a local fallback — one settings surface, synced across machines. |
 | Cached price lookups | `%APPDATA%\GrimVault\prices.sqlite` | Local cache + offline serving. Non-sensitive. |
 | Logs, crash dumps | `%APPDATA%\GrimVault\logs\`, `%APPDATA%\GrimVault\crashes\` | Local diagnostics. Already in place (see `docs/release.md`). |
 | Account identity, billing, API-key issuance | KATforge | Out of client scope. |
 | Price history aggregates | Server-side (`api.darkerdb.com` Postgres, under the realm's tables) | Server-side only. Client never holds raw market data. Stub-implemented for MVP (§4.1.1). |
-| User overlay settings (future) | Local now. Cloud `/v2/grimvault/settings` later. | MVP keeps OS-bound settings local; deferred cloud sync respects the same `/settings` path convention. |
 
 ---
 
@@ -841,13 +853,23 @@ containing the shapes referenced in their per-row descriptions above.
 | Path | Purpose |
 |---|---|
 | `%LOCALAPPDATA%\Programs\GrimVault\` | Install root (binaries). Unchanged from `docs/release.md`. |
-| `%APPDATA%\GrimVault\settings.toml` | All OS-bound user preferences. |
+| ~~`%APPDATA%\GrimVault\settings.toml`~~ | Removed — see §6. All preferences are cloud-synced via `/v2/grimvault/settings`; there is no local settings file. |
 | `%LOCALAPPDATA%\GrimVault\grimvault.db` | Cached `/v2/grimvault/analyze` and legacy lookup responses. |
 | `%APPDATA%\GrimVault\logs\grimvault.log` | spdlog rotating sink. |
 | `%APPDATA%\GrimVault\crashes\*.dmp` | Crash minidumps. |
 | Windows Credential Manager: `GrimVault:tokens` | OAuth tokens. |
 
-### 7.2 `settings.toml`
+### 7.2 `settings.toml` — superseded, kept for historical reference
+
+> **Superseded per §13.** Sign-in is now mandatory (no `no_token` tray
+> state), so there is no local-only file — the schema below moved to
+> the cloud-synced `/v2/grimvault/settings` contract (see
+> `docs.katforge.com/reference/realms/darkerdb/grimvault-settings*`).
+> The first-run wizard's confirmed values (hotkey, capture region, OCR
+> tuning) now need a home in that cloud schema instead of writing this
+> file directly — that migration is native-client implementation work
+> for a future pass, not yet done. Left below as the reference for what
+> that migration needs to cover.
 
 TOML, ASCII, written atomically (write-temp + rename). Keys are flat,
 two-segment namespaces. Defaults shipped if file is missing.
@@ -889,17 +911,21 @@ telemetry        = "diag-only"   # "diag-only" | "off" (no analytics in MVP)
 | `app.autostart` | bool | `true` | `HKCU\...\Run` entry. |
 | `app.telemetry` | enum | `diag-only` | Only on-request diagnostics bundle (already implemented). |
 
-**First-run trigger.** The first-run setup wizard (hotkey + capture
-region) fires on launch **iff `%APPDATA%\GrimVault\settings.toml`
-does not exist**. The wizard writes the file with confirmed values
-(or shipped defaults if the user hits Skip), and subsequent launches
-go straight to tray. There is no "first run" flag inside the file:
-presence of the file IS the flag. Sign-in is independent: the tray
-sits in `no_token` after the wizard until the user clicks Sign In.
+**First-run trigger (as originally designed, now superseded).** The
+first-run setup wizard (hotkey + capture region) fired on launch iff
+`%APPDATA%\GrimVault\settings.toml` did not exist, writing confirmed
+values (or shipped defaults on Skip) so subsequent launches went
+straight to tray — independent of sign-in, which left the tray in
+`no_token` until the user clicked Sign In.
 
-No cloud-synced keys in MVP. The `settings.toml` location and schema
-are stable contracts; the future cloud `/settings` endpoint mirrors
-this exact key set.
+Per §13's superseding ruling, sign-in is no longer optional: the app
+requires a valid, authenticated session before it does anything beyond
+showing a sign-in prompt, so there is no unauthenticated `no_token`
+tray state and no local settings file for the wizard to gate on. The
+wizard's confirmed values now need to persist via `/v2/grimvault/settings`
+(authenticated) instead — the exact first-run UX (e.g. whether the
+wizard runs before or after the sign-in gate) is unspecified pending
+that native-client work.
 
 ### 7.3 `prices.sqlite`
 
@@ -1267,3 +1293,11 @@ traceability.
 | 17 | Scope description registry? | **First-class architectural element.** KATforge owns one registry mapping `scope_id → description`. Exposed via `/v1/oauth/authorize/validate` response. Consent screen renders read-only from registry. MVP scopes: `grimvault.read` ("Look up item prices on your behalf."), `grimvault.write` ("Submit price observations on your behalf."). | §4.8 |
 | 18 | Additional API endpoints needed by SPA? | **Four added.** `GET /v1/oauth/grants`, `GET /v1/oauth/grants/:client_id`, `POST /v1/oauth/grants/:client_id/revoke`, `GET /v1/gateway/login/url`. Grant-revoke is the user-facing surface; `POST /oauth/revoke` remains as the RFC 7009 token-revoke surface used by the desktop. Both routes feed the denylist. | §5.2, §3.4 |
 | 19 | JWKS host: katforge or darkerdb? | **Mirror on `api.{env.}darkerdb.com`.** `iss` pinned to the darkerdb host. Hides the KATforge relationship from third-party `curl` inspection of the JWKS URL or the `iss` claim. The signing key still lives in the KATforge namespace of the shared Symfony app; "mirror" is a route bound to the darkerdb host group returning the same `JWKSet`. | §3.8, §5.2, §10.1, §11.3 |
+
+### 13.3 Round 3 rulings
+
+| # | Question | Ruling | Where applied |
+|---|---|---|---|
+| 20 | Is sign-in required to use GrimVault at all, or only to sync/analyze? | **Sign-in is now mandatory.** Supersedes ruling 6's "sign-in is independent of the wizard" and the `no_token` tray state described in §7.2/§8: without a valid session the app shows a sign-in prompt rather than a functioning (but unauthenticated) tray/overlay shell. Rationale: usage attribution per user, no meaningful "default settings" identity to fall back to, and — since an account is now required regardless — no reason to keep any preference local/unsynced. | §6, §7.2, §8 (native-client behavior change; not yet implemented) |
+| 21 | Local settings file (`settings.toml`) or cloud-only? | **Cloud-only.** Ruling 20 removes the rationale for a local fallback. All preferences (overlay, tooltip section toggles including the new GrimVault Analysis augment toggles, pricing, behavior, hotkeys) live in `/v2/grimvault/settings`; `settings.toml` is retired. | §6, §7.1, §7.2 |
+| 22 | Settings wire contract shape? | **Nested groups on the wire** (`overlay`/`tooltip`/`pricing`/`behavior`/`hotkeys`), **flat colon-namespaced keys in storage** (`overlay:opacity`, `tooltip:analysis:roll_quality`, ...) — matches this codebase's existing `namespace:key` convention for storage while keeping the already-built dashboard UI's nested shape as the contract. | §5.4, settings reference docs |

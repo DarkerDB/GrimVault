@@ -99,9 +99,20 @@ inline nlohmann::json analysis_entity (const gv::api::TooltipLookup& lookup)
    if (lookup.gem_optimization.two_socket) {
       plans.push_back (gem_plan (*lookup.gem_optimization.two_socket, 2));
    }
+   nlohmann::json quest_merchants = nlohmann::json::array ();
+   for (const auto& quest : lookup.utility.quest_merchants) {
+      quest_merchants.push_back ({
+         { "merchant_id", quest.merchant_id },
+         { "merchant_name", quest.merchant_name },
+         { "quest_index", quest.quest_index },
+         { "quest_count", quest.quest_count },
+      });
+   }
 
    nlohmann::json analysis = {
       { "kind", "analysis" },
+      { "item_name", lookup.display_name.empty ()
+            ? lookup.canonical_name : lookup.display_name },
       { "item_rarity", lookup.rarity },
       { "quantity", lookup.quantity },
       { "tradeable", lookup.tradeable },
@@ -133,6 +144,7 @@ inline nlohmann::json analysis_entity (const gv::api::TooltipLookup& lookup)
          { "gear_score", lookup.utility.gear_score },
          { "max_stack_size", lookup.utility.max_stack_size },
          { "required_by_quests", lookup.utility.required_by_quests },
+         { "quest_merchants", std::move (quest_merchants) },
          { "used_in_recipes", lookup.utility.used_in_recipes },
       } },
    };
