@@ -18,7 +18,7 @@ presets keep the default in-tree `build/` layout).
 One-shot from any Windows PowerShell:
 
 ```powershell
-pwsh W:\home\ethan\.katforge\realms\grimvault\tools\dev-run.ps1
+pwsh W:\home\ethan\.katforge\realms\grimvault\tools\run-dev.ps1
 ```
 
 or from a WSL shell:
@@ -150,10 +150,10 @@ The next OCR work is specified in `docs/architecture/ocr.md`: generation-safe
 cancellation, recognizer leases, prewarmed language families, name-first
 lookup, multilingual fixtures, and explicit latency budgets.
 
-`dev-run.ps1` launches the full pipeline with `--debug` by default, with no red
-highlight borders (`-NoDebug` disables debug logging; `-DetectOnly` skips OCR,
-lookup, and augment) and builds RelWithDebInfo — the Debug preset's debug
-OpenCV makes detection ~10x slower.
+`run-dev.ps1` (and its original `dev-run.ps1` target) launches the full
+pipeline with `--debug` by default, with no red highlight borders (`-NoDebug`
+disables debug logging; `-DetectOnly` skips OCR, lookup, and augment) and builds
+RelWithDebInfo — the Debug preset's debug OpenCV makes detection ~10x slower.
 
 ### Switching env at runtime
 

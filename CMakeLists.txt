@@ -360,14 +360,21 @@ add_custom_command (TARGET grimvault POST_BUILD
 )
 
 # Augment page + vendored ddb-tooltips dist, served to WebView2 via the
-# grimvault.assets virtual host. Same dev/install duality as models/.
-add_custom_command (TARGET grimvault POST_BUILD
+# grimvault.assets virtual host. Track the source files independently of the
+# executable: a CSS/JS-only SDK update must restage on an incremental build
+# even when no C++ object needs relinking.
+file (GLOB_RECURSE GRIMVAULT_WEB_ASSETS CONFIGURE_DEPENDS
+   "${CMAKE_SOURCE_DIR}/web/*"
+)
+add_custom_target (grimvault_stage_web ALL
    COMMAND "${CMAKE_COMMAND}" -E copy_directory_if_different
            "${CMAKE_SOURCE_DIR}/web"
            "$<TARGET_FILE_DIR:grimvault>/web"
+   DEPENDS ${GRIMVAULT_WEB_ASSETS}
    COMMENT "Staging web assets for grimvault"
    VERBATIM
 )
+add_dependencies (grimvault grimvault_stage_web)
 
 # ---- Tests ----
 

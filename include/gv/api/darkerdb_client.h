@@ -94,6 +94,13 @@ struct MarketAnalysis {
    std::string        liquidity;
 };
 
+struct QuestMerchant {
+   std::string  merchant_id;
+   std::string  merchant_name;
+   std::int64_t quest_index = 0;
+   std::int64_t quest_count = 0;
+};
+
 struct UtilityAnalysis {
    std::int64_t vendor_value       = 0;
    std::int64_t vendor_total       = 0;
@@ -103,6 +110,7 @@ struct UtilityAnalysis {
    std::int64_t required_by_quests = 0;
    std::int64_t used_in_recipes    = 0;
    std::optional<std::int64_t> value_per_slot;
+   std::vector<QuestMerchant> quest_merchants;
 };
 
 struct ValueDriver {

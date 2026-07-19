@@ -264,6 +264,19 @@ namespace {
          out.utility.required_by_quests = integer_or_zero (*utility, "required_by_quests");
          out.utility.used_in_recipes    = integer_or_zero (*utility, "used_in_recipes");
          out.utility.value_per_slot     = optional_number<std::int64_t> (*utility, "value_per_slot");
+         if (auto quests = utility->find ("quest_merchants");
+             quests != utility->end () && quests->is_array ()) {
+            out.utility.quest_merchants.reserve (quests->size ());
+            for (const auto& quest : *quests) {
+               if (!quest.is_object ()) continue;
+               out.utility.quest_merchants.push_back (QuestMerchant {
+                  .merchant_id   = quest.value ("merchant_id", ""),
+                  .merchant_name = quest.value ("merchant_name", ""),
+                  .quest_index   = integer_or_zero (quest, "quest_index"),
+                  .quest_count   = integer_or_zero (quest, "quest_count"),
+               });
+            }
+         }
       }
 
       if (auto source = body.find ("source"); source != body.end () && source->is_object ()) {

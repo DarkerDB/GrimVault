@@ -94,6 +94,12 @@ TEST (AugmentPayload, CompleteAnalysisRendersPremiumSections)
    lookup.utility.used_in_recipes = 3;
    lookup.utility.max_stack_size = 5;
    lookup.utility.value_per_slot = 206;
+   lookup.utility.quest_merchants.push_back ({
+      .merchant_id = "id.merchant.collector",
+      .merchant_name = "Collector",
+      .quest_index = 4,
+      .quest_count = 12,
+   });
    lookup.value_driver = gv::api::ValueDriver {
       .attribute_id = "armor_penetration",
       .label = "Armor Penetration",
@@ -141,6 +147,8 @@ TEST (AugmentPayload, CompleteAnalysisRendersPremiumSections)
    ASSERT_EQ (sections.size (), 1u);
    ASSERT_EQ (sections [0]["kind"], "analysis");
    const auto& analysis = sections [0];
+   EXPECT_EQ (analysis ["item_name"], "Ruby Silver Ring");
+   EXPECT_EQ (analysis ["item_rarity"], "epic");
    EXPECT_EQ (analysis ["pricing"]["median"], 412);
    EXPECT_EQ (analysis ["pricing"]["low"], 360);
    EXPECT_EQ (analysis ["pricing"]["high"], 500);
@@ -153,6 +161,9 @@ TEST (AugmentPayload, CompleteAnalysisRendersPremiumSections)
    EXPECT_EQ (analysis ["trade_chat"]["messages"][0]["items"][0]["rarity"], "epic");
    EXPECT_EQ (analysis ["utility"]["max_stack_size"], 5);
    EXPECT_EQ (analysis ["utility"]["value_per_slot"], 206);
+   EXPECT_EQ (analysis ["utility"]["quest_merchants"][0]["merchant_name"], "Collector");
+   EXPECT_EQ (analysis ["utility"]["quest_merchants"][0]["quest_index"], 4);
+   EXPECT_EQ (analysis ["utility"]["quest_merchants"][0]["quest_count"], 12);
    EXPECT_EQ (analysis ["market"]["median_sale_seconds"], 2520);
    EXPECT_EQ (analysis ["market"]["days_supply"], 18.2);
    EXPECT_EQ (analysis ["market"]["price_stability"], "stable");
