@@ -6,8 +6,26 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace gv::ui::augment {
+
+// Render-time preferences the card honours, mirrored from the player's
+// dashboard settings. Kept as a value type so the render path can take a
+// snapshot without locking against the settings poller.
+//
+// `widgets` is the server's tooltip:analysis:* vocabulary in render order,
+// not a client-side enum — see SettingsBundle::Tooltip::analysis.
+struct Options {
+   std::vector<std::pair<std::string, bool>> widgets;
+   std::string currency_display = "absolute";
+
+   // Accelerator that opens the item on DarkerDB. The card advertises it
+   // wherever it truncates a list, so a cut-off section reads as "there is
+   // more, here is how" rather than as missing data.
+   std::string browse_hotkey;
+};
 
 namespace detail {
 
@@ -73,7 +91,30 @@ inline nlohmann::json gem_plan (const gv::api::GemPlan& plan, int sockets)
    };
 }
 
-inline nlohmann::json analysis_entity (const gv::api::TooltipLookup& lookup)
+// The card's per-section visibility: the player's toggle, except that a
+// widget the plan does not grant is forced off. Its blocks were already
+// stripped server-side by GrimVaultProjector, so leaving it "visible" would
+// only ask the renderer to draw a section with nothing in it.
+inline nlohmann::json visible_sections (const gv::api::TooltipLookup& lookup,
+                                        const Options& options)
+{
+   nlohmann::json visible = nlohmann::json::object ();
+
+   for (const auto& [widget, wanted] : options.widgets) {
+      visible [widget] = wanted && lookup.entitlement.grants (widget);
+   }
+
+   // A locked widget the player never had a toggle for still has to be
+   // suppressed, so walk the grant as well as the preference.
+   for (const auto& locked : lookup.entitlement.locked) {
+      visible [locked.widget] = false;
+   }
+
+   return visible;
+}
+
+inline nlohmann::json analysis_entity (const gv::api::TooltipLookup& lookup,
+                                       const Options& options)
 {
    nlohmann::json rolls = nlohmann::json::array ();
    for (const auto& roll : lookup.rolls) rolls.push_back (analysis_roll (roll));
@@ -99,18 +140,56 @@ inline nlohmann::json analysis_entity (const gv::api::TooltipLookup& lookup)
    if (lookup.gem_optimization.two_socket) {
       plans.push_back (gem_plan (*lookup.gem_optimization.two_socket, 2));
    }
-   nlohmann::json quest_merchants = nlohmann::json::array ();
-   for (const auto& quest : lookup.utility.quest_merchants) {
-      quest_merchants.push_back ({
+   const auto recipe_item = [] (const gv::api::RecipeItem& item) {
+      return nlohmann::json {
+         { "item_id", item.item_id }, { "name", item.name },
+         { "rarity", item.rarity },   { "icon_url", item.icon_url },
+         { "quantity", item.quantity }, { "is_this", item.is_this },
+      };
+   };
+
+   nlohmann::json quests = nlohmann::json::array ();
+   for (const auto& quest : lookup.quests) {
+      nlohmann::json row {
          { "merchant_id", quest.merchant_id },
          { "merchant_name", quest.merchant_name },
-         { "quest_index", quest.quest_index },
-         { "quest_count", quest.quest_count },
-      });
+         { "merchant_icon_url", quest.merchant_icon_url },
+         { "quest_name", quest.quest_name },
+      };
+      if (quest.quest_index) row ["quest_index"] = *quest.quest_index;
+      if (quest.quest_count) row ["quest_count"] = *quest.quest_count;
+      if (quest.quantity)    row ["quantity"]    = *quest.quantity;
+      quests.push_back (std::move (row));
+   }
+
+   nlohmann::json recipes = nlohmann::json::array ();
+   for (const auto& recipe : lookup.recipes) {
+      nlohmann::json materials = nlohmann::json::array ();
+      for (const auto& material : recipe.materials) materials.push_back (recipe_item (material));
+
+      nlohmann::json row {
+         { "merchant_id", recipe.merchant_id },
+         { "merchant_name", recipe.merchant_name },
+         { "merchant_icon_url", recipe.merchant_icon_url },
+         { "materials", std::move (materials) },
+      };
+      if (recipe.output) row ["output"] = recipe_item (*recipe.output);
+      recipes.push_back (std::move (row));
    }
 
    nlohmann::json analysis = {
       { "kind", "analysis" },
+      { "visible_sections", visible_sections (lookup, options) },
+      // Lets the card group its sections by tier. Both come straight from
+      // the entitlement block; the renderer does the ordering.
+      { "section_tiers", [&lookup] {
+         nlohmann::json map = nlohmann::json::object ();
+         for (const auto& [widget, plan] : lookup.entitlement.tiers) map [widget] = plan;
+         return map;
+      } () },
+      { "plan_ladder", lookup.entitlement.ladder },
+      { "currency_display", options.currency_display },
+      { "browse_hotkey", options.browse_hotkey },
       { "item_name", lookup.display_name.empty ()
             ? lookup.canonical_name : lookup.display_name },
       { "item_rarity", lookup.rarity },
@@ -137,16 +216,19 @@ inline nlohmann::json analysis_entity (const gv::api::TooltipLookup& lookup)
       } },
       { "rolls", std::move (rolls) },
       { "gem_plans", std::move (plans) },
+      // Why there are no plans, when there are none. Without it the card can
+      // only drop the section, and a section that silently vanishes reads as
+      // a bug rather than as "this item can't be gemmed".
+      { "gem_reason", lookup.gem_optimization.reason },
       { "utility", {
          { "vendor_value", lookup.utility.vendor_value },
          { "vendor_total", lookup.utility.vendor_total },
          { "adventure_points", lookup.utility.adventure_points },
          { "gear_score", lookup.utility.gear_score },
          { "max_stack_size", lookup.utility.max_stack_size },
-         { "required_by_quests", lookup.utility.required_by_quests },
-         { "quest_merchants", std::move (quest_merchants) },
-         { "used_in_recipes", lookup.utility.used_in_recipes },
       } },
+      { "quests", std::move (quests) },
+      { "recipes", std::move (recipes) },
    };
 
    if (lookup.roll_score) analysis ["roll_score"] = *lookup.roll_score;
@@ -155,6 +237,12 @@ inline nlohmann::json analysis_entity (const gv::api::TooltipLookup& lookup)
    }
    if (lookup.relative_percentile) {
       analysis ["relative_percentile"] = *lookup.relative_percentile;
+   }
+   if (lookup.market_analysis.average_sale_price) {
+      analysis ["market"]["average_sale_price"] = *lookup.market_analysis.average_sale_price;
+   }
+   if (lookup.market_analysis.median_sale_price) {
+      analysis ["market"]["median_sale_price"] = *lookup.market_analysis.median_sale_price;
    }
    if (lookup.market_analysis.trend_percent) {
       analysis ["market"]["trend_percent"] = *lookup.market_analysis.trend_percent;
@@ -180,6 +268,8 @@ inline nlohmann::json analysis_entity (const gv::api::TooltipLookup& lookup)
       analysis ["source"] = {
          { "kind", lookup.source_analysis->kind },
          { "heading", lookup.source_analysis->heading },
+         { "id", lookup.source_analysis->id },
+         { "icon_url", lookup.source_analysis->icon_url },
          { "name", lookup.source_analysis->name },
          { "context", lookup.source_analysis->context },
       };
@@ -197,8 +287,13 @@ inline nlohmann::json analysis_entity (const gv::api::TooltipLookup& lookup)
       analysis ["utility"]["value_per_slot"] = *lookup.utility.value_per_slot;
    }
 
+   // The card is titled by the realm wordmark alone. `realm` is what the
+   // tooltip library draws the mark from; `name` stays the plain-text spelling
+   // of that same title, so a tooltip build older than the field still renders
+   // a correct (if unbranded) header rather than an empty one.
    return {
-      { "name", "GrimVault Analysis" },
+      { "name", "GrimVault" },
+      { "realm", "grimvault" },
       { "rarity", lookup.rarity.empty () ? "common" : lookup.rarity },
       { "sections", nlohmann::json::array ({ std::move (analysis) }) },
    };
@@ -248,20 +343,42 @@ inline nlohmann::json legacy_entity (const gv::api::TooltipLookup& lookup)
 
 } // namespace detail
 
-inline nlohmann::json entity (const gv::api::TooltipLookup& lookup)
+inline nlohmann::json entity (const gv::api::TooltipLookup& lookup,
+                              const Options& options = {})
 {
    return detail::is_analysis (lookup)
-      ? detail::analysis_entity (lookup)
+      ? detail::analysis_entity (lookup, options)
       : detail::legacy_entity (lookup);
 }
 
+// Shown the moment a tooltip region is anchored, before OCR and the network
+// round trip have produced anything. Without it the card simply appears some
+// hundreds of milliseconds later and the wait reads as lag rather than work.
+inline nlohmann::json loading_message (std::uint64_t seq)
+{
+   return {
+      { "type", "render" },
+      { "seq",  seq },
+      { "entity", {
+         { "name",   "GrimVault" },
+         { "realm",  "grimvault" },
+         { "rarity", "common" },
+         { "sections", nlohmann::json::array ({
+            nlohmann::json { { "kind", "loading" } }
+         }) },
+      } },
+      { "params", { { "kind", "augment" }, { "compact", true } } },
+   };
+}
+
 inline nlohmann::json render_message (const gv::api::TooltipLookup& lookup,
-                                      std::uint64_t seq)
+                                      std::uint64_t seq,
+                                      const Options& options = {})
 {
    return {
       { "type", "render" },
       { "seq", seq },
-      { "entity", entity (lookup) },
+      { "entity", entity (lookup, options) },
       { "params", { { "kind", "augment" }, { "compact", true } } },
    };
 }

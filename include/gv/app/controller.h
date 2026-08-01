@@ -19,22 +19,37 @@ namespace gv::ui  { class DebugOverlay; class OverlayWindow; }
 namespace gv::app {
 
 // Action identifiers used as hotkey ids and surfaced to the UI.
+//
+// Two of these are dashboard-bindable and map onto the hotkeys:* settings
+// group: `hotkeys:force_refresh` drives k_scan_now and
+// `hotkeys:toggle_overlay` drives k_toggle_overlay. The rest keep their
+// local defaults — toggle_mode and clear_overlay are power-user affordances
+// and debug_toggle only does anything under --debug=highlight:*, so none of
+// them earns a row in the dashboard.
 struct Actions {
-   static constexpr const char* k_scan_now      = "scan_now";
-   static constexpr const char* k_toggle_mode   = "toggle_mode";
-   static constexpr const char* k_debug_toggle  = "debug_toggle";
-   static constexpr const char* k_clear_overlay = "clear_overlay";
+   static constexpr const char* k_scan_now       = "scan_now";
+   static constexpr const char* k_toggle_mode    = "toggle_mode";
+   static constexpr const char* k_debug_toggle   = "debug_toggle";
+   static constexpr const char* k_clear_overlay  = "clear_overlay";
+   static constexpr const char* k_toggle_overlay = "toggle_overlay";
+   static constexpr const char* k_open_in_browser = "open_in_browser";
 };
 
 // Default accelerators applied when the user_hotkeys table has no rows.
 struct DefaultAccelerators {
-   static constexpr const char* scan_now      = "F5";
-   static constexpr const char* toggle_mode   = "F6";
-   static constexpr const char* debug_toggle  = "F7";
-   static constexpr const char* clear_overlay = "F8";
+   static constexpr const char* scan_now       = "F5";
+   static constexpr const char* toggle_mode    = "F6";
+   static constexpr const char* debug_toggle   = "F7";
+   static constexpr const char* clear_overlay  = "F8";
+   static constexpr const char* toggle_overlay  = "Ctrl+Shift+G";
+   static constexpr const char* open_in_browser = "Ctrl+Shift+D";
 };
 
-enum class Mode { Auto, Manual };
+// Auto     — hover a tooltip and the card appears (overlay:mode automatic).
+// Manual   — nothing is scanned until the scan_now hotkey (overlay:mode manual).
+// Disabled — the pipeline still runs, but nothing is ever drawn
+//            (overlay:mode disabled, and what toggle_overlay flips to).
+enum class Mode { Auto, Manual, Disabled };
 
 // Owns the runtime wiring between the window tracker, capture pipeline,
 // API client, overlay window, and hotkey manager. Lives on the Qt main
@@ -72,12 +87,26 @@ public:
 
    Mode mode () const noexcept;
 
+   // The dashboard's overlay:mode. Remembered separately from the live mode
+   // so toggle_overlay can flip to Disabled and back to whatever the player
+   // actually configured, rather than always landing on Auto.
+   void set_configured_mode (Mode m);
+
    // Action entry points. Each is safe to call from any thread; the heavy
    // lifting happens via QMetaObject::invokeMethod queued connection.
-   void action_scan_now      ();
-   void action_toggle_mode   ();
-   void action_debug_toggle  ();
-   void action_clear_overlay ();
+   void action_scan_now       ();
+   void action_toggle_mode    ();
+   void action_debug_toggle   ();
+   void action_clear_overlay  ();
+   void action_toggle_overlay ();
+
+   // Open the last analysed item's page on the SPA. The card truncates long
+   // lists (recipes especially) and advertises this key as the way to see
+   // the rest, so it has to work off whatever was last hovered.
+   void action_open_in_browser ();
+
+   // SPA origin for that action, e.g. https://darkerdb.com.
+   void set_browse_base (std::string url);
 
    // Wired into WindowTracker. Called from the tracker's pump thread.
    void on_window_event (const core::WindowEvent& ev);

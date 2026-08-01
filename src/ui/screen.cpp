@@ -26,6 +26,26 @@ qreal scale_at (const QPoint& physical)
    return 1.0;
 }
 
+QRect viewport_at (const QPoint& physical)
+{
+#ifdef _WIN32
+   const POINT pt { physical.x (), physical.y () };
+   HMONITOR mon = ::MonitorFromPoint (pt, MONITOR_DEFAULTTONEAREST);
+
+   MONITORINFO info {};
+   info.cbSize = sizeof (info);
+   if (!::GetMonitorInfoW (mon, &info)) return {};
+
+   // rcMonitor, not rcWork: the game is borderless fullscreen and the card
+   // draws over it, so the taskbar strip is ours to use as well.
+   const RECT& r = info.rcMonitor;
+   return QRect { r.left, r.top, r.right - r.left, r.bottom - r.top };
+#else
+   Q_UNUSED (physical);
+   return {};
+#endif
+}
+
 void move (QWindow* window, const QPoint& physical)
 {
 #ifdef _WIN32

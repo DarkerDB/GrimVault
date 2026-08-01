@@ -1,5 +1,7 @@
 #pragma once
 
+#include <gv/ui/layout.h>
+
 #include <QObject>
 #include <QRect>
 
@@ -10,6 +12,8 @@
 namespace gv::api { struct TooltipLookup; }
 
 namespace gv::ui {
+
+namespace augment { struct Options; }
 
 // The overlay surface that draws the Augment beside the in-game tooltip.
 // Renderer is the DDB SDK in a permanently hidden WebView2, captured to a
@@ -42,6 +46,15 @@ public:
    void present (const gv::api::TooltipLookup& lookup,
                  const QRect& game, const QRect& anchor, bool animate = true);
    void clear ();
+
+   // Skeleton card, shown the moment a region is anchored so the hover feels
+   // answered before the analysis actually is. No-op on the QML fallback.
+   void present_loading ();
+
+   // Live settings. Both are cheap and idempotent — SettingsBridge calls
+   // them whenever the dashboard changes, including mid-hover.
+   void set_layout  (const Layout& layout);
+   void set_options (const augment::Options& options);
 
    // Anchoring passthrough (WebView2 renderer only; QML is lookup-driven).
    void anchor_shown (const QRect& game, const QPoint& offset, const QSize& tip,

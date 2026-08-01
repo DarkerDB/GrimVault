@@ -68,11 +68,19 @@
       DDB.tooltips.configure ({ linkBase: null });
    }
 
+   function measure () {
+      return {
+         w: Math.max (target.offsetWidth,  target.scrollWidth),
+         h: Math.max (target.offsetHeight, target.scrollHeight),
+      };
+   }
+
    function postSize () {
       if (!bridge || !seq) return;
 
-      const w = target.offsetWidth;
-      const h = target.offsetHeight;
+      const box = measure ();
+      const w = box.w;
+      const h = box.h;
       if (w < 1 || h < 1) return;
 
       const pad = parseFloat (getComputedStyle (wrap).paddingLeft) || 0;
@@ -94,8 +102,7 @@
    let stable = 0;
 
    function measureStable () {
-      const w = target.offsetWidth;
-      const h = target.offsetHeight;
+      const { w, h } = measure ();
 
       if (w === lastW && h === lastH) {
          if (++stable >= 1) {
@@ -120,6 +127,31 @@
       measureStable ();
    }
 
+   /* Every icon on the card is a fixed-size <img> pointed at the CDN. Fixed
+      size means a late-arriving portrait changes no layout, so the
+      ResizeObserver never fires and the snapshot is taken of a card with a
+      hole where the art goes — which is exactly what a monster portrait the
+      cache had not seen before looked like.
+
+      Waiting on decode() closes that. Capped, because one slow asset must
+      not hold the whole card hostage: past the deadline we photograph what
+      we have and the icon simply misses this hover. */
+   const DECODE_BUDGET_MS = 350;
+
+   function whenPainted (done) {
+      const pending = [ ...target.querySelectorAll ('img') ]
+         .filter ((img) => !img.complete)
+         .map ((img) => img.decode ().catch (() => {}));
+
+      if (!pending.length) { done (); return; }
+
+      let settled = false;
+      const finish = () => { if (!settled) { settled = true; done (); } };
+
+      setTimeout (finish, DECODE_BUDGET_MS);
+      Promise.all (pending).then (finish);
+   }
+
    new ResizeObserver (remeasure).observe (wrap);
 
    if (bridge) bridge.postMessage ({ type: 'hello', ddb: typeof window.DDB });
@@ -139,7 +171,10 @@
 
       try {
          DDB.tooltips.render (target, msg.entity, msg.params);
+         /* Measure once immediately so a cached card is instant, then again
+            once any cold icons have decoded. */
          remeasure ();
+         whenPainted (remeasure);
       } catch (err) {
          bridge.postMessage ({ type: 'error', seq, message: String (err) });
       }

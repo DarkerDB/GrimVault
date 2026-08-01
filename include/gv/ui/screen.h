@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QPoint>
+#include <QRect>
 
 class QWindow;
 
@@ -13,6 +14,13 @@ namespace gv::ui::screen {
 
 // Effective DPI scale (1.0 == 96 dpi) of the monitor nearest the point.
 qreal scale_at (const QPoint& physical);
+
+// Full physical bounds of the monitor nearest the point. This is the real
+// viewport for an overlay: a borderless game window can be larger than the
+// monitor it reports on, and on a multi-monitor desk the game's rect is not
+// the space actually visible. Returns an empty rect when it can't be
+// determined, so callers can fall back to the game rect.
+QRect viewport_at (const QPoint& physical);
 
 // Move a top-level window so its top-left lands on the given physical
 // screen pixel, regardless of per-monitor scaling.

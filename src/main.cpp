@@ -1,5 +1,6 @@
 #include <gv/api/darkerdb_client.h>
 #include <gv/app/controller.h>
+#include <gv/app/settings_bridge.h>
 #include <gv/app/settings_sync.h>
 #include <gv/auth/oauth_client.h>
 #include <gv/auth/session.h>
@@ -12,7 +13,6 @@
 #include <gv/core/ini_migrator.h>
 #include <gv/core/logger.h>
 #include <gv/core/single_instance.h>
-#include <gv/core/startup_link.h>
 #include <gv/core/version.h>
 #include <gv/core/window_tracker.h>
 #include <gv/db/database.h>
@@ -535,19 +535,30 @@ namespace {
          }
       }
 
+      controller.set_browse_base (std::string { active_env.spa_base_url });
+
       const int bound = controller.bind_hotkeys_from_repo ();
       gv::core::Logger::info ("hotkeys: {} bindings active", bound);
 
-      // Apply login-on-startup setting (HKCU\...\Run).
-      if (auto v = settings_repo.get ("general:launch_on_startup"); v.has_value () && v->has_value ()) {
-         const bool want = (**v == "true" || **v == "1");
-         if (want) {
-            gv::core::StartupLink::enable ("GrimVault",
-               app.applicationFilePath ().toStdString (), "--hidden");
-         } else {
-            gv::core::StartupLink::disable ("GrimVault");
-         }
-      }
+      // Env flag wins over the dashboard toggle so dev/CI can suppress
+      // updates unconditionally. Resolved before the bridge so its first
+      // reload () already knows updates are locked off.
+      const char* dis_env = std::getenv ("GRIMVAULT_DISABLE_UPDATES");
+      const bool  disabled_by_env = dis_env && *dis_env && std::string_view { dis_env } != "0";
+
+      // ---- Settings application ----
+      // The half of settings that makes them do something: folds the stored
+      // keys into live overlay layout, card options, overlay mode, hotkey
+      // bindings and the launch-on-startup entry. Seeded from the repo here
+      // so a signed-in relaunch is already correct before the first poll.
+      gv::app::SettingsBridge settings_bridge {{
+         .repo               = &settings_repo,
+         .overlay            = &overlay,
+         .controller         = &controller,
+         .exe_path           = app.applicationFilePath ().toStdString (),
+         .updates_locked_off = disabled_by_env,
+      }};
+      settings_bridge.reload ();
 
       // ---- Tray icon ----
       if (!QSystemTrayIcon::isSystemTrayAvailable ()) {
@@ -574,12 +585,19 @@ namespace {
       // ---- Settings sync ----
       // Dashboard-controlled settings polled from /v2/grimvault/settings and
       // mirrored into UserSettingsRepo. Starts on sign-in, stops on sign-out.
-      gv::app::SettingsSync settings_sync { &api_client, &session, &settings_repo };
+      // Dev polls hard: the API is a container on the same box, and the
+      // whole point of the dev loop is changing a setting on the dashboard
+      // and watching the card change.
+      gv::app::SettingsSync::Config sync_cfg;
+      if (active_env.name == "dev") {
+         sync_cfg.interval      = std::chrono::seconds { 5 };
+         sync_cfg.backoff_floor = std::chrono::seconds { 5 };
+      }
+
+      gv::app::SettingsSync settings_sync {
+         &api_client, &session, &settings_repo, sync_cfg };
       QObject::connect (&settings_sync, &gv::app::SettingsSync::settings_changed,
-         &app, [] (const QString& key, const QString& value) {
-            gv::core::log::app.info ("settings updated: {} = {}",
-               key.toStdString (), value.toStdString ());
-         });
+         &settings_bridge, &gv::app::SettingsBridge::apply);
 
       // Canonical signed-in state as the GUI last reconciled it. Updated by
       // the in-process sign-in/out handlers below and by the external-change
@@ -711,23 +729,32 @@ namespace {
       QObject::connect (&tray, &gv::ui::TrayIcon::quit_requested,
          &app, &QApplication::quit);
 
-      // Env flag wins over the user setting so dev/CI can suppress unconditionally.
-      const char* dis_env = std::getenv ("GRIMVAULT_DISABLE_UPDATES");
-      const bool  disabled_by_env = dis_env && *dis_env && std::string_view { dis_env } != "0";
+      // behavior:is_auto_update_enabled, gated by the env lock resolved above.
+      // Re-evaluated on every settings change so toggling it in the
+      // dashboard starts or stops the checker without a restart.
+      auto running = std::make_shared<bool> (false);
+      auto sync_updates = [&update_service, &settings_bridge, disabled_by_env, running] {
+         const bool want = settings_bridge.auto_updates_enabled ();
 
-      bool auto_updates = true;
-      if (auto v = settings_repo.get ("general:auto_updates"); v.has_value () && v->has_value ()) {
-         auto_updates = (**v == "true" || **v == "1");
-      }
+         if (want == *running) return;
+         *running = want;
 
-      if (auto_updates && !disabled_by_env) {
-         update_service.set_check_interval_seconds (3600);
-         update_service.start ();
-      } else if (disabled_by_env) {
-         gv::core::log::update.info ("skipped (GRIMVAULT_DISABLE_UPDATES set)");
-      } else {
-         gv::core::log::update.info ("skipped (auto_updates disabled)");
-      }
+         if (want) {
+            update_service.set_check_interval_seconds (3600);
+            update_service.start ();
+            gv::core::log::update.info ("auto-updates enabled");
+            return;
+         }
+
+         update_service.stop ();
+         gv::core::log::update.info (disabled_by_env
+            ? "skipped (GRIMVAULT_DISABLE_UPDATES set)"
+            : "skipped (auto-updates disabled)");
+      };
+
+      QObject::connect (&settings_bridge, &gv::app::SettingsBridge::applied,
+         &app, sync_updates);
+      sync_updates ();
 
       const int rc = app.exec ();
 

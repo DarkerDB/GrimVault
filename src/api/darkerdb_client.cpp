@@ -247,6 +247,10 @@ namespace {
       if (auto market = body.find ("market"); market != body.end () && market->is_object ()) {
          out.market_analysis.active_listings = integer_or_zero (*market, "active_listings");
          out.market_analysis.sales_30d       = integer_or_zero (*market, "sales_30d");
+         out.market_analysis.average_sale_price = optional_number<std::int64_t> (
+            *market, "average_sale_price");
+         out.market_analysis.median_sale_price  = optional_number<std::int64_t> (
+            *market, "median_sale_price");
          out.market_analysis.trend_percent   = optional_number<double> (*market, "trend_percent");
          out.market_analysis.median_sale_seconds = optional_number<std::int64_t> (
             *market, "median_sale_seconds");
@@ -256,26 +260,63 @@ namespace {
       }
 
       if (auto utility = body.find ("utility"); utility != body.end () && utility->is_object ()) {
-         out.utility.vendor_value       = integer_or_zero (*utility, "vendor_value");
-         out.utility.vendor_total       = integer_or_zero (*utility, "vendor_total");
-         out.utility.adventure_points   = integer_or_zero (*utility, "adventure_points");
-         out.utility.gear_score         = integer_or_zero (*utility, "gear_score");
-         out.utility.max_stack_size     = integer_or_zero (*utility, "max_stack_size");
-         out.utility.required_by_quests = integer_or_zero (*utility, "required_by_quests");
-         out.utility.used_in_recipes    = integer_or_zero (*utility, "used_in_recipes");
-         out.utility.value_per_slot     = optional_number<std::int64_t> (*utility, "value_per_slot");
-         if (auto quests = utility->find ("quest_merchants");
-             quests != utility->end () && quests->is_array ()) {
-            out.utility.quest_merchants.reserve (quests->size ());
-            for (const auto& quest : *quests) {
-               if (!quest.is_object ()) continue;
-               out.utility.quest_merchants.push_back (QuestMerchant {
-                  .merchant_id   = quest.value ("merchant_id", ""),
-                  .merchant_name = quest.value ("merchant_name", ""),
-                  .quest_index   = integer_or_zero (quest, "quest_index"),
-                  .quest_count   = integer_or_zero (quest, "quest_count"),
-               });
+         out.utility.vendor_value     = integer_or_zero (*utility, "vendor_value");
+         out.utility.vendor_total     = integer_or_zero (*utility, "vendor_total");
+         out.utility.adventure_points = integer_or_zero (*utility, "adventure_points");
+         out.utility.gear_score       = integer_or_zero (*utility, "gear_score");
+         out.utility.max_stack_size   = integer_or_zero (*utility, "max_stack_size");
+         out.utility.value_per_slot   = optional_number<std::int64_t> (*utility, "value_per_slot");
+      }
+
+      if (auto quests = body.find ("quests"); quests != body.end () && quests->is_array ()) {
+         out.quests.reserve (quests->size ());
+         for (const auto& quest : *quests) {
+            if (!quest.is_object ()) continue;
+            out.quests.push_back (QuestUse {
+               .merchant_id       = quest.value ("merchant_id", ""),
+               .merchant_name     = quest.value ("merchant_name", ""),
+               .merchant_icon_url = quest.value ("merchant_icon_url", ""),
+               .quest_name        = quest.value ("quest_name", ""),
+               .quest_index       = optional_number<std::int64_t> (quest, "quest_index"),
+               .quest_count       = optional_number<std::int64_t> (quest, "quest_count"),
+               .quantity          = optional_number<std::int64_t> (quest, "quantity"),
+            });
+         }
+      }
+
+      if (auto recipes = body.find ("recipes"); recipes != body.end () && recipes->is_array ()) {
+         const auto read_item = [] (const nlohmann::json& j) {
+            return RecipeItem {
+               .item_id  = j.value ("item_id", ""),
+               .name     = j.value ("name", ""),
+               .rarity   = j.value ("rarity", ""),
+               .icon_url = j.value ("icon_url", ""),
+               .quantity = j.value ("quantity", static_cast<std::int64_t> (1)),
+               .is_this  = j.value ("is_this", false),
+            };
+         };
+
+         out.recipes.reserve (recipes->size ());
+         for (const auto& recipe : *recipes) {
+            if (!recipe.is_object ()) continue;
+
+            RecipeUse use {
+               .merchant_id       = recipe.value ("merchant_id", ""),
+               .merchant_name     = recipe.value ("merchant_name", ""),
+               .merchant_icon_url = recipe.value ("merchant_icon_url", ""),
+            };
+            if (auto output = recipe.find ("output");
+                output != recipe.end () && output->is_object ()) {
+               use.output = read_item (*output);
             }
+            if (auto materials = recipe.find ("materials");
+                materials != recipe.end () && materials->is_array ()) {
+               use.materials.reserve (materials->size ());
+               for (const auto& material : *materials) {
+                  if (material.is_object ()) use.materials.push_back (read_item (material));
+               }
+            }
+            out.recipes.push_back (std::move (use));
          }
       }
 
@@ -283,6 +324,8 @@ namespace {
          out.source_analysis = SourceAnalysis {
             .kind           = source->value ("kind", ""),
             .heading        = source->value ("heading", ""),
+            .id             = source->value ("id", ""),
+            .icon_url       = source->value ("icon_url", ""),
             .name           = source->value ("name", ""),
             .context        = source->value ("context", ""),
             .drop_rate      = optional_number<double> (*source, "drop_rate"),
@@ -315,6 +358,50 @@ namespace {
                   }
                }
                out.trade_chat.messages.push_back (std::move (parsed));
+            }
+         }
+      }
+
+      if (auto ent = body.find ("entitlement"); ent != body.end () && ent->is_object ()) {
+         out.entitlement.plan  = ent->value ("plan", "");
+         out.entitlement.slot_limit = integer_or_zero (*ent, "slots");
+
+         if (auto granted = ent->find ("granted");
+             granted != ent->end () && granted->is_array ()) {
+            out.entitlement.granted.reserve (granted->size ());
+            for (const auto& widget : *granted) {
+               if (widget.is_string ()) {
+                  out.entitlement.granted.push_back (widget.get<std::string> ());
+               }
+            }
+         }
+
+         if (auto tiers = ent->find ("tiers"); tiers != ent->end () && tiers->is_object ()) {
+            out.entitlement.tiers.reserve (tiers->size ());
+            for (const auto& [widget, plan] : tiers->items ()) {
+               if (plan.is_string ()) {
+                  out.entitlement.tiers.emplace_back (widget, plan.get<std::string> ());
+               }
+            }
+         }
+
+         if (auto ladder = ent->find ("ladder"); ladder != ent->end () && ladder->is_array ()) {
+            out.entitlement.ladder.reserve (ladder->size ());
+            for (const auto& plan : *ladder) {
+               if (plan.is_string ()) out.entitlement.ladder.push_back (plan.get<std::string> ());
+            }
+         }
+
+         if (auto locked = ent->find ("locked"); locked != ent->end () && locked->is_array ()) {
+            out.entitlement.locked.reserve (locked->size ());
+            for (const auto& row : *locked) {
+               if (!row.is_object ()) continue;
+               out.entitlement.locked.push_back (LockedWidget {
+                  .widget             = row.value ("widget", ""),
+                  .required_plan      = row.value ("required_plan", ""),
+                  .required_plan_name = row.value ("required_plan_name",
+                                                   row.value ("required_plan", "")),
+               });
             }
          }
       }
@@ -388,19 +475,20 @@ namespace {
       put ("tooltip:is_price_history_sparkline_visible",
          b.tooltip.is_price_history_sparkline_visible ? "true" : "false");
 
-      put ("pricing:currency_display", b.pricing.currency_display);
-      put ("pricing:source",           b.pricing.source);
-      put ("pricing:window_days",      std::to_string (b.pricing.window_days));
+      for (const auto& [widget, visible] : b.tooltip.analysis) {
+         put ("tooltip:analysis:" + widget, visible ? "true" : "false");
+      }
 
-      put ("behavior:is_telemetry_enabled",
-         b.behavior.is_telemetry_enabled ? "true" : "false");
+      put ("pricing:currency_display", b.pricing.currency_display);
+
       put ("behavior:is_auto_update_enabled",
          b.behavior.is_auto_update_enabled ? "true" : "false");
       put ("behavior:is_launch_on_startup_enabled",
          b.behavior.is_launch_on_startup_enabled ? "true" : "false");
 
-      put ("hotkeys:toggle_overlay", b.hotkeys.toggle_overlay);
-      put ("hotkeys:force_refresh",  b.hotkeys.force_refresh);
+      put ("hotkeys:toggle_overlay",  b.hotkeys.toggle_overlay);
+      put ("hotkeys:force_refresh",   b.hotkeys.force_refresh);
+      put ("hotkeys:open_in_browser", b.hotkeys.open_in_browser);
    }
 
    // Populate the typed SettingsBundle fields from the nested JSON
@@ -438,17 +526,25 @@ namespace {
          out.tooltip.is_price_history_sparkline_visible = t->value (
             "is_price_history_sparkline_visible",
             out.tooltip.is_price_history_sparkline_visible);
+
+         // Copied in wire order, not looked up against a client-side list:
+         // the server owns the widget vocabulary, so a slug this build has
+         // never heard of still reaches the augment's visible_sections.
+         if (auto a = t->find ("analysis"); a != t->end () && a->is_object ()) {
+            out.tooltip.analysis.reserve (a->size ());
+            for (const auto& [widget, visible] : a->items ()) {
+               if (visible.is_boolean ()) {
+                  out.tooltip.analysis.emplace_back (widget, visible.get<bool> ());
+               }
+            }
+         }
       }
 
       if (auto p = body.find ("pricing"); p != body.end () && p->is_object ()) {
          out.pricing.currency_display = p->value ("currency_display", out.pricing.currency_display);
-         out.pricing.source           = p->value ("source",           out.pricing.source);
-         out.pricing.window_days      = p->value ("window_days",      out.pricing.window_days);
       }
 
       if (auto b = body.find ("behavior"); b != body.end () && b->is_object ()) {
-         out.behavior.is_telemetry_enabled = b->value (
-            "is_telemetry_enabled", out.behavior.is_telemetry_enabled);
          out.behavior.is_auto_update_enabled = b->value (
             "is_auto_update_enabled", out.behavior.is_auto_update_enabled);
          out.behavior.is_launch_on_startup_enabled = b->value (
@@ -456,8 +552,9 @@ namespace {
       }
 
       if (auto h = body.find ("hotkeys"); h != body.end () && h->is_object ()) {
-         out.hotkeys.toggle_overlay = h->value ("toggle_overlay", out.hotkeys.toggle_overlay);
-         out.hotkeys.force_refresh  = h->value ("force_refresh",  out.hotkeys.force_refresh);
+         out.hotkeys.toggle_overlay  = h->value ("toggle_overlay",  out.hotkeys.toggle_overlay);
+         out.hotkeys.force_refresh   = h->value ("force_refresh",   out.hotkeys.force_refresh);
+         out.hotkeys.open_in_browser = h->value ("open_in_browser", out.hotkeys.open_in_browser);
       }
 
       flatten_to_values (out);

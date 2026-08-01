@@ -176,6 +176,12 @@ struct OverlayWindow::Impl
 {
    Config config;
 
+   // Held here as well as pushed down so a renderer created (or recreated)
+   // after the first sync still starts with the player's settings, not the
+   // struct defaults.
+   Layout           layout;
+   augment::Options options;
+
    std::unique_ptr<AugmentView> augment;
    std::unique_ptr<QmlTooltip>  qml;
 
@@ -214,6 +220,8 @@ OverlayWindow::OverlayWindow (Config config, QObject* parent)
    }
 
    impl_->augment = std::move (*augment);
+   impl_->augment->set_layout  (impl_->layout);
+   impl_->augment->set_options (impl_->options);
 }
 
 OverlayWindow::~OverlayWindow () = default;
@@ -250,6 +258,23 @@ void OverlayWindow::clear ()
    }
 
    if (impl_->qml) impl_->qml->clear ();
+}
+
+void OverlayWindow::present_loading ()
+{
+   if (impl_->augment) impl_->augment->present_loading ();
+}
+
+void OverlayWindow::set_layout (const Layout& layout)
+{
+   impl_->layout = layout;
+   if (impl_->augment) impl_->augment->set_layout (layout);
+}
+
+void OverlayWindow::set_options (const augment::Options& options)
+{
+   impl_->options = options;
+   if (impl_->augment) impl_->augment->set_options (options);
 }
 
 void OverlayWindow::anchor_shown (const QRect& game, const QPoint& offset,
