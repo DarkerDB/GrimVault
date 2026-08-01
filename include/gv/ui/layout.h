@@ -17,7 +17,17 @@ struct Layout
    //             from where the player is looking.
    enum class Align { Attached, TopLeft, TopRight, BottomLeft, BottomRight };
 
-   Align  align    = Align::Attached;
+   // How many columns the card lays its widgets out in.
+   //
+   // Auto is the default and the reason this isn't a plain 1/2 flag: two
+   // columns exist to stop a tall card being shrunk to fit the screen, and
+   // the renderer already computes that shrink. So auto can decide exactly
+   // rather than guess — and a player running three widgets, who never had
+   // the problem, never sees the card change shape.
+   enum class Columns { Auto, One, Two };
+
+   Align   align   = Align::Attached;
+   Columns columns = Columns::Auto;
    double opacity  = 0.9;   // 0..1, multiplied into the card's own fade-in
    double scale    = 1.0;   // on top of the monitor's DPI scale
    int    offset_x = 20;    // nudge in CSS px, applied after placement
