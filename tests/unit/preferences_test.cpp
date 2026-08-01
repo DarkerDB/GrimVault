@@ -5,6 +5,7 @@
 using gv::app::Preferences;
 using gv::app::apply;
 using Align = gv::ui::Layout::Align;
+using Columns = gv::ui::Layout::Columns;
 
 namespace {
 
@@ -51,6 +52,7 @@ TEST (Preferences, FoldsTheOverlayGroup)
       { "overlay:scale",     "1.250000" },
       { "overlay:offset_x",  "-40" },
       { "overlay:offset_y",  "12" },
+      { "overlay:columns",   "2" },
    });
 
    EXPECT_EQ (prefs.overlay_mode, Preferences::OverlayMode::Manual);
@@ -59,7 +61,21 @@ TEST (Preferences, FoldsTheOverlayGroup)
    EXPECT_DOUBLE_EQ (prefs.layout.scale, 1.25);
    EXPECT_EQ (prefs.layout.offset_x, -40);
    EXPECT_EQ (prefs.layout.offset_y, 12);
+   EXPECT_EQ (prefs.layout.columns, Columns::Two);
    EXPECT_TRUE (prefs.layout.enabled);
+}
+
+/* Auto is the default, and anything the server sends that isn't one of the
+ * two manual values has to land there rather than on a column count — a
+ * desktop build older than a settings change must degrade to "let the
+ * overlay decide", never to a layout the player didn't pick. */
+TEST (Preferences, ColumnsDefaultToAutoAndRejectNonsense)
+{
+   EXPECT_EQ (folded ({}).layout.columns, Columns::Auto);
+   EXPECT_EQ (folded ({ { "overlay:columns", "auto" } }).layout.columns, Columns::Auto);
+   EXPECT_EQ (folded ({ { "overlay:columns", "1" } }).layout.columns,    Columns::One);
+   EXPECT_EQ (folded ({ { "overlay:columns", "3" } }).layout.columns,    Columns::Auto);
+   EXPECT_EQ (folded ({ { "overlay:columns", "" } }).layout.columns,     Columns::Auto);
 }
 
 TEST (Preferences, DisabledModeClearsTheEnabledFlag)

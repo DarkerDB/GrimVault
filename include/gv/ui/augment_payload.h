@@ -25,6 +25,14 @@ struct Options {
    // wherever it truncates a list, so a cut-off section reads as "there is
    // more, here is how" rather than as missing data.
    std::string browse_hotkey;
+
+   // "auto" | "1" | "2". On auto the PAGE decides, because only it knows
+   // how tall the card came out — and it can re-lay-out synchronously
+   // before it ever reports a size, so auto costs no extra capture and no
+   // extra round trip. `budget_*` is the room available, in CSS px.
+   std::string columns = "auto";
+   int budget_w = 0;
+   int budget_h = 0;
 };
 
 namespace detail {
@@ -189,6 +197,9 @@ inline nlohmann::json analysis_entity (const gv::api::TooltipLookup& lookup,
       } () },
       { "plan_ladder", lookup.entitlement.ladder },
       { "currency_display", options.currency_display },
+      { "columns",   options.columns },
+      { "budget_w",  options.budget_w },
+      { "budget_h",  options.budget_h },
       { "browse_hotkey", options.browse_hotkey },
       { "item_name", lookup.display_name.empty ()
             ? lookup.canonical_name : lookup.display_name },

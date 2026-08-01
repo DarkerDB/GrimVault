@@ -127,6 +127,13 @@ inline bool apply (Preferences& out, std::string_view key, std::string_view valu
                                 : detail::parse_align (value, Align::Attached);
       return true;
    }
+   if (key == "overlay:columns") {
+      out.layout.columns = erased ? fallback.layout.columns
+         : value == "1" ? gv::ui::Layout::Columns::One
+         : value == "2" ? gv::ui::Layout::Columns::Two
+                        : gv::ui::Layout::Columns::Auto;
+      return true;
+   }
    if (key == "overlay:opacity") {
       out.layout.opacity = erased ? fallback.layout.opacity
          : detail::parse_double (value, fallback.layout.opacity, 0.0, 1.0);
