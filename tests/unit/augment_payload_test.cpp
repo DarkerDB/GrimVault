@@ -91,14 +91,26 @@ TEST (AugmentPayload, CompleteAnalysisRendersPremiumSections)
    lookup.market_analysis.days_supply = 18.2;
    lookup.market_analysis.price_stability = "stable";
    lookup.market_analysis.liquidity = "fast";
-   lookup.utility.used_in_recipes = 3;
    lookup.utility.max_stack_size = 5;
    lookup.utility.value_per_slot = 206;
-   lookup.utility.quest_merchants.push_back ({
-      .merchant_id = "id.merchant.collector",
-      .merchant_name = "Collector",
-      .quest_index = 4,
-      .quest_count = 12,
+   lookup.quests.push_back ({
+      .merchant_id       = "id.merchant.collector",
+      .merchant_name     = "Collector",
+      .merchant_icon_url = "https://cdn.example/collector",
+      .quest_name        = "A Pound of Flesh",
+      .quest_index       = 4,
+      .quest_count       = 12,
+      .quantity          = 3,
+   });
+   lookup.recipes.push_back ({
+      .merchant_id       = "id.merchant.alchemist",
+      .merchant_name     = "Alchemist",
+      .merchant_icon_url = "https://cdn.example/alchemist",
+      .output    = gv::api::RecipeItem { .item_id = "id.item.iron_powder_2001",
+                                         .name = "Iron Powder", .quantity = 1 },
+      .materials = { gv::api::RecipeItem { .item_id = "id.item.iron_ores_2001",
+                                           .name = "Iron Ore", .quantity = 2,
+                                           .is_this = true } },
    });
    lookup.value_driver = gv::api::ValueDriver {
       .attribute_id = "armor_penetration",
@@ -140,7 +152,8 @@ TEST (AugmentPayload, CompleteAnalysisRendersPremiumSections)
 
    const json entity = gv::ui::augment::entity (lookup);
    EXPECT_FALSE (entity.contains ("eyebrow"));
-   EXPECT_EQ (entity ["name"], "GrimVault Analysis");
+   EXPECT_EQ (entity ["name"], "GrimVault");
+   EXPECT_EQ (entity ["realm"], "grimvault");
    EXPECT_EQ (entity ["rarity"], "epic");
 
    const auto& sections = entity ["sections"];
@@ -161,9 +174,16 @@ TEST (AugmentPayload, CompleteAnalysisRendersPremiumSections)
    EXPECT_EQ (analysis ["trade_chat"]["messages"][0]["items"][0]["rarity"], "epic");
    EXPECT_EQ (analysis ["utility"]["max_stack_size"], 5);
    EXPECT_EQ (analysis ["utility"]["value_per_slot"], 206);
-   EXPECT_EQ (analysis ["utility"]["quest_merchants"][0]["merchant_name"], "Collector");
-   EXPECT_EQ (analysis ["utility"]["quest_merchants"][0]["quest_index"], 4);
-   EXPECT_EQ (analysis ["utility"]["quest_merchants"][0]["quest_count"], 12);
+   EXPECT_EQ (analysis ["quests"][0]["merchant_name"], "Collector");
+   EXPECT_EQ (analysis ["quests"][0]["quest_name"], "A Pound of Flesh");
+   EXPECT_EQ (analysis ["quests"][0]["quest_index"], 4);
+   EXPECT_EQ (analysis ["quests"][0]["quest_count"], 12);
+   EXPECT_EQ (analysis ["quests"][0]["quantity"], 3);
+   EXPECT_EQ (analysis ["recipes"][0]["merchant_name"], "Alchemist");
+   EXPECT_EQ (analysis ["recipes"][0]["output"]["name"], "Iron Powder");
+   EXPECT_EQ (analysis ["recipes"][0]["materials"][0]["name"], "Iron Ore");
+   EXPECT_EQ (analysis ["recipes"][0]["materials"][0]["quantity"], 2);
+   EXPECT_EQ (analysis ["recipes"][0]["materials"][0]["is_this"], true);
    EXPECT_EQ (analysis ["market"]["median_sale_seconds"], 2520);
    EXPECT_EQ (analysis ["market"]["days_supply"], 18.2);
    EXPECT_EQ (analysis ["market"]["price_stability"], "stable");
@@ -241,4 +261,97 @@ TEST (AugmentPayload, RenderMessageEnvelope)
    EXPECT_EQ (m ["params"]["kind"], "augment");
    EXPECT_EQ (m ["params"]["compact"], true);
    EXPECT_TRUE (m ["entity"].is_object ());
+}
+
+// ---- Widget visibility -----------------------------------------------------
+//
+// The card's per-section visibility is the player's tooltip:analysis:*
+// toggles intersected with what their plan grants. The tooltip library
+// defaults an absent key to shown, so only explicit entries matter.
+
+namespace {
+
+   TooltipLookup analysis_sample ()
+   {
+      TooltipLookup l;
+      l.item_id      = "item.test";
+      l.display_name = "Ruby Silver Ring";
+      l.rarity       = "epic";
+      l.pricing.median = 412;
+      return l;
+   }
+
+} // namespace
+
+TEST (AugmentPayload, WidgetTogglesReachVisibleSections)
+{
+   gv::ui::augment::Options options;
+   options.widgets = { { "market_value", true }, { "trade_chat", false } };
+
+   const json e = gv::ui::augment::entity (analysis_sample (), options);
+   const auto& visible = e ["sections"][0]["visible_sections"];
+
+   EXPECT_EQ (visible ["market_value"], true);
+   EXPECT_EQ (visible ["trade_chat"], false);
+}
+
+TEST (AugmentPayload, CurrencyDisplayReachesTheCard)
+{
+   gv::ui::augment::Options options;
+   options.currency_display = "compact";
+
+   const json e = gv::ui::augment::entity (analysis_sample (), options);
+   EXPECT_EQ (e ["sections"][0]["currency_display"], "compact");
+}
+
+TEST (AugmentPayload, DefaultOptionsShowEverythingAtAbsolutePrices)
+{
+   const json e = gv::ui::augment::entity (analysis_sample ());
+
+   EXPECT_TRUE (e ["sections"][0]["visible_sections"].empty ());
+   EXPECT_EQ (e ["sections"][0]["currency_display"], "absolute");
+}
+
+// A widget the plan does not grant had its blocks stripped server-side by
+// GrimVaultProjector, so leaving it visible would ask the renderer to draw
+// a section with nothing in it.
+TEST (AugmentPayload, LockedWidgetsAreHiddenEvenWhenToggledOn)
+{
+   auto lookup = analysis_sample ();
+   lookup.entitlement.plan    = "free";
+   lookup.entitlement.slot_limit = 2;
+   lookup.entitlement.granted = { "market_value", "roll_quality" };
+   lookup.entitlement.locked  = { { .widget = "trade_chat", .required_plan = "warlord" } };
+
+   gv::ui::augment::Options options;
+   options.widgets = { { "market_value", true }, { "trade_chat", true } };
+
+   const json e = gv::ui::augment::entity (lookup, options);
+   const auto& visible = e ["sections"][0]["visible_sections"];
+
+   EXPECT_EQ (visible ["market_value"], true);
+   EXPECT_EQ (visible ["trade_chat"], false);
+}
+
+// A locked widget with no toggle of its own still has to be suppressed.
+TEST (AugmentPayload, LockedWidgetsWithoutAToggleAreHidden)
+{
+   auto lookup = analysis_sample ();
+   lookup.entitlement.plan    = "free";
+   lookup.entitlement.granted = { "market_value" };
+   lookup.entitlement.locked  = { { .widget = "upgrade_paths", .required_plan = "champion" } };
+
+   const json e = gv::ui::augment::entity (lookup, {});
+   EXPECT_EQ (e ["sections"][0]["visible_sections"]["upgrade_paths"], false);
+}
+
+// An absent entitlement block (older server, or a fixture) must not hide
+// everything: the projector is the real boundary.
+TEST (AugmentPayload, MissingEntitlementGrantsEverything)
+{
+   gv::ui::augment::Options options;
+   options.widgets = { { "trade_chat", true } };
+
+   const json e = gv::ui::augment::entity (analysis_sample (), options);
+   EXPECT_EQ (e ["sections"][0]["visible_sections"]["trade_chat"], true);
 }

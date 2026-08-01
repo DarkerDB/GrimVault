@@ -12,8 +12,10 @@
 
 #include <SQLiteCpp/SQLiteCpp.h>
 
+#include <QDesktopServices>
 #include <QPointer>
 #include <QTimer>
+#include <QUrl>
 
 #include <Windows.h>
 
@@ -34,17 +36,51 @@ namespace {
 
    struct DefaultRow { const char* action; const char* accelerator; };
 
-   constexpr std::array<DefaultRow, 4> k_defaults = {{
-      { Actions::k_scan_now,      DefaultAccelerators::scan_now      },
-      { Actions::k_toggle_mode,   DefaultAccelerators::toggle_mode   },
-      { Actions::k_debug_toggle,  DefaultAccelerators::debug_toggle  },
-      { Actions::k_clear_overlay, DefaultAccelerators::clear_overlay },
+   constexpr std::array<DefaultRow, 6> k_defaults = {{
+      { Actions::k_scan_now,       DefaultAccelerators::scan_now       },
+      { Actions::k_toggle_mode,    DefaultAccelerators::toggle_mode    },
+      { Actions::k_debug_toggle,   DefaultAccelerators::debug_toggle   },
+      { Actions::k_clear_overlay,  DefaultAccelerators::clear_overlay  },
+      { Actions::k_toggle_overlay,  DefaultAccelerators::toggle_overlay  },
+      { Actions::k_open_in_browser, DefaultAccelerators::open_in_browser },
    }};
 
    bool point_in_rect (const POINT& p, const core::WindowRect& r)
    {
       return p.x >= r.x && p.x < r.x + r.w
           && p.y >= r.y && p.y < r.y + r.h;
+   }
+
+   const char* mode_name (Mode m)
+   {
+      switch (m) {
+         case Mode::Auto:     return "automatic";
+         case Mode::Manual:   return "manual";
+         case Mode::Disabled: return "disabled";
+      }
+      return "automatic";
+   }
+
+   // Empty handler = unknown action. Bind and rebind both dispatch through
+   // here so a new action can never be bindable from one path and not the
+   // other.
+   core::HotkeyManager::Handler handler_for (std::string_view action,
+                                             QPointer<Controller> self)
+   {
+      if (action == Actions::k_scan_now)
+         return [self] { if (self) self->action_scan_now       (); };
+      if (action == Actions::k_toggle_mode)
+         return [self] { if (self) self->action_toggle_mode    (); };
+      if (action == Actions::k_debug_toggle)
+         return [self] { if (self) self->action_debug_toggle   (); };
+      if (action == Actions::k_clear_overlay)
+         return [self] { if (self) self->action_clear_overlay  (); };
+      if (action == Actions::k_toggle_overlay)
+         return [self] { if (self) self->action_toggle_overlay (); };
+      if (action == Actions::k_open_in_browser)
+         return [self] { if (self) self->action_open_in_browser (); };
+
+      return {};
    }
 
 } // namespace
@@ -55,6 +91,11 @@ struct Controller::Impl
    Dependencies           deps;
 
    std::atomic<Mode>      mode { Mode::Auto };
+
+   // What overlay:mode last said. toggle_overlay flips between Disabled and
+   // this, so a player in Manual who hides and re-shows the card lands back
+   // in Manual rather than being silently upgraded to Auto.
+   std::atomic<Mode>      configured_mode { Mode::Auto };
    std::atomic<bool>      debug_overlay { false };
 
    // Last known game window state (updated from tracker thread, read by
@@ -82,6 +123,11 @@ struct Controller::Impl
    // Cache of currently bound accelerators by action id.
    std::mutex                                  hk_lock;
    std::unordered_map<std::string, std::string> accels;
+
+   // SPA origin and the last item analysed, for the open-in-browser action.
+   std::string browse_base;
+   std::mutex  browse_lock;
+   std::string last_item_id;
 
    // Game locale for OCR model selection and the lookup `language` param
    // (`game:language` setting; read at startup, applied to the pipeline).
@@ -188,12 +234,19 @@ struct Controller::Impl
             { "confidence", lookup.pricing.confidence },
          });
          persist_find (lookup);
+         {
+            std::lock_guard lk { browse_lock };
+            last_item_id = lookup.item_id;
+         }
 
          QPointer<Controller> guard { &self };
          QMetaObject::invokeMethod (&self,
             [guard, lookup = std::move (lookup), rect = job.tooltip.rect,
              generation = job.tooltip.generation] () mutable {
                if (!guard || !guard->impl_->deps.overlay) return;
+               // overlay:mode disabled (or the toggle_overlay hotkey): the
+               // analysis still ran and still persisted, it just isn't drawn.
+               if (guard->impl_->mode.load () == Mode::Disabled) return;
                if (guard->impl_->deps.pipeline
                    && !guard->impl_->deps.pipeline->is_current (generation)) return;
                if (!guard->impl_->has_live_anchor
@@ -349,9 +402,21 @@ Controller::Controller (Dependencies deps, QObject* parent)
             if (!self) return;
             QMetaObject::invokeMethod (self, [self, ev] {
                if (!self) return;
+               const bool fresh = !self->impl_->has_live_anchor
+                  || self->impl_->live_anchor.generation != ev.generation;
+
                self->impl_->live_anchor     = ev;
                self->impl_->has_live_anchor = true;
                self->impl_->apply_anchor ();
+
+               // A newly acquired region: put the skeleton up now rather than
+               // leaving the screen empty until OCR and the API return. Only
+               // on a generation change, or the 120 Hz follow would re-post it
+               // on every tick.
+               if (fresh && self->impl_->mode.load () != Mode::Disabled
+                   && self->impl_->deps.overlay) {
+                  self->impl_->deps.overlay->present_loading ();
+               }
             }, Qt::QueuedConnection);
          });
 
@@ -373,6 +438,26 @@ Controller::Controller (Dependencies deps, QObject* parent)
 Controller::~Controller () = default;
 
 Mode Controller::mode () const noexcept { return impl_->mode.load (); }
+
+void Controller::set_configured_mode (Mode m)
+{
+   // Only act when the DASHBOARD value actually moved. Every settings poll
+   // pushes the whole bundle, so comparing against the live mode instead
+   // would make an unrelated change (nudging opacity) silently undo an
+   // overlay the player had just hidden with the toggle_overlay hotkey.
+   if (impl_->configured_mode.exchange (m) == m) return;
+
+   if (impl_->mode.load () == m) return;
+
+   impl_->mode.store (m);
+   core::Logger::info ("controller: overlay mode → {}", mode_name (m));
+
+   // Leaving Auto/Manual for Disabled has to take down whatever is on
+   // screen; the pipeline keeps running either way.
+   if (m == Mode::Disabled && impl_->deps.overlay) impl_->deps.overlay->clear ();
+
+   emit modeChanged (m);
+}
 
 std::string Controller::accelerator_for (std::string_view action) const
 {
@@ -406,13 +491,8 @@ int Controller::bind_hotkeys_from_repo ()
    int bound = 0;
 
    for (const auto& [action, accel] : rows) {
-      core::HotkeyManager::Handler handler;
-
-      if      (action == Actions::k_scan_now)      handler = [self] { if (self) self->action_scan_now      (); };
-      else if (action == Actions::k_toggle_mode)   handler = [self] { if (self) self->action_toggle_mode   (); };
-      else if (action == Actions::k_debug_toggle)  handler = [self] { if (self) self->action_debug_toggle  (); };
-      else if (action == Actions::k_clear_overlay) handler = [self] { if (self) self->action_clear_overlay (); };
-      else {
+      auto handler = handler_for (action, self);
+      if (!handler) {
          core::Logger::debug ("controller: unknown hotkey action '{}', skipping", action);
          continue;
       }
@@ -439,15 +519,22 @@ core::Result<void> Controller::rebind_hotkey (std::string action, std::string ac
    }
 
    QPointer<Controller> self { this };
-   core::HotkeyManager::Handler handler;
 
-   if      (action == Actions::k_scan_now)      handler = [self] { if (self) self->action_scan_now      (); };
-   else if (action == Actions::k_toggle_mode)   handler = [self] { if (self) self->action_toggle_mode   (); };
-   else if (action == Actions::k_debug_toggle)  handler = [self] { if (self) self->action_debug_toggle  (); };
-   else if (action == Actions::k_clear_overlay) handler = [self] { if (self) self->action_clear_overlay (); };
-   else {
+   auto handler = handler_for (action, self);
+   if (!handler) {
       return core::fail (core::Error::make (core::ErrorKind::InvalidArgument,
          "controller: unknown action '{}'", action));
+   }
+
+   // Nothing to do when the dashboard re-sends an accelerator we already
+   // hold: rebinding would unregister and re-register the same hotkey on
+   // every settings poll.
+   {
+      std::lock_guard lk { impl_->hk_lock };
+      if (auto it = impl_->accels.find (action);
+          it != impl_->accels.end () && it->second == accelerator) {
+         return {};
+      }
    }
 
    auto bind_r = impl_->deps.hotkeys->bind (action, accelerator, std::move (handler));
@@ -480,7 +567,54 @@ void Controller::action_toggle_mode ()
    QMetaObject::invokeMethod (this, [this] {
       const Mode next = (impl_->mode.load () == Mode::Auto) ? Mode::Manual : Mode::Auto;
       impl_->mode.store (next);
-      core::Logger::info ("hotkey: mode → {}", next == Mode::Auto ? "auto" : "manual");
+      core::Logger::info ("hotkey: mode → {}", mode_name (next));
+      emit modeChanged (next);
+   }, Qt::QueuedConnection);
+}
+
+void Controller::set_browse_base (std::string url)
+{
+   std::lock_guard lk { impl_->browse_lock };
+   impl_->browse_base = std::move (url);
+}
+
+void Controller::action_open_in_browser ()
+{
+   std::string url;
+   {
+      std::lock_guard lk { impl_->browse_lock };
+      if (impl_->browse_base.empty () || impl_->last_item_id.empty ()) {
+         core::Logger::info ("hotkey: open in browser — nothing analysed yet");
+         return;
+      }
+      url = impl_->browse_base + "/items/" + impl_->last_item_id;
+   }
+
+   core::Logger::info ("hotkey: opening {}", url);
+   QMetaObject::invokeMethod (this, [url] {
+      QDesktopServices::openUrl (QUrl (QString::fromStdString (url)));
+   }, Qt::QueuedConnection);
+}
+
+void Controller::action_toggle_overlay ()
+{
+   QMetaObject::invokeMethod (this, [this] {
+      Mode next = Mode::Disabled;
+
+      if (impl_->mode.load () == Mode::Disabled) {
+         // Coming back on: return to whatever the dashboard configured, so a
+         // player in Manual isn't silently upgraded to Auto. When the
+         // dashboard is itself what turned the overlay off there is nothing
+         // to restore, and refusing to come back would make the hotkey look
+         // broken — fall back to Auto.
+         const Mode configured = impl_->configured_mode.load ();
+         next = configured == Mode::Disabled ? Mode::Auto : configured;
+      }
+
+      impl_->mode.store (next);
+      core::Logger::info ("hotkey: overlay → {}", mode_name (next));
+
+      if (next == Mode::Disabled && impl_->deps.overlay) impl_->deps.overlay->clear ();
       emit modeChanged (next);
    }, Qt::QueuedConnection);
 }

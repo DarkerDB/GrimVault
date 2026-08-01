@@ -13,6 +13,11 @@ if (unit_sources)
       gv::vision
       gv::ocr
       nlohmann_json::nlohmann_json
+      # Qt6::Core only — placement_test works on QRect/QSize/QPoint value
+      # types. It deliberately does NOT link gv::ui: the point of extracting
+      # gv/ui/placement.h was to test the card geometry without a WebView2
+      # runtime or an event loop.
+      Qt6::Core
       GTest::gtest
       GTest::gtest_main
    )

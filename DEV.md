@@ -63,9 +63,10 @@ configures are cached.
   https://dev.darkerdb.com/oauth/authorize. After you grant consent the
   callback fires, tokens land in Windows Credential Manager, and a
   "Signed in" toast confirms.
-- Settings sync starts: every 60s GrimVault polls /v2/grimvault/settings
-  and mirrors the response into the local UserSettingsRepo. Any change
-  is logged ("settings updated: key = value").
+- Settings sync starts: GrimVault polls /v2/grimvault/settings (every 5s
+  on dev, 30s elsewhere), mirrors the response into the local
+  UserSettingsRepo, and applies each changed key live — no restart. Each
+  one logs "settings applied: key = value".
 - Main window opens (if you click the tray). Six pages in the left rail.
 - Dashboard / Items / Pricing / Settings / Diagnostics / Logs.
 - Ctrl+Shift+P opens the command palette.
@@ -76,6 +77,30 @@ configures are cached.
 - Tray icon (SSL.com 'K' for now until we get a proper icon) — single-click
   toggles the window.
 ```
+
+### Settings, live
+
+Everything on https://dev.darkerdb.com/dashboard/grimvault applies to the
+running app within one poll. Move a slider, watch the next hover.
+
+```
+overlay mode           automatic / manual / disabled
+overlay alignment      attached, or a fixed game-window corner
+overlay opacity        multiplied into the card's fade-in; repaints at once
+overlay scale          on top of the monitor's DPI scale
+overlay offset x/y     corner alignments only (attached is fixed by the anchor)
+augment sections       the tooltip:analysis:* widget toggles
+currency display       absolute / compact
+launch on startup      rewrites the HKCU\...\Run entry
+auto-update            starts / stops the checker (GRIMVAULT_DISABLE_UPDATES wins)
+hotkeys                toggle_overlay + force_refresh rebind live
+```
+
+Two of the five hotkey actions are dashboard-bindable — `force_refresh`
+drives `scan_now` and `toggle_overlay` shows/hides the card. `toggle_mode`
+(F6), `debug_toggle` (F7) and `clear_overlay` (F8) keep their local
+defaults. A widget the plan doesn't grant is forced off in the payload
+regardless of the toggle, because the API already stripped its data.
 
 Pass `--no-auto-login` to skip the on-launch OAuth prompt (the tray's
 "Sign In" menu item still works on demand):

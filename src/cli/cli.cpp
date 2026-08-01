@@ -200,10 +200,18 @@ namespace {
    void print_kv_table (const std::map<std::string, std::string>& sorted)
    {
       // Group by colon-namespace prefix (overlay:opacity → "overlay"), print
-      // each group with a header so a 17-row dump reads as five sections,
-      // not a wall of keys.
-      std::cout << "key" << std::string (38, ' ') << "value\n";
-      std::cout << std::string (70, '-') << "\n";
+      // each group with a header so the dump reads as five sections, not a
+      // wall of keys.
+      //
+      // Column width is measured, not fixed: the server owns the keyspace
+      // (tooltip:analysis:* grows with grimvault-widgets.yaml), so any
+      // constant is one widget away from running the key into its value.
+      std::size_t width = 3;
+      for (const auto& [k, v] : sorted) width = std::max (width, k.size ());
+      width += 3;
+
+      std::cout << "key" << std::string (width - 3, ' ') << "value\n";
+      std::cout << std::string (width + 12, '-') << "\n";
 
       std::string current_group;
       for (const auto& [k, v] : sorted) {
@@ -218,7 +226,7 @@ namespace {
          }
 
          std::string key = k;
-         if (key.size () < 40) key.append (40 - key.size (), ' ');
+         if (key.size () < width) key.append (width - key.size (), ' ');
          std::cout << key << v << "\n";
       }
    }

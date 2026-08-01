@@ -31,12 +31,17 @@ class SettingsSync : public QObject
 
 public:
    struct Config {
-      // Cadence between successful polls.
-      std::chrono::seconds interval { 60 };
+      // Cadence between successful polls. This is the whole propagation
+      // latency of a dashboard change: there is no push channel, so a
+      // player who moves a slider waits at most this long to see it. The
+      // request is a small conditional GET on a warm connection, so the
+      // cost of a short interval is close to nothing; main () shortens it
+      // further on dev, where the round trip is a local container.
+      std::chrono::seconds interval { 30 };
 
       // Backoff floor (first failure) and cap (every failure after that
       // doubles up to the cap).
-      std::chrono::seconds backoff_floor { 60 };
+      std::chrono::seconds backoff_floor { 15 };
       std::chrono::seconds backoff_cap   { 300 };
    };
 

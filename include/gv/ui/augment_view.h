@@ -1,6 +1,8 @@
 #pragma once
 
 #include <gv/core/result.h>
+#include <gv/ui/augment_payload.h>
+#include <gv/ui/overlay_window.h>
 #include <gv/ui/webview_host.h>
 
 #include <QRect>
@@ -42,6 +44,11 @@ public:
 
    void present (const gv::api::TooltipLookup& lookup,
                  const QRect& game, const QRect& anchor, bool animate = true);
+
+   // Skeleton card for the gap between "a tooltip is anchored" and "the
+   // analysis came back". Ignored once a real render for this hover has
+   // landed, so a late anchor tick can't flash the spinner back up.
+   void present_loading ();
    void clear ();
 
    // Anchoring (docs/architecture/anchoring.md §7): show the card beside
@@ -52,6 +59,11 @@ public:
 
    // immediate = a cursor-jump reset: hide now, no grace.
    void anchor_lost (bool immediate);
+
+   // Live dashboard settings. set_layout takes effect on the next placement
+   // (opacity repaints immediately); set_options on the next render.
+   void set_layout  (const Layout& layout);
+   void set_options (const augment::Options& options);
 
 private:
    AugmentView ();
