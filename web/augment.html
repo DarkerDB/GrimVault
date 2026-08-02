@@ -58,6 +58,11 @@
 
    document.documentElement.classList.add ('snapshot');
 
+   /* Tells the shared stylesheet that a native host is painting the moving
+      parts, so purely decorative CSS animations stay off — they would be
+      frozen in the capture anyway. */
+   document.documentElement.classList.add ('ddb-host-native');
+
    const target = document.getElementById ('augment');
    const wrap   = document.getElementById ('augment-wrap');
    const bridge = window.chrome && window.chrome.webview;
@@ -66,6 +71,62 @@
 
    if (window.DDB && DDB.tooltips.configure) {
       DDB.tooltips.configure ({ linkBase: null });
+   }
+
+   /* Where the loading spinner sits, as a fraction of the whole wrap box.
+      The overlay draws the moving part of it natively rather than
+      re-photographing this page many times a second, so it needs to know
+      where on the captured bitmap the ring is. Fractions rather than pixels
+      because the host scales the capture and must not have to reverse that
+      to place the arc.
+
+      Null when no skeleton is up, which is how the host knows to stop. */
+   function spinnerBox () {
+      const ring = target.querySelector ('.gvp-spinner');
+      if (!ring) return null;
+
+      const a = ring.getBoundingClientRect ();
+      const b = wrap.getBoundingClientRect ();
+      if (!(b.width > 0) || !(b.height > 0)) return null;
+
+      return {
+         x: (a.left - b.left) / b.width,
+         y: (a.top  - b.top)  / b.height,
+         w: a.width  / b.width,
+         h: a.height / b.height,
+      };
+   }
+
+   /* Column choice, on `columns: 'auto'`.
+      Two columns exist for one reason: a card taller than the space it is
+      placed in gets scaled down until nothing on it is readable. That is a
+      question about the rendered height, which only exists after a layout
+      pass — so the card is laid out in one column, measured, and re-laid-out
+      wide only if it actually overflowed.
+
+      Done here rather than in the host because it costs nothing here: this
+      runs before the size is ever reported, so the host sees one size and
+      takes one capture. Deciding host-side would mean render, measure,
+      re-render, re-capture.
+
+      The host's own fit-to-viewport shrink is the fallback if two columns
+      still don't fit, so a wrong guess degrades to today's behaviour. */
+   const WIDE_CARD_PX = 640;
+
+   function autoColumns (msg) {
+      const section = msg.entity?.sections?.[0];
+      if (!section || section.columns !== 'auto') return;
+
+      const budgetH = Number (msg.entity.sections[0].budget_h) || 0;
+      const budgetW = Number (msg.entity.sections[0].budget_w) || 0;
+      if (!budgetH || !budgetW) return;
+
+      /* Fits as-is, or there is no room to go wide — either way, leave it. */
+      if (measure ().h <= budgetH) return;
+      if (budgetW < WIDE_CARD_PX) return;
+
+      section.columns = 2;
+      DDB.tooltips.render (target, msg.entity, msg.params);
    }
 
    function measure () {
@@ -90,6 +151,7 @@
          w: Math.ceil (w),
          h: Math.ceil (h),
          pad: Math.ceil (pad),
+         spin: spinnerBox (),
       });
    }
 
@@ -171,6 +233,7 @@
 
       try {
          DDB.tooltips.render (target, msg.entity, msg.params);
+         autoColumns (msg);
          /* Measure once immediately so a cached card is instant, then again
             once any cold icons have decoded. */
          remeasure ();
