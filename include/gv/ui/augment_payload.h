@@ -4,6 +4,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -26,7 +27,7 @@ struct Options {
    // more, here is how" rather than as missing data.
    std::string browse_hotkey;
 
-   // "auto" | "1" | "2". On auto the PAGE decides, because only it knows
+   // "auto" | "1" | "2" | "3". On auto the PAGE decides, because only it knows
    // how tall the card came out — and it can re-lay-out synchronously
    // before it ever reports a size, so auto costs no extra capture and no
    // extra round trip. `budget_*` is the room available, in CSS px.
@@ -63,6 +64,8 @@ inline nlohmann::json analysis_roll (const gv::api::AnalysisRoll& roll)
       { "value", roll.value },
       { "formatted_value", roll.formatted_value },
    };
+   if (!roll.gem.empty ()) value ["gem"] = roll.gem;
+   if (!roll.gem_icon_url.empty ()) value ["gem_icon_url"] = roll.gem_icon_url;
    if (roll.minimum) value ["minimum"] = *roll.minimum;
    if (roll.maximum) value ["maximum"] = *roll.maximum;
    if (roll.roll_percentile) value ["roll_percentile"] = *roll.roll_percentile;
@@ -70,7 +73,7 @@ inline nlohmann::json analysis_roll (const gv::api::AnalysisRoll& roll)
    return value;
 }
 
-inline nlohmann::json gem_plan (const gv::api::GemPlan& plan, int sockets)
+inline nlohmann::json gem_plan (const gv::api::GemPlan& plan, int sockets = 0)
 {
    nlohmann::json changes = nlohmann::json::array ();
    for (const auto& change : plan.changes) {
@@ -88,7 +91,8 @@ inline nlohmann::json gem_plan (const gv::api::GemPlan& plan, int sockets)
    }
 
    return {
-      { "sockets", sockets },
+      { "sockets", sockets > 0 ? sockets
+                                 : std::max (1, static_cast<int> (plan.changes.size ())) },
       { "changes", std::move (changes) },
       { "projected_value", plan.projected_value },
       { "value_uplift", plan.value_uplift },
@@ -128,7 +132,11 @@ inline nlohmann::json analysis_entity (const gv::api::TooltipLookup& lookup,
    for (const auto& roll : lookup.rolls) rolls.push_back (analysis_roll (roll));
 
    nlohmann::json plans = nlohmann::json::array ();
-   if (lookup.gem_optimization.one_socket) {
+   for (const auto& plan : lookup.gem_optimization.plans) {
+      plans.push_back (gem_plan (plan, plan.sockets));
+   }
+   const bool legacy_plans = plans.empty ();
+   if (legacy_plans && lookup.gem_optimization.one_socket) {
       plans.push_back (gem_plan (*lookup.gem_optimization.one_socket, 1));
    }
 
@@ -145,7 +153,20 @@ inline nlohmann::json analysis_entity (const gv::api::TooltipLookup& lookup,
          { "items", std::move (items) },
       });
    }
-   if (lookup.gem_optimization.two_socket) {
+   nlohmann::json similar_sales = nlohmann::json::array ();
+   for (const auto& sale : lookup.similar_sales) {
+      nlohmann::json row {
+         { "price", sale.price },
+         { "similarity", sale.similarity },
+         { "sold_at", sale.sold_at },
+         { "age_seconds", sale.age_seconds },
+         { "highlight_label", sale.highlight_label },
+         { "highlight_value", sale.highlight_value },
+      };
+      if (sale.sale_seconds) row ["sale_seconds"] = *sale.sale_seconds;
+      similar_sales.push_back (std::move (row));
+   }
+   if (legacy_plans && lookup.gem_optimization.two_socket) {
       plans.push_back (gem_plan (*lookup.gem_optimization.two_socket, 2));
    }
    const auto recipe_item = [] (const gv::api::RecipeItem& item) {
@@ -221,6 +242,7 @@ inline nlohmann::json analysis_entity (const gv::api::TooltipLookup& lookup,
          { "sales_30d", lookup.market_analysis.sales_30d },
          { "liquidity", lookup.market_analysis.liquidity },
       } },
+      { "similar_sales", std::move (similar_sales) },
       { "trade_chat", {
          { "mentions_14d", lookup.trade_chat.mentions_14d },
          { "messages", std::move (trade_messages) },
@@ -360,26 +382,6 @@ inline nlohmann::json entity (const gv::api::TooltipLookup& lookup,
    return detail::is_analysis (lookup)
       ? detail::analysis_entity (lookup, options)
       : detail::legacy_entity (lookup);
-}
-
-// Shown the moment a tooltip region is anchored, before OCR and the network
-// round trip have produced anything. Without it the card simply appears some
-// hundreds of milliseconds later and the wait reads as lag rather than work.
-inline nlohmann::json loading_message (std::uint64_t seq)
-{
-   return {
-      { "type", "render" },
-      { "seq",  seq },
-      { "entity", {
-         { "name",   "GrimVault" },
-         { "realm",  "grimvault" },
-         { "rarity", "common" },
-         { "sections", nlohmann::json::array ({
-            nlohmann::json { { "kind", "loading" } }
-         }) },
-      } },
-      { "params", { { "kind", "augment" }, { "compact", true } } },
-   };
 }
 
 inline nlohmann::json render_message (const gv::api::TooltipLookup& lookup,

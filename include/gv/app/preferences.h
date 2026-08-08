@@ -1,11 +1,15 @@
 #pragma once
 
+#include <gv/app/mode.h>
 #include <gv/ui/augment_payload.h>
 #include <gv/ui/layout.h>
 
 #include <algorithm>
 #include <charconv>
+#include <cerrno>
+#include <cmath>
 #include <cstdlib>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -24,9 +28,7 @@ namespace gv::app {
 // erased keys, out-of-range numbers), not the fan-out.
 struct Preferences
 {
-   enum class OverlayMode { Automatic, Manual, Disabled };
-
-   OverlayMode          overlay_mode = OverlayMode::Automatic;
+   Mode                 overlay_mode = Mode::Auto;
    gv::ui::Layout       layout;
    gv::ui::augment::Options options;
 
@@ -55,8 +57,10 @@ namespace detail {
       // against; strtod on a NUL-terminated copy is the portable read.
       const std::string text { v };
       char* end = nullptr;
+      errno = 0;
       const double parsed = std::strtod (text.c_str (), &end);
-      if (end == text.c_str ()) return fallback;
+      if (end == text.c_str () || end != text.c_str () + text.size ()
+          || errno == ERANGE || !std::isfinite (parsed)) return fallback;
       return std::clamp (parsed, lo, hi);
    }
 
@@ -65,10 +69,8 @@ namespace detail {
       int parsed = 0;
       const auto* first = v.data ();
       const auto* last  = v.data () + v.size ();
-      // Tolerate the "20.000000" a double-valued key can arrive as: parse
-      // the integral head and ignore any fractional tail.
       const auto [ptr, ec] = std::from_chars (first, last, parsed);
-      if (ec != std::errc {} || ptr == first) return fallback;
+      if (ec != std::errc {} || ptr != last) return fallback;
       return std::clamp (parsed, lo, hi);
    }
 
@@ -114,12 +116,12 @@ inline bool apply (Preferences& out, std::string_view key, std::string_view valu
 
    if (key == "overlay:mode") {
       const auto mode =
-           value == "manual"   ? Preferences::OverlayMode::Manual
-         : value == "disabled" ? Preferences::OverlayMode::Disabled
-         : value == "automatic"? Preferences::OverlayMode::Automatic
+           value == "manual"   ? Mode::Manual
+         : value == "disabled" ? Mode::Disabled
+         : value == "automatic"? Mode::Auto
          : fallback.overlay_mode;
       out.overlay_mode   = erased ? fallback.overlay_mode : mode;
-      out.layout.enabled = out.overlay_mode != Preferences::OverlayMode::Disabled;
+      out.layout.enabled = out.overlay_mode != Mode::Disabled;
       return true;
    }
    if (key == "overlay:alignment") {
@@ -131,6 +133,7 @@ inline bool apply (Preferences& out, std::string_view key, std::string_view valu
       out.layout.columns = erased ? fallback.layout.columns
          : value == "1" ? gv::ui::Layout::Columns::One
          : value == "2" ? gv::ui::Layout::Columns::Two
+         : value == "3" ? gv::ui::Layout::Columns::Three
                         : gv::ui::Layout::Columns::Auto;
       return true;
    }
@@ -143,7 +146,7 @@ inline bool apply (Preferences& out, std::string_view key, std::string_view valu
       // Floor well above zero: a 0-scale card is an invisible one, and the
       // dashboard slider can't produce it but a hand-written PATCH can.
       out.layout.scale = erased ? fallback.layout.scale
-         : detail::parse_double (value, fallback.layout.scale, 0.5, 3.0);
+         : detail::parse_double (value, fallback.layout.scale, 0.5, 2.0);
       return true;
    }
    if (key == "overlay:offset_x") {
@@ -162,6 +165,28 @@ inline bool apply (Preferences& out, std::string_view key, std::string_view valu
       if (widget.empty ()) return false;
       detail::set_widget (out.options, std::string { widget },
                           erased ? true : detail::parse_bool (value, true));
+      return true;
+   }
+   if (key == "tooltip:analysis_order") {
+      if (erased) return true;
+      auto order = nlohmann::json::parse (value, nullptr, false);
+      if (order.is_discarded () || !order.is_array ()) return true;
+
+      decltype (out.options.widgets) sorted;
+      sorted.reserve (out.options.widgets.size ());
+      for (const auto& slug : order) {
+         if (!slug.is_string ()) continue;
+         const auto name = slug.get<std::string> ();
+         auto found = std::find_if (out.options.widgets.begin (), out.options.widgets.end (),
+            [&name] (const auto& row) { return row.first == name; });
+         if (found != out.options.widgets.end ()) sorted.push_back (*found);
+      }
+      for (const auto& row : out.options.widgets) {
+         const bool present = std::any_of (sorted.begin (), sorted.end (),
+            [&row] (const auto& current) { return current.first == row.first; });
+         if (!present) sorted.push_back (row);
+      }
+      out.options.widgets = std::move (sorted);
       return true;
    }
 

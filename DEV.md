@@ -37,7 +37,8 @@ GRIMVAULT_DEV_RESOURCES = <repo root>   # models/, i18n/, assets/ resolve from s
 GRIMVAULT_DISABLE_UPDATES = 1           # WinSparkle never inits, no network calls
 ```
 
-Per-user data (SQLite DB, logs) still goes to `%APPDATA%\GrimVault\`.
+Production data stays in `%LOCALAPPDATA%\GrimVault\`. Dev and QA use
+`%LOCALAPPDATA%\GrimVault\<env>\` so clients cannot share state.
 
 ## Prereqs (first time only)
 
@@ -61,21 +62,24 @@ configures are cached.
 - Tray icon appears. If you're not already signed in, a tray toast says
   "Opening your browser to sign in…" and your browser pops up on
   https://dev.darkerdb.com/oauth/authorize. After you grant consent the
-  callback fires, tokens land in Windows Credential Manager, and a
-  "Signed in" toast confirms.
+  callback fires and tokens land in Windows Credential Manager.
 - Settings sync starts: GrimVault polls /v2/grimvault/settings (every 5s
   on dev, 30s elsewhere), mirrors the response into the local
   UserSettingsRepo, and applies each changed key live — no restart. Each
   one logs "settings applied: key = value".
+- The tray header reports the whole onboarding state: **Signed out**,
+  **Syncing settings**, **Ready**, or **Using local defaults; retrying**.
+  First launch is ready only after settings arrive. A network failure keeps
+  safe defaults active and retries. An expired or revoked token signs out and
+  starts OAuth again unless `--no-auto-login` was supplied.
 - Main window opens (if you click the tray). Six pages in the left rail.
 - Dashboard / Items / Pricing / Settings / Diagnostics / Logs.
 - Ctrl+Shift+P opens the command palette.
 - Pricing lookups hit https://api.darkerdb.com (network needed).
-- Capture probe picks WGC/DXGI/GDI depending on Windows build; logged on Diagnostics.
+- Capture probes WGC/DXGI/GDI at startup, then advances through the same ladder after three consecutive runtime failures.
 - WGC will fail if no foreground game window — that's expected without
   Dark and Darker running. The pipeline reports the failure and stays idle.
-- Tray icon (SSL.com 'K' for now until we get a proper icon) — single-click
-  toggles the window.
+- The GrimVault tray icon single-click toggles the window.
 ```
 
 ### Settings, live
@@ -144,12 +148,12 @@ record acquisition, confirmed loss, replacement candidates/rejections, frame
 age, locator cost, and hash-distance summaries in:
 
 ```text
-%APPDATA%\GrimVault\logs\
+%LOCALAPPDATA%\GrimVault\<env>\logs\
 ```
 
 From WSL/Codex the same directory is directly readable at
-`/mnt/c/Users/Ethan/AppData/Roaming/GrimVault/logs`; no log copy/paste is
-needed. Summarize the newest session with:
+`/mnt/c/Users/Ethan/AppData/Local/GrimVault/<env>/logs`; no log copy/paste is
+needed. Production omits the `<env>` directory. Summarize the newest session with:
 
 ```bash
 tools/anchor-log-summary.sh
@@ -162,9 +166,13 @@ tools\anchor-log-summary.ps1
 ```
 
 `--debug` additionally saves frames for replacement candidates and settled
-replacements under `%APPDATA%\GrimVault\logs\anchoring\`. PNG writes occur on
+replacements under `%LOCALAPPDATA%\GrimVault\<env>\logs\anchoring\`. PNG writes occur on
 detached workers after the immediate UI event, and retention is capped at the
 newest 40 frames.
+
+API calls log DNS, connect, TLS, first-byte, total, request id, and server
+phase timings. Repeated identical hovers use a short account-scoped memory
+cache, so the common second hover avoids another network round trip.
 
 Tooltip tracking is the anchoring system (docs/architecture/anchoring.md):
 detect once, refine to ~1px at full resolution, then draw from
@@ -211,17 +219,11 @@ The shim is a 2-line `.cmd` that forwards `%*` to the real exe — the exe
 stays put so Qt's adjacent-DLL discovery keeps working. Each `dev-run.ps1`
 rewrites the shim, so you're always invoking the latest build.
 
-## What's missing in dev mode
+## Bundled test data
 
-```
-- ONNX models: models/tooltip.onnx and models/paddle/<family>/{rec.onnx,dict.txt}
-  These are NOT in the repo. Either copy them from the existing Electron build
-  (src/native/.build/models/) or download from DDB releases. Without them
-  the tooltip detector + OCR pipeline log init failures but the main UI still
-  works.
-
-- E2E fixtures: tests/fixtures/  (run `pip install Pillow && python tools/gen-fixtures/main.py --out tests/fixtures`).
-```
+All tooltip and language ONNX models are committed under `models/`.
+Labelled OCR crops under `tools/ocr-train/real-crops/` drive compatibility
+tests across common Windows display scales.
 
 ## Useful one-offs
 
@@ -235,23 +237,23 @@ $env:GRIMVAULT_DISABLE_UPDATES = "1"
 build\windows-msvc-debug\grimvault.exe
 
 # Wipe the user data (DB + logs + migrated INI)
-Remove-Item -Recurse -Force $env:APPDATA\GrimVault
+Remove-Item -Recurse -Force $env:LOCALAPPDATA\GrimVault
 ```
 
 ## Where things live at runtime (with dev env vars set)
 
 ```
-models/             <repo>/models/        ← you need to populate this
+models/             <repo>/models/        ← bundled
 i18n/<lang>/        <repo>/i18n/<lang>/   ← already in repo
 assets/             <repo>/assets/        ← already in repo
 web/                <repo>/web/           ← augment.html + vendored ddb-tooltips
                                             (refresh: tools/build/sync-tooltips.sh)
 db/migrations/      <repo>/db/migrations/ ← embedded at compile time, also on disk
 
-grimvault.db        %APPDATA%\GrimVault\grimvault.db
-logs/               %APPDATA%\GrimVault\logs\
-settings.ini        %APPDATA%\GrimVault\settings.ini  (auto-migrated to DB, renamed .migrated)
-webview2/           %APPDATA%\GrimVault\webview2      (WebView2 user data)
+grimvault.db        %LOCALAPPDATA%\GrimVault\<env>\grimvault.db
+logs/               %LOCALAPPDATA%\GrimVault\<env>\logs\
+settings.ini        %LOCALAPPDATA%\GrimVault\<env>\settings.ini
+webview2/           %LOCALAPPDATA%\GrimVault\<env>\webview2
 ```
 
 The Augment is rendered by the vendored DDB tooltip SDK in a permanently

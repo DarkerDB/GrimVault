@@ -2,11 +2,9 @@
 
 #include <gv/auth/session.h>
 #include <gv/core/env_resolver.h>
+#include <gv/core/http.h>
 #include <gv/core/logger.h>
 #include <gv/core/version.h>
-#include <gv/db/database.h>
-
-#include <SQLiteCpp/SQLiteCpp.h>
 #include <curl/curl.h>
 
 #ifdef _WIN32
@@ -15,48 +13,145 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <charconv>
 #include <chrono>
+#include <cctype>
+#include <cmath>
+#include <limits>
 #include <mutex>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_map>
 
 namespace gv::api {
 
 namespace {
 
    constexpr std::array<int, 3> k_retry_delays_ms { 200, 500, 1500 };
+   constexpr std::size_t k_max_response_bytes = 2 * 1024 * 1024;
+
+   struct WriteState {
+      std::string* body = nullptr;
+      std::size_t  limit = 0;
+      bool         exceeded = false;
+   };
 
    std::size_t write_cb (char* ptr, std::size_t size, std::size_t nmemb, void* user)
    {
+      if (size != 0 && nmemb > std::numeric_limits<std::size_t>::max () / size) return 0;
       const std::size_t n = size * nmemb;
-      auto* out = static_cast<std::string*> (user);
-      out->append (ptr, n);
+      auto* state = static_cast<WriteState*> (user);
+      if (!state || !state->body || state->body->size () > state->limit
+          || n > state->limit - state->body->size ()) {
+         if (state) state->exceeded = true;
+         return 0;
+      }
+      state->body->append (ptr, n);
       return n;
    }
 
-   void apply_tls (CURL* curl, const std::string& ca_bundle)
+   struct HeaderState {
+      long retry_after_seconds = 0;
+      std::string request_id;
+      std::string server_timing;
+   };
+
+   bool header_name (std::string_view line, std::string_view name)
    {
-      // Dev hits hosts that may serve self-signed / locally-issued certs
-      // (auth.dev.darkerdb.com, api.dev.darkerdb.com). Skip verification
-      // for env=dev only. qa/prod stay strict — cert problems there are
-      // real problems and should fail loudly.
-      const bool strict_tls = gv::core::active_env ().name != "dev";
-      curl_easy_setopt (curl, CURLOPT_SSL_VERIFYPEER, strict_tls ? 1L : 0L);
-      curl_easy_setopt (curl, CURLOPT_SSL_VERIFYHOST, strict_tls ? 2L : 0L);
-      // Schannel revocation check fails when the OCSP/CRL endpoint isn't
-      // reachable. No-op on OpenSSL builds.
-#ifdef _WIN32
-      curl_easy_setopt (curl, CURLOPT_SSL_OPTIONS,    CURLSSLOPT_NO_REVOKE);
-#endif
-      if (!ca_bundle.empty ()) {
-         curl_easy_setopt (curl, CURLOPT_CAINFO, ca_bundle.c_str ());
+      if (line.size () < name.size ()) return false;
+      for (std::size_t i = 0; i < name.size (); ++i) {
+         const auto ch = static_cast<unsigned char> (line [i]);
+         if (static_cast<char> (std::tolower (ch)) != name [i]) return false;
       }
+      return true;
+   }
+
+   std::string header_value (std::string_view line, std::size_t prefix)
+   {
+      line.remove_prefix (prefix);
+      while (!line.empty () && (line.front () == ' ' || line.front () == '\t')) {
+         line.remove_prefix (1);
+      }
+      while (!line.empty () && (line.back () == '\r' || line.back () == '\n'
+                                || line.back () == ' ' || line.back () == '\t')) {
+         line.remove_suffix (1);
+      }
+      return std::string { line.substr (0, 1024) };
+   }
+
+   std::size_t header_cb (char* ptr, std::size_t size, std::size_t nmemb, void* user)
+   {
+      if (size != 0 && nmemb > std::numeric_limits<std::size_t>::max () / size) return 0;
+      const std::size_t n = size * nmemb;
+      std::string_view line { ptr, n };
+      auto* state = static_cast<HeaderState*> (user);
+      constexpr std::string_view retry = "retry-after:";
+      constexpr std::string_view request = "x-request-id:";
+      constexpr std::string_view timing = "server-timing:";
+      constexpr std::string_view grimvault_timing = "x-grimvault-timing:";
+
+      if (header_name (line, request)) {
+         state->request_id = header_value (line, request.size ());
+         return n;
+      }
+      if (header_name (line, timing)) {
+         state->server_timing = header_value (line, timing.size ());
+         return n;
+      }
+      if (header_name (line, grimvault_timing)) {
+         state->server_timing = header_value (line, grimvault_timing.size ());
+         return n;
+      }
+      if (!header_name (line, retry)) return n;
+
+      line.remove_prefix (retry.size ());
+      while (!line.empty () && (line.front () == ' ' || line.front () == '\t')) line.remove_prefix (1);
+      long seconds = 0;
+      const auto [end, ec] = std::from_chars (line.data (), line.data () + line.size (), seconds);
+      if (ec == std::errc {} && end != line.data ()) {
+         state->retry_after_seconds = std::clamp (seconds, 0L, 5L);
+      }
+      return n;
+   }
+
+   struct CancelState {
+      const std::atomic<std::uint64_t>* epoch = nullptr;
+      std::uint64_t request_epoch = 0;
+   };
+
+   int progress_cb (void* user, curl_off_t, curl_off_t, curl_off_t, curl_off_t)
+   {
+      const auto* state = static_cast<const CancelState*> (user);
+      return state && state->epoch->load (std::memory_order_relaxed) != state->request_epoch;
    }
 
    bool retryable_http_status (long s)
    {
-      return s == 502 || s == 503 || s == 504;
+      return s == 429 || s == 502 || s == 503 || s == 504;
+   }
+
+   bool retryable_curl_code (CURLcode code)
+   {
+      return code == CURLE_COULDNT_CONNECT
+         || code == CURLE_COULDNT_RESOLVE_HOST
+         || code == CURLE_OPERATION_TIMEDOUT
+         || code == CURLE_RECV_ERROR
+         || code == CURLE_SEND_ERROR;
+   }
+
+   std::string platform_name ()
+   {
+#if defined(_M_ARM64) || defined(__aarch64__)
+      return "Windows; ARM64";
+#elif defined(_M_X64) || defined(__x86_64__)
+      return "Windows; x64";
+#elif defined(_M_IX86) || defined(__i386__)
+      return "Windows; x86";
+#else
+      return "Windows; unknown";
+#endif
    }
 
    void parse_pricing (const nlohmann::json& j, Pricing& p)
@@ -157,6 +252,8 @@ namespace {
             if (change.is_object ()) out.changes.push_back (parse_gem_change (change));
          }
       }
+      out.sockets         = static_cast<int> (integer_or_zero (j, "sockets"));
+      if (out.sockets <= 0) out.sockets = std::max (1, static_cast<int> (out.changes.size ()));
       out.projected_value = integer_or_zero (j, "projected_value");
       out.value_uplift    = integer_or_zero (j, "value_uplift");
       out.socket_fee      = integer_or_zero (j, "socket_fee");
@@ -166,257 +263,349 @@ namespace {
       return out;
    }
 
+   // Every /v2/analyze section is optional and independently shaped, so each
+   // gets its own fold below and parse_analysis stays a manifest of the
+   // contract. A section that is absent, or present with the wrong JSON
+   // type, leaves its fields at their struct defaults.
+   template <typename Fn>
+   void with_object (const nlohmann::json& body, const char* key, Fn&& fn)
+   {
+      if (auto it = body.find (key); it != body.end () && it->is_object ()) fn (*it);
+   }
+
+   template <typename Fn>
+   void with_array (const nlohmann::json& body, const char* key, Fn&& fn)
+   {
+      if (auto it = body.find (key); it != body.end () && it->is_array ()) fn (*it);
+   }
+
+   void parse_match (const nlohmann::json& j, TooltipLookup& out)
+   {
+      out.item_id          = j.value ("item_id", "");
+      out.canonical_name   = j.value ("canonical_name", "");
+      out.display_name     = j.value ("display_name", out.canonical_name);
+      out.rarity           = j.value ("rarity", "");
+      out.match_confidence = optional_number<double> (j, "confidence").value_or (0.0);
+   }
+
+   void parse_rolls (const nlohmann::json& arr, std::vector<AnalysisRoll>& out)
+   {
+      out.reserve (arr.size ());
+
+      for (const auto& roll : arr) {
+         if (!roll.is_object ()) continue;
+         out.push_back (AnalysisRoll {
+            .attribute_id    = roll.value ("attribute_id", ""),
+            .label           = roll.value ("label", ""),
+            .slot            = roll.value ("slot", ""),
+            .value           = optional_number<double> (roll, "value").value_or (0.0),
+            .formatted_value = roll.value ("formatted_value", ""),
+            .gem             = roll.value ("gem", ""),
+            .gem_icon_url    = roll.value ("gem_icon_url", ""),
+            .minimum         = optional_number<double> (roll, "minimum"),
+            .maximum         = optional_number<double> (roll, "maximum"),
+            .roll_percentile = optional_number<int> (roll, "roll_percentile"),
+            .grade           = roll.value ("grade", ""),
+         });
+      }
+   }
+
+   void parse_instance (const nlohmann::json& j, TooltipLookup& out)
+   {
+      out.quantity = integer_or_zero (j, "quantity");
+      if (out.quantity <= 0) out.quantity = 1;
+      out.tradeable = j.value ("tradeable", true);
+
+      with_array (j, "rolls", [&] (const nlohmann::json& rolls) {
+         parse_rolls (rolls, out.rolls);
+      });
+   }
+
+   void parse_valuation (const nlohmann::json& j, Pricing& out)
+   {
+      out.currency        = j.value ("currency", "gold");
+      out.low             = integer_or_zero (j, "low");
+      out.median          = integer_or_zero (j, "fair_value");
+      out.high            = integer_or_zero (j, "high");
+      out.market          = out.median;
+      out.quick_list      = integer_or_zero (j, "quick_list");
+      out.lowest_ask      = integer_or_zero (j, "lowest_ask");
+      out.total_value     = integer_or_zero (j, "total_value");
+      out.sample_size     = integer_or_zero (j, "sample_size");
+      out.ttl_seconds     = static_cast<std::int32_t> (integer_or_zero (j, "ttl_seconds"));
+      out.as_of           = j.value ("as_of", "");
+      out.confidence      = j.value ("confidence", "");
+      out.mean_similarity = optional_number<double> (j, "mean_similarity").value_or (0.0);
+      out.raw             = j;
+   }
+
+   void parse_quality (const nlohmann::json& j, TooltipLookup& out)
+   {
+      out.roll_score          = optional_number<int> (j, "roll_score");
+      out.weighted_roll_score = optional_number<int> (j, "weighted_roll_score");
+      out.relative_percentile = optional_number<int> (j, "relative_percentile");
+
+      with_object (j, "value_driver", [&] (const nlohmann::json& driver) {
+         out.value_driver = ValueDriver {
+            .attribute_id      = driver.value ("attribute_id", ""),
+            .label             = driver.value ("label", ""),
+            .gold_contribution = integer_or_zero (driver, "gold_contribution"),
+            .basis             = driver.value ("basis", ""),
+         };
+      });
+   }
+
+   void parse_market (const nlohmann::json& j, MarketAnalysis& out)
+   {
+      out.active_listings     = integer_or_zero (j, "active_listings");
+      out.sales_30d           = integer_or_zero (j, "sales_30d");
+      out.average_sale_price  = optional_number<std::int64_t> (j, "average_sale_price");
+      out.median_sale_price   = optional_number<std::int64_t> (j, "median_sale_price");
+      out.trend_percent       = optional_number<double> (j, "trend_percent");
+      out.median_sale_seconds = optional_number<std::int64_t> (j, "median_sale_seconds");
+      out.days_supply         = optional_number<double> (j, "days_supply");
+      out.price_stability     = j.value ("price_stability", "");
+      out.liquidity           = j.value ("liquidity", "");
+   }
+
+   void parse_utility (const nlohmann::json& j, UtilityAnalysis& out)
+   {
+      out.vendor_value     = integer_or_zero (j, "vendor_value");
+      out.vendor_total     = integer_or_zero (j, "vendor_total");
+      out.adventure_points = integer_or_zero (j, "adventure_points");
+      out.gear_score       = integer_or_zero (j, "gear_score");
+      out.max_stack_size   = integer_or_zero (j, "max_stack_size");
+      out.value_per_slot   = optional_number<std::int64_t> (j, "value_per_slot");
+   }
+
+   void parse_quests (const nlohmann::json& arr, std::vector<QuestUse>& out)
+   {
+      out.reserve (arr.size ());
+
+      for (const auto& quest : arr) {
+         if (!quest.is_object ()) continue;
+         out.push_back (QuestUse {
+            .merchant_id       = quest.value ("merchant_id", ""),
+            .merchant_name     = quest.value ("merchant_name", ""),
+            .merchant_icon_url = quest.value ("merchant_icon_url", ""),
+            .quest_name        = quest.value ("quest_name", ""),
+            .quest_index       = optional_number<std::int64_t> (quest, "quest_index"),
+            .quest_count       = optional_number<std::int64_t> (quest, "quest_count"),
+            .quantity          = optional_number<std::int64_t> (quest, "quantity"),
+         });
+      }
+   }
+
+   RecipeItem parse_recipe_item (const nlohmann::json& j)
+   {
+      return RecipeItem {
+         .item_id  = j.value ("item_id", ""),
+         .name     = j.value ("name", ""),
+         .rarity   = j.value ("rarity", ""),
+         .icon_url = j.value ("icon_url", ""),
+         .quantity = j.value ("quantity", static_cast<std::int64_t> (1)),
+         .is_this  = j.value ("is_this", false),
+      };
+   }
+
+   void parse_recipes (const nlohmann::json& arr, std::vector<RecipeUse>& out)
+   {
+      out.reserve (arr.size ());
+
+      for (const auto& recipe : arr) {
+         if (!recipe.is_object ()) continue;
+
+         RecipeUse use {
+            .merchant_id       = recipe.value ("merchant_id", ""),
+            .merchant_name     = recipe.value ("merchant_name", ""),
+            .merchant_icon_url = recipe.value ("merchant_icon_url", ""),
+         };
+
+         with_object (recipe, "output", [&] (const nlohmann::json& output) {
+            use.output = parse_recipe_item (output);
+         });
+
+         with_array (recipe, "materials", [&] (const nlohmann::json& materials) {
+            use.materials.reserve (materials.size ());
+            for (const auto& material : materials) {
+               if (material.is_object ()) use.materials.push_back (parse_recipe_item (material));
+            }
+         });
+
+         out.push_back (std::move (use));
+      }
+   }
+
+   void parse_source (const nlohmann::json& j, std::optional<SourceAnalysis>& out)
+   {
+      out = SourceAnalysis {
+         .kind           = j.value ("kind", ""),
+         .heading        = j.value ("heading", ""),
+         .id             = j.value ("id", ""),
+         .icon_url       = j.value ("icon_url", ""),
+         .name           = j.value ("name", ""),
+         .context        = j.value ("context", ""),
+         .drop_rate      = optional_number<double> (j, "drop_rate"),
+         .luck_drop_rate = optional_number<double> (j, "luck_drop_rate"),
+         .luck           = optional_number<int> (j, "luck"),
+      };
+   }
+
+   TradeChatMessage parse_trade_chat_message (const nlohmann::json& j)
+   {
+      TradeChatMessage out {
+         .message     = j.value ("message", ""),
+         .observed_at = j.value ("observed_at", ""),
+         .age_seconds = integer_or_zero (j, "age_seconds"),
+      };
+
+      with_array (j, "items", [&] (const nlohmann::json& items) {
+         out.items.reserve (items.size ());
+         for (const auto& item : items) {
+            if (!item.is_object ()) continue;
+            out.items.push_back (TradeChatItem {
+               .name   = item.value ("name", ""),
+               .rarity = item.value ("rarity", ""),
+            });
+         }
+      });
+
+      return out;
+   }
+
+   void parse_trade_chat (const nlohmann::json& j, TradeChatAnalysis& out)
+   {
+      out.mentions_14d = integer_or_zero (j, "mentions_14d");
+
+      with_array (j, "messages", [&] (const nlohmann::json& messages) {
+         out.messages.reserve (messages.size ());
+         for (const auto& message : messages) {
+            if (!message.is_object ()) continue;
+            out.messages.push_back (parse_trade_chat_message (message));
+         }
+      });
+   }
+
+   void parse_similar_sales (const nlohmann::json& arr, std::vector<SimilarSale>& out)
+   {
+      out.reserve (arr.size ());
+      for (const auto& sale : arr) {
+         if (!sale.is_object ()) continue;
+         out.push_back (SimilarSale {
+            .price        = integer_or_zero (sale, "price"),
+            .similarity   = static_cast<std::int32_t> (integer_or_zero (sale, "similarity")),
+            .sold_at      = sale.value ("sold_at", ""),
+            .age_seconds  = integer_or_zero (sale, "age_seconds"),
+            .sale_seconds = optional_number<std::int64_t> (sale, "sale_seconds"),
+            .highlight_label = sale.value ("highlight_label", ""),
+            .highlight_value = sale.value ("highlight_value", ""),
+         });
+      }
+   }
+
+   // Collects the string members of a JSON array, skipping anything else.
+   void collect_strings (const nlohmann::json& arr, std::vector<std::string>& out)
+   {
+      out.reserve (arr.size ());
+      for (const auto& v : arr) {
+         if (v.is_string ()) out.push_back (v.get<std::string> ());
+      }
+   }
+
+   void parse_entitlement (const nlohmann::json& j, Entitlement& out)
+   {
+      out.plan       = j.value ("plan", "");
+      out.slot_limit = integer_or_zero (j, "slots");
+
+      with_array (j, "granted", [&] (const nlohmann::json& granted) {
+         collect_strings (granted, out.granted);
+      });
+
+      with_array (j, "ladder", [&] (const nlohmann::json& ladder) {
+         collect_strings (ladder, out.ladder);
+      });
+
+      with_object (j, "tiers", [&] (const nlohmann::json& tiers) {
+         out.tiers.reserve (tiers.size ());
+         for (const auto& [widget, plan] : tiers.items ()) {
+            if (plan.is_string ()) out.tiers.emplace_back (widget, plan.get<std::string> ());
+         }
+      });
+
+      with_array (j, "locked", [&] (const nlohmann::json& locked) {
+         out.locked.reserve (locked.size ());
+         for (const auto& row : locked) {
+            if (!row.is_object ()) continue;
+            out.locked.push_back (LockedWidget {
+               .widget             = row.value ("widget", ""),
+               .required_plan      = row.value ("required_plan", ""),
+               .required_plan_name = row.value ("required_plan_name",
+                                                row.value ("required_plan", "")),
+            });
+         }
+      });
+   }
+
+   void parse_gems (const nlohmann::json& j, GemOptimization& out)
+   {
+      out.assumption = j.value ("assumption", "");
+      out.reason     = j.value ("reason", "");
+      out.note       = j.value ("note", "");
+
+      with_array (j, "plans", [&] (const nlohmann::json& plans) {
+         out.plans.reserve (plans.size ());
+         for (const auto& value : plans) {
+            auto plan = parse_gem_plan (value);
+            if (!plan) continue;
+            if (plan->sockets == 1) out.one_socket = *plan;
+            if (plan->sockets == 2) out.two_socket = *plan;
+            out.plans.push_back (std::move (*plan));
+         }
+      });
+
+      // Old servers expose only these aliases. New servers retain them for
+      // old clients, but `plans` is authoritative and must not be duplicated.
+      if (!out.plans.empty ()) return;
+      if (auto one = j.find ("one_socket"); one != j.end ()) {
+         out.one_socket = parse_gem_plan (*one);
+         if (out.one_socket) {
+            out.one_socket->sockets = 1;
+            out.plans.push_back (*out.one_socket);
+         }
+      }
+      if (auto two = j.find ("two_socket"); two != j.end ()) {
+         out.two_socket = parse_gem_plan (*two);
+         if (out.two_socket) {
+            out.two_socket->sockets = 2;
+            out.plans.push_back (*out.two_socket);
+         }
+      }
+   }
+
    TooltipLookup parse_analysis (nlohmann::json j)
    {
       TooltipLookup out;
-      const auto& body = body_of (j);
+      const auto&   body = body_of (j);
       out.request_id = j.value ("request_id", "");
+
       if (!body.is_object ()) {
          out.raw = std::move (j);
          return out;
       }
 
-      if (auto match = body.find ("match"); match != body.end () && match->is_object ()) {
-         out.item_id          = match->value ("item_id", "");
-         out.canonical_name   = match->value ("canonical_name", "");
-         out.display_name     = match->value ("display_name", out.canonical_name);
-         out.rarity          = match->value ("rarity", "");
-         out.match_confidence = optional_number<double> (*match, "confidence").value_or (0.0);
-      }
-
-      if (auto instance = body.find ("instance");
-          instance != body.end () && instance->is_object ()) {
-         out.quantity  = integer_or_zero (*instance, "quantity");
-         if (out.quantity <= 0) out.quantity = 1;
-         out.tradeable = instance->value ("tradeable", true);
-
-         if (auto rolls = instance->find ("rolls"); rolls != instance->end () && rolls->is_array ()) {
-            out.rolls.reserve (rolls->size ());
-            for (const auto& roll : *rolls) {
-               if (!roll.is_object ()) continue;
-               out.rolls.push_back (AnalysisRoll {
-                  .attribute_id    = roll.value ("attribute_id", ""),
-                  .label           = roll.value ("label", ""),
-                  .slot            = roll.value ("slot", ""),
-                  .value           = optional_number<double> (roll, "value").value_or (0.0),
-                  .formatted_value = roll.value ("formatted_value", ""),
-                  .minimum         = optional_number<double> (roll, "minimum"),
-                  .maximum         = optional_number<double> (roll, "maximum"),
-                  .roll_percentile = optional_number<int> (roll, "roll_percentile"),
-                  .grade           = roll.value ("grade", ""),
-               });
-            }
-         }
-      }
-
-      if (auto valuation = body.find ("valuation");
-          valuation != body.end () && valuation->is_object ()) {
-         out.pricing.currency        = valuation->value ("currency", "gold");
-         out.pricing.low             = integer_or_zero (*valuation, "low");
-         out.pricing.median          = integer_or_zero (*valuation, "fair_value");
-         out.pricing.high            = integer_or_zero (*valuation, "high");
-         out.pricing.market          = out.pricing.median;
-         out.pricing.quick_list      = integer_or_zero (*valuation, "quick_list");
-         out.pricing.lowest_ask      = integer_or_zero (*valuation, "lowest_ask");
-         out.pricing.total_value     = integer_or_zero (*valuation, "total_value");
-         out.pricing.sample_size     = integer_or_zero (*valuation, "sample_size");
-         out.pricing.ttl_seconds     = static_cast<std::int32_t> (
-            integer_or_zero (*valuation, "ttl_seconds"));
-         out.pricing.as_of           = valuation->value ("as_of", "");
-         out.pricing.confidence      = valuation->value ("confidence", "");
-         out.pricing.mean_similarity = optional_number<double> (
-            *valuation, "mean_similarity").value_or (0.0);
-         out.pricing.raw = *valuation;
-      }
-
-      if (auto quality = body.find ("quality"); quality != body.end () && quality->is_object ()) {
-         out.roll_score          = optional_number<int> (*quality, "roll_score");
-         out.weighted_roll_score = optional_number<int> (*quality, "weighted_roll_score");
-         out.relative_percentile = optional_number<int> (*quality, "relative_percentile");
-         if (auto driver = quality->find ("value_driver");
-             driver != quality->end () && driver->is_object ()) {
-            out.value_driver = ValueDriver {
-               .attribute_id     = driver->value ("attribute_id", ""),
-               .label            = driver->value ("label", ""),
-               .gold_contribution= integer_or_zero (*driver, "gold_contribution"),
-               .basis            = driver->value ("basis", ""),
-            };
-         }
-      }
-
-      if (auto market = body.find ("market"); market != body.end () && market->is_object ()) {
-         out.market_analysis.active_listings = integer_or_zero (*market, "active_listings");
-         out.market_analysis.sales_30d       = integer_or_zero (*market, "sales_30d");
-         out.market_analysis.average_sale_price = optional_number<std::int64_t> (
-            *market, "average_sale_price");
-         out.market_analysis.median_sale_price  = optional_number<std::int64_t> (
-            *market, "median_sale_price");
-         out.market_analysis.trend_percent   = optional_number<double> (*market, "trend_percent");
-         out.market_analysis.median_sale_seconds = optional_number<std::int64_t> (
-            *market, "median_sale_seconds");
-         out.market_analysis.days_supply     = optional_number<double> (*market, "days_supply");
-         out.market_analysis.price_stability = market->value ("price_stability", "");
-         out.market_analysis.liquidity       = market->value ("liquidity", "");
-      }
-
-      if (auto utility = body.find ("utility"); utility != body.end () && utility->is_object ()) {
-         out.utility.vendor_value     = integer_or_zero (*utility, "vendor_value");
-         out.utility.vendor_total     = integer_or_zero (*utility, "vendor_total");
-         out.utility.adventure_points = integer_or_zero (*utility, "adventure_points");
-         out.utility.gear_score       = integer_or_zero (*utility, "gear_score");
-         out.utility.max_stack_size   = integer_or_zero (*utility, "max_stack_size");
-         out.utility.value_per_slot   = optional_number<std::int64_t> (*utility, "value_per_slot");
-      }
-
-      if (auto quests = body.find ("quests"); quests != body.end () && quests->is_array ()) {
-         out.quests.reserve (quests->size ());
-         for (const auto& quest : *quests) {
-            if (!quest.is_object ()) continue;
-            out.quests.push_back (QuestUse {
-               .merchant_id       = quest.value ("merchant_id", ""),
-               .merchant_name     = quest.value ("merchant_name", ""),
-               .merchant_icon_url = quest.value ("merchant_icon_url", ""),
-               .quest_name        = quest.value ("quest_name", ""),
-               .quest_index       = optional_number<std::int64_t> (quest, "quest_index"),
-               .quest_count       = optional_number<std::int64_t> (quest, "quest_count"),
-               .quantity          = optional_number<std::int64_t> (quest, "quantity"),
-            });
-         }
-      }
-
-      if (auto recipes = body.find ("recipes"); recipes != body.end () && recipes->is_array ()) {
-         const auto read_item = [] (const nlohmann::json& j) {
-            return RecipeItem {
-               .item_id  = j.value ("item_id", ""),
-               .name     = j.value ("name", ""),
-               .rarity   = j.value ("rarity", ""),
-               .icon_url = j.value ("icon_url", ""),
-               .quantity = j.value ("quantity", static_cast<std::int64_t> (1)),
-               .is_this  = j.value ("is_this", false),
-            };
-         };
-
-         out.recipes.reserve (recipes->size ());
-         for (const auto& recipe : *recipes) {
-            if (!recipe.is_object ()) continue;
-
-            RecipeUse use {
-               .merchant_id       = recipe.value ("merchant_id", ""),
-               .merchant_name     = recipe.value ("merchant_name", ""),
-               .merchant_icon_url = recipe.value ("merchant_icon_url", ""),
-            };
-            if (auto output = recipe.find ("output");
-                output != recipe.end () && output->is_object ()) {
-               use.output = read_item (*output);
-            }
-            if (auto materials = recipe.find ("materials");
-                materials != recipe.end () && materials->is_array ()) {
-               use.materials.reserve (materials->size ());
-               for (const auto& material : *materials) {
-                  if (material.is_object ()) use.materials.push_back (read_item (material));
-               }
-            }
-            out.recipes.push_back (std::move (use));
-         }
-      }
-
-      if (auto source = body.find ("source"); source != body.end () && source->is_object ()) {
-         out.source_analysis = SourceAnalysis {
-            .kind           = source->value ("kind", ""),
-            .heading        = source->value ("heading", ""),
-            .id             = source->value ("id", ""),
-            .icon_url       = source->value ("icon_url", ""),
-            .name           = source->value ("name", ""),
-            .context        = source->value ("context", ""),
-            .drop_rate      = optional_number<double> (*source, "drop_rate"),
-            .luck_drop_rate = optional_number<double> (*source, "luck_drop_rate"),
-            .luck           = optional_number<int> (*source, "luck"),
-         };
-      }
-
-      if (auto trade = body.find ("trade_chat"); trade != body.end () && trade->is_object ()) {
-         out.trade_chat.mentions_14d = integer_or_zero (*trade, "mentions_14d");
-         if (auto messages = trade->find ("messages");
-             messages != trade->end () && messages->is_array ()) {
-            out.trade_chat.messages.reserve (messages->size ());
-            for (const auto& message : *messages) {
-               if (!message.is_object ()) continue;
-               TradeChatMessage parsed {
-                  .message     = message.value ("message", ""),
-                  .observed_at = message.value ("observed_at", ""),
-                  .age_seconds = integer_or_zero (message, "age_seconds"),
-               };
-               if (auto items = message.find ("items");
-                   items != message.end () && items->is_array ()) {
-                  parsed.items.reserve (items->size ());
-                  for (const auto& item : *items) {
-                     if (!item.is_object ()) continue;
-                     parsed.items.push_back (TradeChatItem {
-                        .name   = item.value ("name", ""),
-                        .rarity = item.value ("rarity", ""),
-                     });
-                  }
-               }
-               out.trade_chat.messages.push_back (std::move (parsed));
-            }
-         }
-      }
-
-      if (auto ent = body.find ("entitlement"); ent != body.end () && ent->is_object ()) {
-         out.entitlement.plan  = ent->value ("plan", "");
-         out.entitlement.slot_limit = integer_or_zero (*ent, "slots");
-
-         if (auto granted = ent->find ("granted");
-             granted != ent->end () && granted->is_array ()) {
-            out.entitlement.granted.reserve (granted->size ());
-            for (const auto& widget : *granted) {
-               if (widget.is_string ()) {
-                  out.entitlement.granted.push_back (widget.get<std::string> ());
-               }
-            }
-         }
-
-         if (auto tiers = ent->find ("tiers"); tiers != ent->end () && tiers->is_object ()) {
-            out.entitlement.tiers.reserve (tiers->size ());
-            for (const auto& [widget, plan] : tiers->items ()) {
-               if (plan.is_string ()) {
-                  out.entitlement.tiers.emplace_back (widget, plan.get<std::string> ());
-               }
-            }
-         }
-
-         if (auto ladder = ent->find ("ladder"); ladder != ent->end () && ladder->is_array ()) {
-            out.entitlement.ladder.reserve (ladder->size ());
-            for (const auto& plan : *ladder) {
-               if (plan.is_string ()) out.entitlement.ladder.push_back (plan.get<std::string> ());
-            }
-         }
-
-         if (auto locked = ent->find ("locked"); locked != ent->end () && locked->is_array ()) {
-            out.entitlement.locked.reserve (locked->size ());
-            for (const auto& row : *locked) {
-               if (!row.is_object ()) continue;
-               out.entitlement.locked.push_back (LockedWidget {
-                  .widget             = row.value ("widget", ""),
-                  .required_plan      = row.value ("required_plan", ""),
-                  .required_plan_name = row.value ("required_plan_name",
-                                                   row.value ("required_plan", "")),
-               });
-            }
-         }
-      }
-
-      if (auto gems = body.find ("gem_optimization"); gems != body.end () && gems->is_object ()) {
-         out.gem_optimization.assumption = gems->value ("assumption", "");
-         out.gem_optimization.reason     = gems->value ("reason", "");
-         out.gem_optimization.note       = gems->value ("note", "");
-         if (auto one = gems->find ("one_socket"); one != gems->end ()) {
-            out.gem_optimization.one_socket = parse_gem_plan (*one);
-         }
-         if (auto two = gems->find ("two_socket"); two != gems->end ()) {
-            out.gem_optimization.two_socket = parse_gem_plan (*two);
-         }
-      }
+      with_object (body, "match",     [&] (const nlohmann::json& s) { parse_match       (s, out); });
+      with_object (body, "instance",  [&] (const nlohmann::json& s) { parse_instance    (s, out); });
+      with_object (body, "valuation", [&] (const nlohmann::json& s) { parse_valuation   (s, out.pricing); });
+      with_object (body, "quality",   [&] (const nlohmann::json& s) { parse_quality     (s, out); });
+      with_object (body, "market",    [&] (const nlohmann::json& s) { parse_market      (s, out.market_analysis); });
+      with_array  (body, "similar_sales", [&] (const nlohmann::json& s) { parse_similar_sales (s, out.similar_sales); });
+      with_object (body, "utility",   [&] (const nlohmann::json& s) { parse_utility     (s, out.utility); });
+      with_array  (body, "quests",    [&] (const nlohmann::json& s) { parse_quests      (s, out.quests); });
+      with_array  (body, "recipes",   [&] (const nlohmann::json& s) { parse_recipes     (s, out.recipes); });
+      with_object (body, "source",    [&] (const nlohmann::json& s) { parse_source      (s, out.source_analysis); });
+      with_object (body, "trade_chat",[&] (const nlohmann::json& s) { parse_trade_chat  (s, out.trade_chat); });
+      with_object (body, "entitlement", [&] (const nlohmann::json& s) { parse_entitlement (s, out.entitlement); });
+      with_object (body, "gem_optimization", [&] (const nlohmann::json& s) { parse_gems (s, out.gem_optimization); });
 
       if (out.request_id.empty ()) out.request_id = body.value ("request_id", "");
       out.raw = std::move (j);
@@ -455,12 +644,14 @@ namespace {
    // in sync from a single source of truth.
    void flatten_to_values (SettingsBundle& b)
    {
+      b.values.clear ();
       auto put = [&] (std::string k, std::string v) {
          b.values.emplace (std::move (k), std::move (v));
       };
 
       put ("overlay:mode",      b.overlay.mode);
       put ("overlay:alignment", b.overlay.alignment);
+      put ("overlay:columns",   b.overlay.columns);
       put ("overlay:opacity",   std::to_string (b.overlay.opacity));
       put ("overlay:scale",     std::to_string (b.overlay.scale));
       put ("overlay:offset_x",  std::to_string (b.overlay.offset_x));
@@ -478,6 +669,12 @@ namespace {
       for (const auto& [widget, visible] : b.tooltip.analysis) {
          put ("tooltip:analysis:" + widget, visible ? "true" : "false");
       }
+      nlohmann::json analysis_order = nlohmann::json::array ();
+      for (const auto& [widget, visible] : b.tooltip.analysis) {
+         (void) visible;
+         analysis_order.push_back (widget);
+      }
+      put ("tooltip:analysis_order", analysis_order.dump ());
 
       put ("pricing:currency_display", b.pricing.currency_display);
 
@@ -491,12 +688,94 @@ namespace {
       put ("hotkeys:open_in_browser", b.hotkeys.open_in_browser);
    }
 
-   // Populate the typed SettingsBundle fields from the nested JSON
-   // response. Unknown groups / unknown keys are ignored (older client
-   // staying compatible with a newer server). Missing fields keep
-   // their struct-default values, so a partial server response still
+   // The folds below populate the typed SettingsBundle fields from the
+   // nested JSON response, one per settings group, with parse_settings at
+   // the end tying them together. Unknown groups / unknown keys are ignored
+   // (older client staying compatible with a newer server). Missing fields
+   // keep their struct-default values, so a partial server response still
    // yields a fully-populated bundle.
-   void parse_settings (const nlohmann::json& body, SettingsBundle& out)
+   void parse_overlay (const nlohmann::json& j, SettingsBundle::Overlay& out)
+   {
+      out.mode      = j.value ("mode",      out.mode);
+      out.alignment = j.value ("alignment", out.alignment);
+      out.columns   = j.value ("columns",   out.columns);
+      out.opacity   = j.value ("opacity",   out.opacity);
+      out.scale     = j.value ("scale",     out.scale);
+      out.offset_x  = j.value ("offset_x",  out.offset_x);
+      out.offset_y  = j.value ("offset_y",  out.offset_y);
+   }
+
+   void parse_sections (const nlohmann::json& j, SettingsBundle::TooltipSections& out)
+   {
+      out.header    = j.value ("header",    out.header);
+      out.primary   = j.value ("primary",   out.primary);
+      out.secondary = j.value ("secondary", out.secondary);
+      out.details   = j.value ("details",   out.details);
+      out.quests    = j.value ("quests",    out.quests);
+      out.pricing   = j.value ("pricing",   out.pricing);
+   }
+
+   // Copied in wire order, not looked up against a client-side list: the
+   // server owns the widget vocabulary, so a slug this build has never heard
+   // of still reaches the augment's visible_sections. `order` runs first so
+   // the server's render order wins; anything it didn't mention is appended
+   // in JSON order behind it.
+   void parse_widget_toggles (const nlohmann::json& j,
+                              const std::vector<std::string>& order,
+                              std::vector<std::pair<std::string, bool>>& out)
+   {
+      out.reserve (j.size ());
+
+      for (const auto& widget : order) {
+         if (auto visible = j.find (widget); visible != j.end () && visible->is_boolean ()) {
+            out.emplace_back (widget, visible->get<bool> ());
+         }
+      }
+
+      for (const auto& [widget, visible] : j.items ()) {
+         const bool already_added = std::any_of (
+            out.begin (), out.end (),
+            [&widget] (const auto& row) { return row.first == widget; });
+
+         if (!already_added && visible.is_boolean ()) {
+            out.emplace_back (widget, visible.get<bool> ());
+         }
+      }
+   }
+
+   void parse_tooltip (const nlohmann::json& j, SettingsBundle::Tooltip& out,
+                       const std::vector<std::string>& analysis_order)
+   {
+      with_object (j, "sections", [&] (const nlohmann::json& s) {
+         parse_sections (s, out.sections);
+      });
+
+      out.is_price_history_sparkline_visible = j.value (
+         "is_price_history_sparkline_visible",
+         out.is_price_history_sparkline_visible);
+
+      with_object (j, "analysis", [&] (const nlohmann::json& a) {
+         parse_widget_toggles (a, analysis_order, out.analysis);
+      });
+   }
+
+   void parse_behavior (const nlohmann::json& j, SettingsBundle::Behavior& out)
+   {
+      out.is_auto_update_enabled = j.value (
+         "is_auto_update_enabled", out.is_auto_update_enabled);
+      out.is_launch_on_startup_enabled = j.value (
+         "is_launch_on_startup_enabled", out.is_launch_on_startup_enabled);
+   }
+
+   void parse_hotkeys (const nlohmann::json& j, SettingsBundle::Hotkeys& out)
+   {
+      out.toggle_overlay  = j.value ("toggle_overlay",  out.toggle_overlay);
+      out.force_refresh   = j.value ("force_refresh",   out.force_refresh);
+      out.open_in_browser = j.value ("open_in_browser", out.open_in_browser);
+   }
+
+   void parse_settings (const nlohmann::json& body, SettingsBundle& out,
+                        const std::vector<std::string>& analysis_order)
    {
       if (!body.is_object ()) {
          flatten_to_values (out);
@@ -505,71 +784,26 @@ namespace {
 
       out.updated_at = body.value ("updated_at", "");
 
-      if (auto o = body.find ("overlay"); o != body.end () && o->is_object ()) {
-         out.overlay.mode      = o->value ("mode",      out.overlay.mode);
-         out.overlay.alignment = o->value ("alignment", out.overlay.alignment);
-         out.overlay.opacity   = o->value ("opacity",   out.overlay.opacity);
-         out.overlay.scale     = o->value ("scale",     out.overlay.scale);
-         out.overlay.offset_x  = o->value ("offset_x",  out.overlay.offset_x);
-         out.overlay.offset_y  = o->value ("offset_y",  out.overlay.offset_y);
-      }
-
-      if (auto t = body.find ("tooltip"); t != body.end () && t->is_object ()) {
-         if (auto s = t->find ("sections"); s != t->end () && s->is_object ()) {
-            out.tooltip.sections.header    = s->value ("header",    out.tooltip.sections.header);
-            out.tooltip.sections.primary   = s->value ("primary",   out.tooltip.sections.primary);
-            out.tooltip.sections.secondary = s->value ("secondary", out.tooltip.sections.secondary);
-            out.tooltip.sections.details   = s->value ("details",   out.tooltip.sections.details);
-            out.tooltip.sections.quests    = s->value ("quests",    out.tooltip.sections.quests);
-            out.tooltip.sections.pricing   = s->value ("pricing",   out.tooltip.sections.pricing);
-         }
-         out.tooltip.is_price_history_sparkline_visible = t->value (
-            "is_price_history_sparkline_visible",
-            out.tooltip.is_price_history_sparkline_visible);
-
-         // Copied in wire order, not looked up against a client-side list:
-         // the server owns the widget vocabulary, so a slug this build has
-         // never heard of still reaches the augment's visible_sections.
-         if (auto a = t->find ("analysis"); a != t->end () && a->is_object ()) {
-            out.tooltip.analysis.reserve (a->size ());
-            for (const auto& [widget, visible] : a->items ()) {
-               if (visible.is_boolean ()) {
-                  out.tooltip.analysis.emplace_back (widget, visible.get<bool> ());
-               }
-            }
-         }
-      }
-
-      if (auto p = body.find ("pricing"); p != body.end () && p->is_object ()) {
-         out.pricing.currency_display = p->value ("currency_display", out.pricing.currency_display);
-      }
-
-      if (auto b = body.find ("behavior"); b != body.end () && b->is_object ()) {
-         out.behavior.is_auto_update_enabled = b->value (
-            "is_auto_update_enabled", out.behavior.is_auto_update_enabled);
-         out.behavior.is_launch_on_startup_enabled = b->value (
-            "is_launch_on_startup_enabled", out.behavior.is_launch_on_startup_enabled);
-      }
-
-      if (auto h = body.find ("hotkeys"); h != body.end () && h->is_object ()) {
-         out.hotkeys.toggle_overlay  = h->value ("toggle_overlay",  out.hotkeys.toggle_overlay);
-         out.hotkeys.force_refresh   = h->value ("force_refresh",   out.hotkeys.force_refresh);
-         out.hotkeys.open_in_browser = h->value ("open_in_browser", out.hotkeys.open_in_browser);
-      }
+      with_object (body, "overlay",  [&] (const nlohmann::json& s) { parse_overlay  (s, out.overlay); });
+      with_object (body, "behavior", [&] (const nlohmann::json& s) { parse_behavior (s, out.behavior); });
+      with_object (body, "hotkeys",  [&] (const nlohmann::json& s) { parse_hotkeys  (s, out.hotkeys); });
+      with_object (body, "tooltip",  [&] (const nlohmann::json& s) {
+         parse_tooltip (s, out.tooltip, analysis_order);
+      });
+      with_object (body, "pricing",  [&] (const nlohmann::json& s) {
+         out.pricing.currency_display = s.value ("currency_display", out.pricing.currency_display);
+      });
 
       flatten_to_values (out);
    }
 
 } // namespace
 
-void DDBClient::global_init    () { curl_global_init    (CURL_GLOBAL_DEFAULT); }
-void DDBClient::global_cleanup () { curl_global_cleanup (); }
-
 struct DDBClient::Impl
 {
    Config             cfg;
    gv::auth::Session* session  = nullptr;
-   gv::db::Database*  cache_db = nullptr;
+   std::atomic<std::uint64_t> cancel_epoch { 0 };
 
    struct Req {
       std::string_view  method;       // "GET" or "POST"
@@ -584,6 +818,13 @@ struct DDBClient::Impl
       long                       status   = 0;
       std::string                body;
       std::chrono::milliseconds  elapsed { 0 };
+      long                       retry_after_seconds = 0;
+      long                       dns_us = 0;
+      long                       connect_us = 0;
+      long                       tls_us = 0;
+      long                       ttfb_us = 0;
+      std::string                request_id;
+      std::string                server_timing;
    };
 
    // Keep an easy handle alive per traffic lane. curl_easy_reset preserves
@@ -596,13 +837,56 @@ struct DDBClient::Impl
    std::mutex general_curl_lock;
    std::mutex analysis_curl_lock;
 
+   struct CachedAnalysis {
+      TooltipLookup value;
+      std::chrono::steady_clock::time_point expires_at;
+      std::chrono::steady_clock::time_point used_at;
+   };
+   std::mutex analysis_cache_lock;
+   std::unordered_map<std::string, CachedAnalysis> analysis_cache;
+
+   std::optional<TooltipLookup> cached_analysis (const std::string& key)
+   {
+      std::lock_guard lock { analysis_cache_lock };
+      const auto found = analysis_cache.find (key);
+      if (found == analysis_cache.end ()) return std::nullopt;
+      if (found->second.expires_at <= std::chrono::steady_clock::now ()) {
+         analysis_cache.erase (found);
+         return std::nullopt;
+      }
+      found->second.used_at = std::chrono::steady_clock::now ();
+      return found->second.value;
+   }
+
+   void cache_analysis (std::string key, const TooltipLookup& value,
+                        std::chrono::seconds ttl)
+   {
+      if (ttl <= std::chrono::seconds::zero ()) return;
+      std::lock_guard lock { analysis_cache_lock };
+      constexpr std::size_t max_entries = 64;
+      if (!analysis_cache.contains (key) && analysis_cache.size () >= max_entries) {
+         const auto oldest = std::min_element (
+            analysis_cache.begin (), analysis_cache.end (), [] (const auto& left, const auto& right) {
+               return left.second.used_at < right.second.used_at;
+            });
+         if (oldest != analysis_cache.end ()) analysis_cache.erase (oldest);
+      }
+      const auto now = std::chrono::steady_clock::now ();
+      analysis_cache.insert_or_assign (std::move (key), CachedAnalysis {
+         .value = value,
+         .expires_at = now + ttl,
+         .used_at = now,
+      });
+   }
+
    ~Impl ()
    {
       if (general_curl)  curl_easy_cleanup (general_curl);
       if (analysis_curl) curl_easy_cleanup (analysis_curl);
    }
 
-   core::Result<Res> http_once (const Req& req, const std::string& bearer)
+   core::Result<Res> http_once (const Req& req, const std::string& bearer,
+                                CURLcode& transport_code)
    {
       auto& lane_lock = req.latency_critical ? analysis_curl_lock : general_curl_lock;
       auto& lane_curl = req.latency_critical ? analysis_curl      : general_curl;
@@ -630,18 +914,29 @@ struct DDBClient::Impl
       }
 
       Res res;
+      WriteState write_state { &res.body, k_max_response_bytes, false };
+      HeaderState header_state;
+      CancelState cancel_state {
+         .epoch = &cancel_epoch,
+         .request_epoch = cancel_epoch.load (std::memory_order_relaxed),
+      };
       char err_buf [CURL_ERROR_SIZE] { 0 };
       curl_easy_setopt (curl, CURLOPT_ERRORBUFFER,       err_buf);
       curl_easy_setopt (curl, CURLOPT_URL,               req.url.c_str ());
       curl_easy_setopt (curl, CURLOPT_HTTPHEADER,        headers);
       curl_easy_setopt (curl, CURLOPT_WRITEFUNCTION,     &write_cb);
-      curl_easy_setopt (curl, CURLOPT_WRITEDATA,         &res.body);
+      curl_easy_setopt (curl, CURLOPT_WRITEDATA,         &write_state);
+      curl_easy_setopt (curl, CURLOPT_HEADERFUNCTION,    &header_cb);
+      curl_easy_setopt (curl, CURLOPT_HEADERDATA,        &header_state);
       curl_easy_setopt (curl, CURLOPT_TIMEOUT_MS,        static_cast<long> (cfg.timeout.count ()));
       curl_easy_setopt (curl, CURLOPT_CONNECTTIMEOUT_MS, 5000L);
-      curl_easy_setopt (curl, CURLOPT_FOLLOWLOCATION,    1L);
+      curl_easy_setopt (curl, CURLOPT_FOLLOWLOCATION,    0L);
       curl_easy_setopt (curl, CURLOPT_NOSIGNAL,          1L);
       curl_easy_setopt (curl, CURLOPT_TCP_KEEPALIVE,     1L);
-      apply_tls (curl, cfg.ca_bundle);
+      curl_easy_setopt (curl, CURLOPT_NOPROGRESS,        0L);
+      curl_easy_setopt (curl, CURLOPT_XFERINFOFUNCTION,  &progress_cb);
+      curl_easy_setopt (curl, CURLOPT_XFERINFODATA,      &cancel_state);
+      core::http::apply_tls (curl, cfg.ca_bundle);
 
       if (req.method == "POST") {
          curl_easy_setopt (curl, CURLOPT_POST,          1L);
@@ -651,13 +946,36 @@ struct DDBClient::Impl
 
       const auto t0 = std::chrono::steady_clock::now ();
       const CURLcode rc = curl_easy_perform (curl);
+      transport_code = rc;
       curl_easy_getinfo (curl, CURLINFO_RESPONSE_CODE, &res.status);
+      res.retry_after_seconds = header_state.retry_after_seconds;
+      res.request_id = std::move (header_state.request_id);
+      res.server_timing = std::move (header_state.server_timing);
       res.elapsed = std::chrono::duration_cast<std::chrono::milliseconds> (
          std::chrono::steady_clock::now () - t0);
+#ifdef CURLINFO_NAMELOOKUP_TIME_T
+      curl_off_t timing_us = 0;
+      curl_easy_getinfo (curl, CURLINFO_NAMELOOKUP_TIME_T, &timing_us);
+      res.dns_us = static_cast<long> (timing_us);
+      curl_easy_getinfo (curl, CURLINFO_CONNECT_TIME_T, &timing_us);
+      res.connect_us = static_cast<long> (timing_us);
+      curl_easy_getinfo (curl, CURLINFO_APPCONNECT_TIME_T, &timing_us);
+      res.tls_us = static_cast<long> (timing_us);
+      curl_easy_getinfo (curl, CURLINFO_STARTTRANSFER_TIME_T, &timing_us);
+      res.ttfb_us = static_cast<long> (timing_us);
+#endif
 
       curl_slist_free_all (headers);
 
       if (rc != CURLE_OK) {
+         if (rc == CURLE_ABORTED_BY_CALLBACK) {
+            return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
+               "darkerdb: request cancelled"));
+         }
+         if (rc == CURLE_WRITE_ERROR && write_state.exceeded) {
+            return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
+               "darkerdb: response exceeded {} bytes", k_max_response_bytes));
+         }
          const std::string detail = err_buf [0] ? err_buf : curl_easy_strerror (rc);
          core::log::api.event ("http.error", {
             { "method",   std::string { req.method } },
@@ -673,6 +991,12 @@ struct DDBClient::Impl
          { "url",    req.url },
          { "status", std::to_string (res.status) },
          { "ms",     std::to_string (res.elapsed.count ()) },
+         { "dns_us", std::to_string (res.dns_us) },
+         { "connect_us", std::to_string (res.connect_us) },
+         { "tls_us", std::to_string (res.tls_us) },
+         { "ttfb_us", std::to_string (res.ttfb_us) },
+         { "request_id", res.request_id },
+         { "server_timing", res.server_timing },
       });
       return res;
    }
@@ -704,22 +1028,23 @@ struct DDBClient::Impl
          "darkerdb: no attempts"));
 
       bool did_refresh_after_401 = false;
+      int delay_ms = 0;
 
       for (int attempt = 1; attempt <= attempts; ++attempt) {
-         if (attempt > 1) {
-            std::this_thread::sleep_for (
-               std::chrono::milliseconds { k_retry_delays_ms [attempt - 2] });
+         if (delay_ms > 0) {
+            std::this_thread::sleep_for (std::chrono::milliseconds { delay_ms });
          }
 
          auto bearer = bearer_for (req);
          if (!bearer.has_value ()) return core::fail (bearer.error ());
 
-         auto res = http_once (req, *bearer);
+         CURLcode transport_code = CURLE_OK;
+         auto res = http_once (req, *bearer, transport_code);
          if (!res.has_value ()) {
             last = core::fail (res.error ());
-            // libcurl error: retry on connect/timeout, otherwise bail.
-            if (req.retryable && attempt < attempts &&
-                res.error ().message.find ("Timeout") != std::string::npos) {
+            if (req.retryable && attempt < attempts
+                && retryable_curl_code (transport_code)) {
+               delay_ms = k_retry_delays_ms [attempt - 1];
                continue;
             }
             return last;
@@ -731,10 +1056,14 @@ struct DDBClient::Impl
             // returns "not signed in".
             did_refresh_after_401 = true;
             session->invalidate ();
+            delay_ms = 0;
             continue;
          }
 
          if (req.retryable && retryable_http_status (res->status) && attempt < attempts) {
+            delay_ms = res->status == 429 && res->retry_after_seconds > 0
+               ? static_cast<int> (res->retry_after_seconds * 1000)
+               : k_retry_delays_ms [attempt - 1];
             continue;
          }
 
@@ -750,67 +1079,21 @@ DDBClient::DDBClient (Config cfg, gv::auth::Session* session, gv::db::Database* 
 {
    impl_->cfg      = std::move (cfg);
    impl_->session  = session;
-   impl_->cache_db = cache_db;
+   (void) cache_db;
 
    if (impl_->cfg.user_agent.empty ()) {
       std::ostringstream ua;
-      ua << "GrimVault v" << gv::core::version::string
-         << " (" << machine_id () << ")";
+      ua << "GrimVault/" << gv::core::version::string
+         << " (" << platform_name () << ")";
       impl_->cfg.user_agent = ua.str ();
    }
 }
 
 DDBClient::~DDBClient () = default;
 
-std::string DDBClient::machine_id ()
+void DDBClient::cancel_pending () noexcept
 {
-#ifdef _WIN32
-   HKEY  key   = nullptr;
-   wchar_t buf [128] {};
-   DWORD size = sizeof (buf);
-
-   if (::RegOpenKeyExW (HKEY_LOCAL_MACHINE,
-         L"SOFTWARE\\Microsoft\\Cryptography",
-         0, KEY_READ | KEY_WOW64_64KEY, &key) != ERROR_SUCCESS) {
-      return "unknown";
-   }
-
-   const auto rc = ::RegQueryValueExW (key, L"MachineGuid", nullptr, nullptr,
-                                       reinterpret_cast<LPBYTE> (buf), &size);
-   ::RegCloseKey (key);
-
-   if (rc != ERROR_SUCCESS) return "unknown";
-
-   const int wlen = static_cast<int> (size / sizeof (wchar_t));
-   const int n    = ::WideCharToMultiByte (CP_UTF8, 0, buf, wlen, nullptr, 0, nullptr, nullptr);
-   std::string out (static_cast<std::size_t> (std::max (0, n - 1)), '\0');
-   ::WideCharToMultiByte (CP_UTF8, 0, buf, wlen, out.data (), n, nullptr, nullptr);
-   return out;
-#else
-   return "non-windows";
-#endif
-}
-
-core::Result<void> DDBClient::send_diagnostics (const nlohmann::json& payload)
-{
-   Impl::Req req {
-      .method        = "POST",
-      .url           = impl_->cfg.base_url + "/diagnostics",
-      .body          = payload.dump (),
-      .retryable     = false,
-      .authenticated = false,
-   };
-
-   auto res = impl_->http (req);
-   if (!res.has_value ()) return core::fail (res.error ());
-
-   if (res->status < 200 || res->status >= 300) {
-      return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
-         "darkerdb: diagnostics HTTP {}: {}", res->status, res->body.substr (0, 200)));
-   }
-
-   core::log::api.info ("diagnostics: submitted ({} bytes)", req.body.size ());
-   return {};
+   impl_->cancel_epoch.fetch_add (1, std::memory_order_relaxed);
 }
 
 core::Result<TooltipLookup> DDBClient::lookup_tooltip (
@@ -820,26 +1103,17 @@ core::Result<TooltipLookup> DDBClient::lookup_tooltip (
 ) {
    const std::string lang { language };
    const std::string text { raw_text };
-
-   const std::string cache_key = "lookup:" + lang + "@" + text;
-
-   if (impl_->cache_db) {
-      try {
-         SQLite::Statement q { impl_->cache_db->sqlite (), R"sql(
-            SELECT response_json
-              FROM pricing_cache
-             WHERE cache_key = ?
-               AND fetched_at + ttl_seconds > unixepoch ()
-         )sql" };
-         q.bind (1, cache_key);
-         if (q.executeStep ()) {
-            auto json = nlohmann::json::parse (q.getColumn (0).getString (), nullptr, false);
-            if (!json.is_discarded ()) {
-               return parse_lookup (std::move (json));
-            }
-         }
-      } catch (const std::exception& e) {
-         core::log::api.warn ("lookup cache read failed: {}", e.what ());
+   const auto principal = impl_->session
+      ? impl_->session->principal ()
+      : std::nullopt;
+   std::string cache_key;
+   if (principal && !principal->empty ()) {
+      cache_key = "lookup\x1f" + *principal + "\x1f" + lang + "\x1f" + text;
+      if (auto cached = impl_->cached_analysis (cache_key)) {
+         core::log::api.event ("lookup.cache_hit", {
+            { "item_id", cached->item_id },
+         });
+         return std::move (*cached);
       }
    }
 
@@ -895,54 +1169,55 @@ core::Result<TooltipLookup> DDBClient::lookup_tooltip (
       return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
          "darkerdb: invalid JSON response"));
    }
-
-   if (impl_->cache_db) {
-      try {
-         SQLite::Statement upsert { impl_->cache_db->sqlite (), R"sql(
-            INSERT INTO pricing_cache (cache_key, response_json, fetched_at, ttl_seconds)
-                 VALUES               (?, ?, unixepoch (), ?)
-            ON CONFLICT (cache_key) DO UPDATE
-               SET response_json = excluded.response_json,
-                   fetched_at    = excluded.fetched_at,
-                   ttl_seconds   = excluded.ttl_seconds
-         )sql" };
-         upsert.bind (1, cache_key);
-         upsert.bind (2, json.dump ());
-         upsert.bind (3, static_cast<long long> (cache_ttl.count ()));
-         upsert.exec ();
-      } catch (const std::exception& e) {
-         core::log::api.warn ("lookup cache upsert failed: {}", e.what ());
-      }
+   if (!body_of (json).is_object ()) {
+      return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
+         "darkerdb: lookup response has no object body"));
    }
 
-   return parse_lookup (std::move (json));
+   auto parsed = parse_lookup (std::move (json));
+   if (!cache_key.empty ()) {
+      impl_->cache_analysis (
+         std::move (cache_key), parsed,
+         std::min (cache_ttl, std::chrono::seconds { 300 }));
+   }
+   return parsed;
 }
 
 core::Result<TooltipLookup> DDBClient::analyze_tooltip (
    std::string_view     raw_text,
    std::string_view     language,
    float                confidence,
+   std::string_view     capture_backend,
+   const std::unordered_map<std::string, std::string>& gems,
    std::chrono::seconds cache_ttl
 ) {
    const std::string lang { language };
    const std::string text { raw_text };
-   const std::string cache_key = "analyze:" + lang + "@" + text;
-
-   if (impl_->cache_db) {
-      try {
-         SQLite::Statement q { impl_->cache_db->sqlite (), R"sql(
-            SELECT response_json
-              FROM pricing_cache
-             WHERE cache_key = ?
-               AND fetched_at + ttl_seconds > unixepoch ()
-         )sql" };
-         q.bind (1, cache_key);
-         if (q.executeStep ()) {
-            auto json = nlohmann::json::parse (q.getColumn (0).getString (), nullptr, false);
-            if (!json.is_discarded ()) return parse_analysis (std::move (json));
-         }
-      } catch (const std::exception& e) {
-         core::log::api.warn ("analysis cache read failed: {}", e.what ());
+   std::vector<std::pair<std::string, std::string>> ordered_gems {
+      gems.begin (), gems.end ()
+   };
+   std::sort (ordered_gems.begin (), ordered_gems.end ());
+   const auto principal = impl_->session
+      ? impl_->session->principal ()
+      : std::nullopt;
+   std::string cache_key;
+   const auto confidence_bucket = std::lround (std::clamp (confidence, 0.0f, 1.0f) * 20.0f);
+   if (principal && !principal->empty ()) {
+      cache_key.append ("analyze\x1f").append (*principal)
+         .append ("\x1f").append (lang)
+         .append ("\x1f").append (text)
+         .append ("\x1f").append (std::to_string (confidence_bucket))
+         .append ("\x1f").append (capture_backend);
+      for (const auto& [line, family] : ordered_gems) {
+         cache_key.append ("\x1e").append (line).append ("\x1f").append (family);
+      }
+   }
+   if (!cache_key.empty ()) {
+      if (auto cached = impl_->cached_analysis (cache_key)) {
+         core::log::api.event ("analysis.cache_hit", {
+            { "item_id", cached->item_id },
+         });
+         return std::move (*cached);
       }
    }
 
@@ -967,9 +1242,10 @@ core::Result<TooltipLookup> DDBClient::analyze_tooltip (
       { "ocr", {
          { "raw_text",    text },
          { "confidence",  std::clamp (confidence, 0.0f, 1.0f) },
+         { "gems",        gems },
       }},
       { "hints", {
-         { "capture_backend", "wgc" },
+         { "capture_backend", capture_backend.empty () ? "unknown" : capture_backend },
       }},
    };
 
@@ -1002,32 +1278,21 @@ core::Result<TooltipLookup> DDBClient::analyze_tooltip (
       return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
          "ddb: invalid analysis JSON response"));
    }
-
-   auto parsed = parse_analysis (json);
-   const auto server_ttl = parsed.pricing.ttl_seconds > 0
-      ? std::chrono::seconds { parsed.pricing.ttl_seconds }
-      : cache_ttl;
-   const auto effective_ttl = std::min (cache_ttl, server_ttl);
-
-   if (impl_->cache_db) {
-      try {
-         SQLite::Statement upsert { impl_->cache_db->sqlite (), R"sql(
-            INSERT INTO pricing_cache (cache_key, response_json, fetched_at, ttl_seconds)
-                 VALUES               (?, ?, unixepoch (), ?)
-            ON CONFLICT (cache_key) DO UPDATE
-               SET response_json = excluded.response_json,
-                   fetched_at    = excluded.fetched_at,
-                   ttl_seconds   = excluded.ttl_seconds
-         )sql" };
-         upsert.bind (1, cache_key);
-         upsert.bind (2, json.dump ());
-         upsert.bind (3, static_cast<long long> (effective_ttl.count ()));
-         upsert.exec ();
-      } catch (const std::exception& e) {
-         core::log::api.warn ("analysis cache upsert failed: {}", e.what ());
-      }
+   const auto& body = body_of (json);
+   if (!body.is_object () || !body.contains ("match") || !body ["match"].is_object ()) {
+      return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
+         "ddb: analysis response is missing match data"));
    }
 
+   auto parsed = parse_analysis (std::move (json));
+
+   // Entitlements are resolved server-side with a 60-second TTL. Cap the
+   // response cache below that so an upgrade or lapse becomes visible on the
+   // next normal hover without allowing cross-account reuse.
+   const auto ttl = std::min (cache_ttl, std::chrono::seconds { 30 });
+   if (!cache_key.empty ()) {
+      impl_->cache_analysis (std::move (cache_key), parsed, ttl);
+   }
    return parsed;
 }
 
@@ -1087,10 +1352,47 @@ core::Result<SettingsBundle> DDBClient::get_settings ()
          "darkerdb: settings invalid JSON"));
    }
 
+   const auto& body = body_of (json);
+   constexpr std::array<std::string_view, 5> required_groups {
+      "behavior", "hotkeys", "overlay", "pricing", "tooltip"
+   };
+   if (!body.is_object () || std::any_of (
+         required_groups.begin (), required_groups.end (), [&body] (std::string_view group) {
+            auto it = body.find (group);
+            return it == body.end () || !it->is_object ();
+         })) {
+      return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
+         "darkerdb: settings response is incomplete"));
+   }
+
+   std::vector<std::string> analysis_order;
+   auto ordered = nlohmann::ordered_json::parse (res->body, nullptr, false);
+   if (!ordered.is_discarded () && ordered.is_object ()) {
+      const auto* ordered_body = &ordered;
+      if (auto wrapped = ordered.find ("body"); wrapped != ordered.end ()) ordered_body = &*wrapped;
+      if (ordered_body->is_object ()) {
+         auto tooltip = ordered_body->find ("tooltip");
+         if (tooltip != ordered_body->end () && tooltip->is_object ()) {
+            auto analysis = tooltip->find ("analysis");
+            if (analysis != tooltip->end () && analysis->is_object ()) {
+               analysis_order.reserve (analysis->size ());
+               for (const auto& [widget, visible] : analysis->items ()) {
+                  (void) visible;
+                  analysis_order.push_back (widget);
+               }
+            }
+         }
+      }
+   }
+
    SettingsBundle out;
    out.raw = json;
-   const auto& body = body_of (json);
-   parse_settings (body, out);
+   try {
+      parse_settings (body, out, analysis_order);
+   } catch (const nlohmann::json::exception& e) {
+      return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
+         "darkerdb: invalid settings values: {}", e.what ()));
+   }
    return out;
 }
 

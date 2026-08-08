@@ -14,16 +14,6 @@ namespace {
 
    constexpr const char* k_startup_name = "GrimVault";
 
-   Mode mode_for (Preferences::OverlayMode m)
-   {
-      switch (m) {
-         case Preferences::OverlayMode::Manual:   return Mode::Manual;
-         case Preferences::OverlayMode::Disabled: return Mode::Disabled;
-         case Preferences::OverlayMode::Automatic: break;
-      }
-      return Mode::Auto;
-   }
-
 } // namespace
 
 struct SettingsBridge::Impl
@@ -56,7 +46,7 @@ struct SettingsBridge::Impl
    {
       if (!deps.controller) return;
 
-      deps.controller->set_configured_mode (mode_for (prefs.overlay_mode));
+      deps.controller->set_configured_mode (prefs.overlay_mode);
 
       // A dashboard accelerator overrides the compiled default; an empty
       // one means the server never sent it, so leave the local binding be.

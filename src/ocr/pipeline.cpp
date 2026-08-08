@@ -1,6 +1,8 @@
 #include <gv/ocr/pipeline.h>
 #include <gv/ocr/preprocessor.h>
+#include <gv/core/environment.h>
 #include <gv/core/logger.h>
+#include <gv/vision/gem_detector.h>
 #include <gv/vision/tooltip_tracker.h>
 #include <gv/core/spsc_queue.h>
 
@@ -11,7 +13,7 @@
 #include <algorithm>
 #include <atomic>
 #include <bit>
-#include <cstdlib>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -144,9 +146,12 @@ struct Pipeline::Impl
    Config                    config;
 
    std::atomic<bool>         running   { false };
+   std::atomic<bool>         enabled   { true };
+   std::atomic<bool>         automatic { true };
    std::atomic<bool>         detect_only { false };
    std::atomic<bool>         anchored { false };
    std::atomic<bool>         reacquiring { false };
+   std::atomic<bool>         reset_requested { false };
    std::atomic<std::uint64_t> generation { 0 };
    std::atomic<void*>        window    { nullptr };
    std::atomic<LanguageFamily> language { LanguageFamily::Latin };
@@ -201,9 +206,9 @@ struct Pipeline::Impl
       const bool bursting = tracking
          && std::chrono::steady_clock::now ().time_since_epoch ().count ()
             < burst_until.load (std::memory_order_relaxed);
-      const double fps = tracking
+      const double fps = std::max (1.0, tracking
          ? (bursting ? config.anchored_burst_fps : config.anchored_fps)
-         : (idle ? config.idle_fps : config.active_fps);
+         : (idle ? config.idle_fps : config.active_fps));
 
       return std::chrono::duration_cast<std::chrono::milliseconds> (
          std::chrono::duration<double> (1.0 / fps));
@@ -211,22 +216,32 @@ struct Pipeline::Impl
 
    void capture_loop ()
    {
-      const bool can_continuous = capture.current ().supports_continuous ();
-
       void* current_target  = nullptr;
       bool  session_active  = false;
       bool  continuous_ok   = true;   // flips false after a failed (re)start
+      int   continuous_errors = 0;
 
       while (running.load (std::memory_order_relaxed)) {
          void* now_target = window.load ();
+         const bool forced = force_scan.load (std::memory_order_relaxed);
+
+         if (!enabled.load (std::memory_order_relaxed)
+             || (!automatic.load (std::memory_order_relaxed) && !forced)) {
+            if (session_active) {
+               capture.stop_continuous ();
+               session_active = false;
+            }
+            std::this_thread::sleep_for (std::chrono::milliseconds (100));
+            continue;
+         }
 
          // No game window: the pipeline sleeps outright instead of running
          // detection against monitor frames — that's pure CPU burn with
          // nothing to find. A forced scan (F5) still grabs one monitor
          // frame so desktop testing works without the game.
-         if (now_target == nullptr && !force_scan.load (std::memory_order_relaxed)) {
+         if (now_target == nullptr && !forced) {
             if (session_active) {
-               capture.current ().stop_continuous ();
+               capture.stop_continuous ();
                session_active = false;
             }
             std::this_thread::sleep_for (std::chrono::milliseconds (250));
@@ -235,35 +250,53 @@ struct Pipeline::Impl
 
          // (Re)start the continuous session when the target changed or the
          // session was torn down during a no-window pause.
+         const bool target_changed = now_target != current_target;
+         if (target_changed) {
+            continuous_ok = true;
+            continuous_errors = 0;
+         }
+         const bool can_continuous = capture.supports_continuous ();
          if (can_continuous && continuous_ok
-               && (!session_active || now_target != current_target)) {
-            if (session_active) capture.current ().stop_continuous ();
-            current_target = now_target;
-            auto r = capture.current ().start_continuous (
-               current_target, /*is_window=*/ current_target != nullptr);
+               && (!session_active || target_changed)) {
+            if (session_active) capture.stop_continuous ();
+            auto r = capture.start_continuous (
+               now_target, /*is_window=*/ now_target != nullptr);
             session_active = r.has_value ();
             if (!session_active) {
                core::Logger::warn ("pipeline: continuous start failed: {}; falling back to per-call",
                   r.error ().message);
                continuous_ok = false;
+            } else {
+               continuous_errors = 0;
             }
          }
+         current_target = now_target;
 
          core::Result<capture::Frame> frame_res = core::fail (core::Error {
             core::ErrorKind::Capture, "init" });
 
          if (session_active) {
-            frame_res = capture.current ().latest_frame (std::chrono::milliseconds (200));
+            frame_res = capture.latest_frame (std::chrono::milliseconds (200));
+            if (!frame_res.has_value ()) {
+               ++continuous_errors;
+               if (continuous_errors >= 3) {
+                  core::Logger::warn (
+                     "pipeline: continuous capture failed repeatedly; falling back to per-call");
+                  capture.stop_continuous ();
+                  session_active = false;
+                  continuous_ok = false;
+               }
+            } else {
+               continuous_errors = 0;
+            }
          } else {
             frame_res = now_target
-               ? capture.current ().capture_window  (now_target)
-               : capture.current ().capture_monitor (nullptr);
+               ? capture.capture_window  (now_target)
+               : capture.capture_monitor (nullptr);
          }
 
          if (frame_res.has_value () && !frame_res->empty ()) {
-            while (running.load () && !capture_q.try_push (std::move (*frame_res))) {
-               std::this_thread::sleep_for (std::chrono::milliseconds (1));
-            }
+            (void) capture_q.try_push (std::move (*frame_res));
          }
 
          // Pace BOTH paths. The continuous path returns the latest frame as
@@ -273,7 +306,7 @@ struct Pipeline::Impl
       }
 
       if (session_active) {
-         capture.current ().stop_continuous ();
+         capture.stop_continuous ();
       }
    }
 
@@ -293,6 +326,7 @@ struct Pipeline::Impl
       capture::Rect     prev_box {};        // SETTLING: previous refined box
       capture::CursorPos prev_cursor {};
       bool              have_prev = false;
+      int               stable_frames = 0;
 
       vision::Anchor    anchor;
       std::uint64_t     anchor_generation = 0;
@@ -309,8 +343,6 @@ struct Pipeline::Impl
       } metrics;
 
       std::chrono::steady_clock::time_point last_pulse {};
-
-      const auto agree = [] (int a, int b) { return std::abs (a - b) <= 2; };
 
       const auto emit_anchor = [this, &anchor_generation] (const vision::Anchor& a) {
          if (anchor_cb) {
@@ -344,6 +376,7 @@ struct Pipeline::Impl
          reacquiring.store (false, std::memory_order_relaxed);
          generation.fetch_add (1, std::memory_order_relaxed);
          have_prev       = false;
+         stable_frames   = 0;
          anchored_cursor = {};
       };
 
@@ -399,9 +432,9 @@ struct Pipeline::Impl
       };
 
       const std::filesystem::path diagnostic_dir = [] {
-         const char* value = std::getenv ("GRIMVAULT_ANCHOR_DIAGNOSTICS");
-         return value && *value ? std::filesystem::path { value }
-                                : std::filesystem::path {};
+         return std::filesystem::path {
+            core::environment::get ("GRIMVAULT_ANCHOR_DIAGNOSTICS")
+         };
       } ();
       const auto dump_diagnostic = [&diagnostic_dir] (
          std::string event, const cv::Mat& image) {
@@ -446,6 +479,16 @@ struct Pipeline::Impl
 
          capture::Frame frame = std::move (*head);
          capture_q.pop ();
+
+         // Capture strategies retain the cursor in desktop coordinates so a
+         // frame is self-describing across monitors. Vision and anchoring are
+         // frame-relative, so normalize exactly once at the stage boundary.
+         frame.cursor = frame.local_cursor ();
+
+         if (reset_requested.exchange (false, std::memory_order_relaxed)) {
+            lose ("runtime policy changed");
+            if (!enabled.load (std::memory_order_relaxed)) continue;
+         }
 
          // Consume the force flag up front — leaving it latched on a fruitless
          // scan would hold the capture loop out of its no-window sleep.
@@ -576,6 +619,7 @@ struct Pipeline::Impl
                            .time_since_epoch ().count (),
                         std::memory_order_relaxed);
                      have_prev = false;
+                     stable_frames = 0;
                      anchored_cursor = {};
                      continue;
                   }
@@ -615,6 +659,7 @@ struct Pipeline::Impl
                track     = Track::Idle;
                reacquiring.store (false, std::memory_order_relaxed);
                have_prev = false;
+               stable_frames = 0;
                continue;
             }
 
@@ -637,14 +682,28 @@ struct Pipeline::Impl
                // next frame.
                track     = Track::Settling;
                have_prev = false;
+               stable_frames = 0;
                continue;
             }
 
-            const bool settled = have_prev && c.valid && prev_cursor.valid
-               && agree (refined->x - c.x, prev_box.x - prev_cursor.x)
-               && agree (refined->y - c.y, prev_box.y - prev_cursor.y)
-               && agree (refined->w, prev_box.w)
-               && agree (refined->h, prev_box.h);
+            const capture::Rect relative {
+               refined->x - (c.valid ? c.x : 0),
+               refined->y - (c.valid ? c.y : 0),
+               refined->w,
+               refined->h,
+            };
+            const capture::Rect previous_relative {
+               prev_box.x - (prev_cursor.valid ? prev_cursor.x : 0),
+               prev_box.y - (prev_cursor.valid ? prev_cursor.y : 0),
+               prev_box.w,
+               prev_box.h,
+            };
+            const bool agrees = have_prev
+               && capture::intersection_over_union (relative, previous_relative)
+                  >= std::clamp (config.stability_iou, 0.0f, 1.0f);
+            stable_frames = agrees ? stable_frames + 1 : 1;
+            const bool settled = forced
+               || stable_frames >= std::max (1, config.stability_frames);
 
             if (!settled) {
                track       = Track::Settling;
@@ -669,6 +728,7 @@ struct Pipeline::Impl
             reacquiring.store (false, std::memory_order_relaxed);
             metrics = {};
             have_prev       = false;
+            stable_frames   = 0;
             anchored_cursor = c;
             core::Logger::debug (
                "anchoring: anchored {},{} {}x{} offset {},{} locked {}/{}",
@@ -698,9 +758,7 @@ struct Pipeline::Impl
          VisionOut out { std::move (frame),
                          { vision::TooltipBox { .rect = last_box } },
                          anchor_generation };
-         while (running.load () && !vision_q.try_push (std::move (out))) {
-            std::this_thread::sleep_for (std::chrono::milliseconds (1));
-         }
+         (void) vision_q.try_push (std::move (out));
       }
    }
 
@@ -756,8 +814,8 @@ struct Pipeline::Impl
             // GRIMVAULT_OCR_DEBUG=1 → dump crop + bands to %TEMP%\grimvault-ocr
             // for offline segmentation tuning.
             static const bool dump_bands = [] {
-               const char* e = std::getenv ("GRIMVAULT_OCR_DEBUG");
-               return e && *e && std::string_view { e } != "0";
+               const auto value = core::environment::get ("GRIMVAULT_OCR_DEBUG");
+               return !value.empty () && value != "0";
             } ();
 
             int dump_index = -1;
@@ -777,6 +835,7 @@ struct Pipeline::Impl
             }
 
             std::string text;
+            std::unordered_map<std::string, std::string> gems;
             float       conf_sum = 0.0f;
             int         conf_n   = 0;
             bool        preliminary_sent = false;
@@ -862,6 +921,14 @@ struct Pipeline::Impl
                   });
                }
                if (line_text.empty ()) continue;
+               if (!is_title && std::any_of (
+                     line_text.begin (), line_text.end (), [] (char ch) {
+                        return std::isdigit (static_cast<unsigned char> (ch)) != 0;
+                     })) {
+                  if (auto family = vision::detect_gem_family (raw_line); family.has_value ()) {
+                     gems [line_text] = *family;
+                  }
+               }
                if (!text.empty ()) text.push_back ('\n');
                text += line_text;
 
@@ -882,6 +949,7 @@ struct Pipeline::Impl
                         .rect        = box.rect,
                         .text        = line_text,
                         .confidence  = line_confidence,
+                        .backend     = item.frame.backend,
                         .preliminary = true,
                         .captured_at = item.frame.timestamp,
                      });
@@ -935,7 +1003,9 @@ struct Pipeline::Impl
                      .generation  = item.generation,
                      .rect        = box.rect,
                      .text        = std::move (text),
+                     .gems        = std::move (gems),
                      .confidence  = conf_n ? conf_sum / conf_n : 0.0f,
+                     .backend     = item.frame.backend,
                      .preliminary = false,
                      .captured_at = item.frame.timestamp,
                   });
@@ -964,7 +1034,26 @@ void Pipeline::on_activity (ActivityCallback cb) { impl_->activity = std::move (
 void Pipeline::on_anchor (AnchorCallback cb) { impl_->anchor_cb = std::move (cb); }
 void Pipeline::on_anchor_lost (AnchorLostCallback cb) { impl_->anchor_lost_cb = std::move (cb); }
 
-void Pipeline::set_active_window (void* hwnd) { impl_->window.store (hwnd); }
+void Pipeline::set_active_window (void* hwnd)
+{
+   if (impl_->window.exchange (hwnd) != hwnd) {
+      impl_->reset_requested.store (true, std::memory_order_relaxed);
+   }
+}
+void Pipeline::set_enabled (bool on)
+{
+   if (impl_->enabled.exchange (on) == on) return;
+   impl_->force_scan.store (false, std::memory_order_relaxed);
+   impl_->generation.fetch_add (1, std::memory_order_relaxed);
+   impl_->reset_requested.store (true, std::memory_order_relaxed);
+}
+void Pipeline::set_automatic (bool on)
+{
+   if (impl_->automatic.exchange (on) == on) return;
+   impl_->force_scan.store (false, std::memory_order_relaxed);
+   impl_->generation.fetch_add (1, std::memory_order_relaxed);
+   impl_->reset_requested.store (true, std::memory_order_relaxed);
+}
 void Pipeline::set_language (LanguageFamily f) { impl_->language.store (f); }
 
 bool Pipeline::is_current (std::uint64_t value) const noexcept
@@ -974,6 +1063,7 @@ bool Pipeline::is_current (std::uint64_t value) const noexcept
 void Pipeline::set_detect_only (bool on) { impl_->detect_only.store (on); }
 void Pipeline::request_immediate_scan ()
 {
+   if (!impl_->enabled.load (std::memory_order_relaxed)) return;
    // Wake from idle pacing too, or a forced scan waits up to 1/idle_fps.
    impl_->mark_activity ();
    impl_->force_scan.store (true);

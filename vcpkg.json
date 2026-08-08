@@ -15,6 +15,7 @@
       { "name": "qtbase",       "features": [ "widgets" ] },
       "qtcharts",
       "qtdeclarative",
+      "qttools",
       "spscqueue",
       "spdlog",
       { "name": "sqlite3", "features": [ "fts5", "json1" ] },

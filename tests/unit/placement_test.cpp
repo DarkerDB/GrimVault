@@ -135,18 +135,34 @@ TEST (Placement, FitShrinksToTheViewportWidthToo)
    EXPECT_NEAR (900 * factor, 500, 1.0);
 }
 
-// Past roughly half size the card is unreadable; a little overflow beats
-// rendering something nobody can read.
-TEST (Placement, FitIsFloored)
+TEST (Placement, FitCanShrinkBelowHalfToKeepTheWholeCardVisible)
 {
    const QRect tiny { 0, 0, 100, 100 };
-   EXPECT_DOUBLE_EQ (place::fit (tiny, QSize { 4000, 4000 }, 0, 1.0), 0.5);
+   EXPECT_DOUBLE_EQ (place::fit (tiny, QSize { 4000, 4000 }, 0, 1.0), 0.025);
 }
 
 TEST (Placement, FitIgnoresDegenerateInput)
 {
    EXPECT_DOUBLE_EQ (place::fit (view (), QSize { 0, 0 }, 0, 1.0), 1.0);
    EXPECT_DOUBLE_EQ (place::fit (QRect {}, QSize { 600, 900 }, 0, 1.0), 1.0);
+}
+
+TEST (Placement, AttachedSpaceUsesTheLargerNonOverlappingSide)
+{
+   const QRect anchor { 1500, 100, 360, 900 };
+   const QSize space = place::attached_space (view (), anchor, 12);
+
+   EXPECT_EQ (space.width (), 1568);
+   EXPECT_EQ (space.height (), k_view_h);
+}
+
+TEST (Placement, AttachedSpaceHandlesAnAnchorOutsideTheViewport)
+{
+   const QRect anchor { -500, 100, 200, 900 };
+   const QSize space = place::attached_space (view (), anchor, 12);
+
+   EXPECT_EQ (space.width (), k_view_w);
+   EXPECT_EQ (space.height (), k_view_h);
 }
 
 TEST (Placement, CornersInsetFromTheViewportEdges)

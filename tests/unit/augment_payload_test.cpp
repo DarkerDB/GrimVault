@@ -79,6 +79,8 @@ TEST (AugmentPayload, CompleteAnalysisRendersPremiumSections)
       .slot = "secondary",
       .value = 4.1,
       .formatted_value = "+4.1%",
+      .gem = "blue_sapphire",
+      .gem_icon_url = "https://cdn.darkerdb.com/codex/sapphire",
       .minimum = 3.0,
       .maximum = 5.0,
       .roll_percentile = 55,
@@ -91,6 +93,15 @@ TEST (AugmentPayload, CompleteAnalysisRendersPremiumSections)
    lookup.market_analysis.days_supply = 18.2;
    lookup.market_analysis.price_stability = "stable";
    lookup.market_analysis.liquidity = "fast";
+   lookup.similar_sales.push_back ({
+      .price = 425,
+      .similarity = 94,
+      .sold_at = "2026-08-02T12:00:00Z",
+      .age_seconds = 900,
+      .sale_seconds = 1800,
+      .highlight_label = "Magic Damage Bonus",
+      .highlight_value = "+4.8%",
+   });
    lookup.utility.max_stack_size = 5;
    lookup.utility.value_per_slot = 206;
    lookup.quests.push_back ({
@@ -187,6 +198,12 @@ TEST (AugmentPayload, CompleteAnalysisRendersPremiumSections)
    EXPECT_EQ (analysis ["market"]["median_sale_seconds"], 2520);
    EXPECT_EQ (analysis ["market"]["days_supply"], 18.2);
    EXPECT_EQ (analysis ["market"]["price_stability"], "stable");
+   EXPECT_EQ (analysis ["similar_sales"][0]["price"], 425);
+   EXPECT_EQ (analysis ["similar_sales"][0]["similarity"], 94);
+   EXPECT_EQ (analysis ["similar_sales"][0]["age_seconds"], 900);
+   EXPECT_EQ (analysis ["similar_sales"][0]["sale_seconds"], 1800);
+   EXPECT_EQ (analysis ["similar_sales"][0]["highlight_label"], "Magic Damage Bonus");
+   EXPECT_EQ (analysis ["similar_sales"][0]["highlight_value"], "+4.8%");
    EXPECT_EQ (analysis ["value_driver"]["gold_contribution"], 117);
    EXPECT_EQ (analysis ["source"]["name"], "Frost Skeleton Footman");
    EXPECT_EQ (analysis ["source"]["luck_drop_rate"], 0.041);
@@ -195,6 +212,9 @@ TEST (AugmentPayload, CompleteAnalysisRendersPremiumSections)
    EXPECT_EQ (analysis ["rolls"][0]["minimum"], 3.0);
    EXPECT_EQ (analysis ["rolls"][0]["maximum"], 5.0);
    EXPECT_EQ (analysis ["rolls"][0]["grade"], "C");
+   EXPECT_EQ (analysis ["rolls"][0]["gem"], "blue_sapphire");
+   EXPECT_EQ (analysis ["rolls"][0]["gem_icon_url"],
+      "https://cdn.darkerdb.com/codex/sapphire");
    ASSERT_EQ (analysis ["gem_plans"].size (), 1u);
    EXPECT_EQ (analysis ["gem_plans"][0]["sockets"], 1);
    EXPECT_EQ (analysis ["gem_plans"][0]["projected_value"], 620);
@@ -225,6 +245,31 @@ TEST (AugmentPayload, AnalysisContentStaysStructuredForSdkEscaping)
    EXPECT_EQ (analysis ["rolls"][0]["formatted_value"], "+4 & 5");
    EXPECT_EQ (analysis ["rolls"][0]["label"], "Damage <script>");
    EXPECT_FALSE (analysis.contains ("html"));
+}
+
+TEST (AugmentPayload, EmitsEveryServerRankedGemPlan)
+{
+   TooltipLookup lookup;
+   lookup.item_id = "id.item.legendary_test_6001";
+   lookup.display_name = "Legendary Test";
+
+   for (int sockets = 1; sockets <= 4; ++sockets) {
+      gv::api::GemPlan plan;
+      plan.sockets = sockets;
+      plan.projected_value = 1000 + sockets * 100;
+      for (int index = 0; index < sockets; ++index) {
+         plan.changes.push_back ({
+            .replace_label = "Old " + std::to_string (index),
+            .new_label = "New " + std::to_string (index),
+         });
+      }
+      lookup.gem_optimization.plans.push_back (std::move (plan));
+   }
+
+   const auto analysis = gv::ui::augment::entity (lookup) ["sections"][0];
+   ASSERT_EQ (analysis ["gem_plans"].size (), 4u);
+   EXPECT_EQ (analysis ["gem_plans"][3]["sockets"], 4);
+   EXPECT_EQ (analysis ["gem_plans"][3]["changes"].size (), 4u);
 }
 
 TEST (AugmentPayload, EmptySectionsOmitted)
@@ -302,6 +347,15 @@ TEST (AugmentPayload, CurrencyDisplayReachesTheCard)
 
    const json e = gv::ui::augment::entity (analysis_sample (), options);
    EXPECT_EQ (e ["sections"][0]["currency_display"], "compact");
+}
+
+TEST (AugmentPayload, ThreeColumnChoiceReachesTheCard)
+{
+   gv::ui::augment::Options options;
+   options.columns = "3";
+
+   const json e = gv::ui::augment::entity (analysis_sample (), options);
+   EXPECT_EQ (e ["sections"][0]["columns"], "3");
 }
 
 TEST (AugmentPayload, DefaultOptionsShowEverythingAtAbsolutePrices)

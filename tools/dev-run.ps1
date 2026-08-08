@@ -93,14 +93,32 @@ if ($IsLinux) {
    exit $LASTEXITCODE
 }
 
-$root = (Resolve-Path "$PSScriptRoot\..").Path
+$root = (Resolve-Path "$PSScriptRoot\..").ProviderPath
+
+# Recover a drive-mapped spelling when PowerShell was launched through a WSL
+# UNC path. Qt's cmd-wrapped tools cannot use a UNC working directory.
+if ($root -like '\\*') {
+   $mapping = Get-PSDrive -PSProvider FileSystem | Where-Object {
+      $_.DisplayRoot -and $root.StartsWith($_.DisplayRoot, [StringComparison]::OrdinalIgnoreCase)
+   } | Select-Object -First 1
+   if ($mapping) {
+      $root = "$($mapping.Name):$($root.Substring($mapping.DisplayRoot.Length))"
+   }
+}
 
 # Source lives in WSL, reached via the W: mapping of \\wsl.localhost\Ubuntu
 # (see DEV.md). The build tree must stay on a local Windows drive: MSVC and
 # Qt tooling spawn cmd.exe (no UNC cwd), and object/PDB writes over the 9P
 # bridge are slow and flaky.
-$remote = ($root -like '\\*') -or
-          ((Get-PSDrive -Name (Split-Path -Qualifier $root).TrimEnd(':')).DisplayRoot -like '\\*')
+$remote = $root -like '\\*'
+if (-not $remote) {
+   $qualifier = Split-Path -Qualifier $root
+   if ($qualifier) {
+      $driveName = $qualifier.TrimEnd(':')
+      $drive = Get-PSDrive -Name $driveName -ErrorAction SilentlyContinue
+      $remote = $drive -and $drive.DisplayRoot -like '\\*'
+   }
+}
 $out = if ($remote) { "$env:LOCALAPPDATA\GrimVault\build\$Preset" }
        else         { Join-Path $root "build\$Preset" }
 
@@ -131,59 +149,7 @@ Run from the W: drive mapping, not the raw UNC path. Qt's build tooling
    Inf "source on network drive ($root); build tree -> $out"
 }
 
-# Auto-source the VS Developer environment if cl.exe isn't on PATH yet.
-# Lets dev-run.ps1 work from any PowerShell, not just "Developer PowerShell
-# for VS 2022". Tries vswhere first, then falls back to brute-force search
-# of known VS install roots.
-function Find-VcVars {
-   # 1. vswhere (preferred, comes with any VS install)
-   $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-   if (Test-Path $vswhere) {
-      $vsPath = & $vswhere -latest -products * -property installationPath 2>$null | Select-Object -First 1
-      if ($vsPath) {
-         $candidate = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
-         if (Test-Path $candidate) { return $candidate }
-      }
-   }
-
-   # 2. Brute force: any vcvars64.bat under the standard VS roots
-   foreach ($root in @(
-      "${env:ProgramFiles(x86)}\Microsoft Visual Studio",
-      "$env:ProgramFiles\Microsoft Visual Studio"
-   )) {
-      if (-not (Test-Path $root)) { continue }
-      $hit = Get-ChildItem -Path $root -Filter vcvars64.bat -Recurse -ErrorAction SilentlyContinue |
-             Select-Object -First 1
-      if ($hit) { return $hit.FullName }
-   }
-
-   return $null
-}
-
-function Initialize-DevEnv {
-   if (Get-Command cl.exe -ErrorAction SilentlyContinue) { return $true }
-
-   $vcvars = Find-VcVars
-   if (-not $vcvars) {
-      Write-Host "       searched for vcvars64.bat:" -ForegroundColor Yellow
-      Write-Host "         - vswhere ${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -ForegroundColor Yellow
-      Write-Host "         - ${env:ProgramFiles(x86)}\Microsoft Visual Studio\**\vcvars64.bat" -ForegroundColor Yellow
-      Write-Host "         - $env:ProgramFiles\Microsoft Visual Studio\**\vcvars64.bat" -ForegroundColor Yellow
-      return $false
-   }
-
-   Inf "sourcing $vcvars"
-
-   # Run vcvars64 in cmd, dump its env, import into this process.
-   $envDump = cmd /c "`"$vcvars`" >nul 2>&1 && set"
-   foreach ($line in $envDump) {
-      if ($line -match '^([^=]+)=(.*)$') {
-         Set-Item -Path "env:$($matches[1])" -Value $matches[2]
-      }
-   }
-
-   return [bool] (Get-Command cl.exe -ErrorAction SilentlyContinue)
-}
+. (Join-Path $PSScriptRoot 'build\msvc-env.ps1')
 
 # ---- Prereqs ---------------------------------------------------------------
 
@@ -200,7 +166,7 @@ if (-not $env:VCPKG_ROOT) { Fail "VCPKG_ROOT not set" }
 if (-not (Test-Path "$env:VCPKG_ROOT\vcpkg.exe")) { Fail "VCPKG_ROOT=$env:VCPKG_ROOT but no vcpkg.exe" }
 Ok "VCPKG_ROOT = $env:VCPKG_ROOT"
 
-if (-not (Initialize-DevEnv)) {
+if (-not (Initialize-MsvcEnv { param ($message) Inf $message })) {
    Fail @"
 cl.exe not found and could not auto-source vcvars64.bat.
 Either:

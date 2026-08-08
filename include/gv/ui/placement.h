@@ -20,11 +20,8 @@ namespace gv::ui::placement {
 // Fit factor for a card that would overflow the viewport. 1.0 when it
 // already fits. `chrome` is the transparent animation headroom, which is on
 // every edge and scales with the card, so it counts against both budgets.
-//
-// Floored: past roughly half size the card is unreadable, and a little
-// overflow beats rendering something nobody can read.
 inline double fit (const QRect& viewport, const QSize& card_css,
-                   int chrome_css, double scale, double floor = 0.5)
+                   int chrome_css, double scale)
 {
    if (card_css.width () <= 0 || card_css.height () <= 0) return 1.0;
    if (viewport.width () <= 0 || viewport.height () <= 0) return 1.0;
@@ -34,7 +31,21 @@ inline double fit (const QRect& viewport, const QSize& card_css,
    if (w <= 0.0 || h <= 0.0) return 1.0;
 
    const double factor = std::min ({ 1.0, viewport.width () / w, viewport.height () / h });
-   return factor >= 1.0 ? 1.0 : std::max (factor, floor);
+   return factor >= 1.0 ? 1.0 : factor;
+}
+
+// Room available on the larger side of an anchored game tooltip. The
+// Augment can flip left or right, so column selection and final scaling both
+// use the side that can actually hold more content instead of the monitor's
+// full width.
+inline QSize attached_space (const QRect& viewport, const QRect& anchor, int gap)
+{
+   const int left = std::clamp (
+      anchor.x () - viewport.x () - gap, 0, viewport.width ());
+   const int right = std::clamp (
+      viewport.x () + viewport.width () - (anchor.x () + anchor.width ()) - gap,
+      0, viewport.width ());
+   return { std::max (left, right), viewport.height () };
 }
 
 // Dock the card beside the in-game tooltip, top edges aligned.

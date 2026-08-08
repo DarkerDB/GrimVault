@@ -52,20 +52,19 @@ namespace {
    };
 
    // Parse "GET /callback?code=...&state=... HTTP/1.1" into a query string.
-   // Returns "" on failure.
-   std::string parse_query (const std::string& request)
+   std::optional<std::string> parse_query (const std::string& request)
    {
       const auto sp1 = request.find (' ');
-      if (sp1 == std::string::npos) return {};
+      if (sp1 == std::string::npos || request.substr (0, sp1) != "GET") return std::nullopt;
       const auto sp2 = request.find (' ', sp1 + 1);
-      if (sp2 == std::string::npos) return {};
+      if (sp2 == std::string::npos) return std::nullopt;
 
       const auto path = request.substr (sp1 + 1, sp2 - sp1 - 1);
       const auto qmark = path.find ('?');
-      if (qmark == std::string::npos) return {};
+      if (qmark == std::string::npos) return std::nullopt;
 
       // Require /callback path.
-      if (path.substr (0, qmark) != "/callback") return {};
+      if (path.substr (0, qmark) != "/callback") return std::nullopt;
       return path.substr (qmark + 1);
    }
 
@@ -133,7 +132,7 @@ std::string LoopbackServer::close_page_html ()
 struct LoopbackServer::Impl
 {
    WsaGuard          wsa;
-   sock_t            listen_sock = k_invalid_sock;
+   std::atomic<sock_t> listen_sock { k_invalid_sock };
    std::uint16_t     port        = 0;
    std::atomic<bool> closed { false };
 
@@ -142,9 +141,14 @@ struct LoopbackServer::Impl
    void close_now ()
    {
       const bool was_open = !closed.exchange (true);
-      if (was_open && listen_sock != k_invalid_sock) {
-         sock_close (listen_sock);
-         listen_sock = k_invalid_sock;
+      const sock_t sock = listen_sock.exchange (k_invalid_sock);
+      if (was_open && sock != k_invalid_sock) {
+#ifdef _WIN32
+         ::shutdown (sock, SD_BOTH);
+#else
+         ::shutdown (sock, SHUT_RDWR);
+#endif
+         sock_close (sock);
       }
    }
 };
@@ -163,8 +167,9 @@ core::Result<std::uint16_t> LoopbackServer::bind ()
    }
 #endif
 
-   impl_->listen_sock = ::socket (AF_INET, SOCK_STREAM, 0);
-   if (impl_->listen_sock == k_invalid_sock) {
+   const sock_t listen_sock = ::socket (AF_INET, SOCK_STREAM, 0);
+   impl_->listen_sock.store (listen_sock);
+   if (listen_sock == k_invalid_sock) {
       return core::fail (core::Error::make (core::ErrorKind::Io,
          "loopback: socket() failed: {}", sock_errno ()));
    }
@@ -174,7 +179,7 @@ core::Result<std::uint16_t> LoopbackServer::bind ()
    addr.sin_addr.s_addr = ::htonl (INADDR_LOOPBACK);
    addr.sin_port        = 0;
 
-   if (::bind (impl_->listen_sock,
+   if (::bind (listen_sock,
                reinterpret_cast<sockaddr*> (&addr),
                sizeof (addr)) != 0) {
       const int e = sock_errno ();
@@ -185,7 +190,7 @@ core::Result<std::uint16_t> LoopbackServer::bind ()
 
    sockaddr_in bound {};
    socklen_t bound_len = sizeof (bound);
-   if (::getsockname (impl_->listen_sock,
+   if (::getsockname (listen_sock,
                       reinterpret_cast<sockaddr*> (&bound),
                       &bound_len) != 0) {
       const int e = sock_errno ();
@@ -195,7 +200,7 @@ core::Result<std::uint16_t> LoopbackServer::bind ()
    }
    impl_->port = ::ntohs (bound.sin_port);
 
-   if (::listen (impl_->listen_sock, 1) != 0) {
+   if (::listen (listen_sock, 1) != 0) {
       const int e = sock_errno ();
       impl_->close_now ();
       return core::fail (core::Error::make (core::ErrorKind::Io,
@@ -212,7 +217,7 @@ core::Result<CallbackResult> LoopbackServer::await_callback (
    std::string_view     success_redirect,
    std::string_view     error_redirect
 ) {
-   if (impl_->listen_sock == k_invalid_sock) {
+   if (impl_->listen_sock.load () == k_invalid_sock) {
       return core::fail (core::Error::make (core::ErrorKind::Internal,
          "loopback: server not bound"));
    }
@@ -220,6 +225,11 @@ core::Result<CallbackResult> LoopbackServer::await_callback (
    const auto deadline = std::chrono::steady_clock::now () + timeout;
 
    for (;;) {
+      const sock_t listen_sock = impl_->listen_sock.load ();
+      if (listen_sock == k_invalid_sock || impl_->closed.load ()) {
+         return core::fail (core::Error::make (core::ErrorKind::Io,
+            "Sign-in was cancelled."));
+      }
       // Use select() so we can honor the deadline without blocking forever.
       const auto remaining = std::chrono::duration_cast<std::chrono::seconds> (
          deadline - std::chrono::steady_clock::now ());
@@ -230,12 +240,16 @@ core::Result<CallbackResult> LoopbackServer::await_callback (
 
       fd_set rfds;
       FD_ZERO (&rfds);
-      FD_SET (impl_->listen_sock, &rfds);
+      FD_SET (listen_sock, &rfds);
       timeval tv { static_cast<long> (remaining.count ()), 0 };
 
-      const int sel = ::select (static_cast<int> (impl_->listen_sock + 1),
+      const int sel = ::select (static_cast<int> (listen_sock + 1),
                                 &rfds, nullptr, nullptr, &tv);
       if (sel < 0) {
+         if (impl_->closed.load ()) {
+            return core::fail (core::Error::make (core::ErrorKind::Io,
+               "Sign-in was cancelled."));
+         }
          return core::fail (core::Error::make (core::ErrorKind::Io,
             "loopback: select failed: {}", sock_errno ()));
       }
@@ -243,7 +257,7 @@ core::Result<CallbackResult> LoopbackServer::await_callback (
 
       sockaddr_in peer {};
       socklen_t peer_len = sizeof (peer);
-      sock_t client = ::accept (impl_->listen_sock,
+      sock_t client = ::accept (listen_sock,
                                 reinterpret_cast<sockaddr*> (&peer),
                                 &peer_len);
       if (client == k_invalid_sock) continue;
@@ -261,11 +275,28 @@ core::Result<CallbackResult> LoopbackServer::await_callback (
       }
 
       const auto query = parse_query (buf);
+      if (!query.has_value ()) {
+         constexpr std::string_view response =
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+         ::send (client, response.data (), static_cast<int> (response.size ()), 0);
+         sock_close (client);
+         continue;
+      }
       CallbackResult cb;
-      parse_callback (query, cb);
+      parse_callback (*query, cb);
 
-      const bool is_success =
-         cb.error.empty () && cb.state == std::string { expected_state } && !cb.code.empty ();
+      const bool state_matches = cb.state == std::string { expected_state };
+      const bool terminal_error = state_matches && !cb.error.empty ();
+      const bool is_success = state_matches && cb.error.empty () && !cb.code.empty ();
+
+      if (!terminal_error && !is_success) {
+         constexpr std::string_view response =
+            "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n"
+            "Cache-Control: no-store\r\n\r\n";
+         ::send (client, response.data (), static_cast<int> (response.size ()), 0);
+         sock_close (client);
+         continue;
+      }
 
       // Prefer a 302 redirect to the realm SPA so the success/failure
       // page lives in the brand. Fall back to the embedded HTML when
@@ -307,14 +338,6 @@ core::Result<CallbackResult> LoopbackServer::await_callback (
             : "Authorization error: " + cb.error_description + " (" + cb.error + ")";
          return core::fail (core::Error::make (
             core::ErrorKind::ExternalApi, "{}", msg));
-      }
-      if (cb.state != std::string { expected_state }) {
-         return core::fail (core::Error::make (core::ErrorKind::Permission,
-            "Sign-in state mismatch (possible CSRF — try again)."));
-      }
-      if (cb.code.empty ()) {
-         return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
-            "Authorization callback didn't include a code."));
       }
       return cb;
    }

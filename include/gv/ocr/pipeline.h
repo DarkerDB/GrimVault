@@ -12,6 +12,7 @@
 #include <memory>
 #include <filesystem>
 #include <string>
+#include <unordered_map>
 
 namespace gv::ocr {
 
@@ -19,7 +20,9 @@ struct RecognizedTooltip {
    std::uint64_t generation = 0;
    capture::Rect rect;
    std::string   text;
+   std::unordered_map<std::string, std::string> gems;
    float         confidence = 0.0f;
+   capture::CaptureBackend backend = capture::CaptureBackend::Unknown;
    bool          preliminary = false; // title-only; full tooltip follows
    std::chrono::steady_clock::time_point captured_at;
 };
@@ -111,6 +114,11 @@ public:
    void on_anchor_lost (AnchorLostCallback cb);
 
    void set_active_window (void* hwnd);   // HWND or nullptr to capture monitor
+
+   // Runtime policy. Disabled means no capture, detection, OCR, or API work.
+   // Manual keeps the pipeline armed but captures only after an immediate scan.
+   void set_enabled   (bool on);
+   void set_automatic (bool on);
 
    void set_language (LanguageFamily f);
 
