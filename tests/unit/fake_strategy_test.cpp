@@ -28,7 +28,7 @@ TEST (FakeStrategyTest, ReturnsSolidFrame)
 TEST (FakeStrategyTest, RoundRobinsThroughLoadedFrames)
 {
    capture::FakeStrategy fake;
-   fake.initialize ();
+   ASSERT_TRUE (fake.initialize ().has_value ());
    fake.push_solid (8, 8, 0xff, 0x00, 0x00);
    fake.push_solid (8, 8, 0x00, 0xff, 0x00);
 
@@ -51,7 +51,7 @@ TEST (FakeStrategyTest, RoundRobinsThroughLoadedFrames)
 TEST (FakeStrategyTest, FailsWhenNoFramesLoaded)
 {
    capture::FakeStrategy fake;
-   fake.initialize ();
+   ASSERT_TRUE (fake.initialize ().has_value ());
    auto r = fake.capture_monitor (nullptr);
    EXPECT_FALSE (r.has_value ());
    EXPECT_EQ (r.error ().kind, core::ErrorKind::Capture);

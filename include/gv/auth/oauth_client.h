@@ -59,6 +59,9 @@ public:
    // the user cancels, or `callback_timeout` elapses.
    core::Result<TokenResponse> authorize ();
 
+   // Interrupt a currently waiting loopback authorization. Idempotent.
+   void cancel_authorize () noexcept;
+
    // Refresh an existing refresh token. Per contract §3.3, the response MUST
    // include a new refresh token (rotation is mandatory); callers persist the
    // returned blob atomically.

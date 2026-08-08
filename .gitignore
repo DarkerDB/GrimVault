@@ -8,6 +8,8 @@
 /vendor
 
 # Generated OCR training data, checkpoints, and local environments.
+/tools/**/__pycache__/
+/tools/build/MicrosoftEdgeWebView2Setup.exe
 /tools/ocr-train/.venv
 /tools/ocr-train/__pycache__
 /tools/ocr-train/output

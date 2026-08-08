@@ -49,6 +49,8 @@ namespace {
       " stop: 0 rgba(127, 0, 0, 64), stop: 1 rgba(10, 3, 3, 0))";
    constexpr const char* k_dot_ok      = "#6E8F3C";  // ok green
    constexpr const char* k_dot_off     = "#B33A2A";  // danger red
+   constexpr const char* k_dot_wait    = "#D19A3A";  // warm amber
+   constexpr const char* k_dot_warn    = "#D66B32";  // degraded orange
 
    constexpr int k_radius        = 10;
    constexpr int k_shadow_margin = 16;
@@ -157,7 +159,12 @@ TrayMenu::TrayMenu (QWidget* parent)
       status_dot_ = new Dot (header);
       hl->addWidget (status_dot_, 0, Qt::AlignVCenter);
 
-      auto* title = new QLabel (header);
+      auto* labels = new QWidget (header);
+      auto* labels_layout = new QVBoxLayout (labels);
+      labels_layout->setContentsMargins (0, 0, 0, 0);
+      labels_layout->setSpacing (1);
+
+      auto* title = new QLabel (labels);
       title->setTextFormat (Qt::RichText);
       // Set the base font on the QLabel — QLabel's rich-text renderer
       // honors inline font-family declarations unreliably, but the
@@ -171,7 +178,12 @@ TrayMenu::TrayMenu (QWidget* parent)
          .arg (k_text_dim)
          .arg (pretty_env_name (gv::core::active_env ().name))
          .arg (QString::fromLatin1 (gv::core::version::string)));
-      hl->addWidget (title, 1, Qt::AlignVCenter);
+      labels_layout->addWidget (title);
+
+      status_label_ = new QLabel (labels);
+      status_label_->setFont (QFont (QString::fromLatin1 (k_font_body)));
+      labels_layout->addWidget (status_label_);
+      hl->addWidget (labels, 1, Qt::AlignVCenter);
 
       body->addWidget (header);
    }
@@ -222,6 +234,7 @@ TrayMenu::TrayMenu (QWidget* parent)
 
    refresh_dot  ();
    refresh_auth ();
+   refresh_status ();
 }
 
 QPushButton* TrayMenu::add_item (QVBoxLayout* body, const QString& label)
@@ -269,17 +282,27 @@ QWidget* TrayMenu::make_separator () const
 
 void TrayMenu::set_signed_in (bool yes)
 {
-   gv::core::log::ui.info ("tray: set_signed_in({})", yes ? "true" : "false");
-   signed_in_ = yes;
+   set_connection_state (yes ? ConnectionState::Ready : ConnectionState::SignedOut);
+}
+
+void TrayMenu::set_connection_state (ConnectionState state)
+{
+   state_ = state;
+   signed_in_ = state != ConnectionState::SignedOut;
+   gv::core::log::ui.info ("tray: connection state {}", static_cast<int> (state));
    refresh_dot  ();
    refresh_auth ();
+   refresh_status ();
 }
 
 void TrayMenu::refresh_dot ()
 {
    if (status_dot_) {
-      static_cast<Dot*> (status_dot_)->set_color (
-         QColor (signed_in_ ? k_dot_ok : k_dot_off));
+      const char* color = k_dot_off;
+      if (state_ == ConnectionState::Syncing)  color = k_dot_wait;
+      if (state_ == ConnectionState::Ready)    color = k_dot_ok;
+      if (state_ == ConnectionState::Degraded) color = k_dot_warn;
+      static_cast<Dot*> (status_dot_)->set_color (QColor (color));
    }
 }
 
@@ -289,6 +312,33 @@ void TrayMenu::refresh_auth ()
    auth_btn_->setText (signed_in_
       ? QStringLiteral ("Log Out")
       : QStringLiteral ("Sign In"));
+}
+
+void TrayMenu::refresh_status ()
+{
+   if (!status_label_) return;
+
+   QString text;
+   const char* color = k_text_dim;
+   switch (state_) {
+      case ConnectionState::SignedOut:
+         text = QStringLiteral ("Signed out");
+         break;
+      case ConnectionState::Syncing:
+         text = QStringLiteral ("Syncing settings…");
+         color = k_dot_wait;
+         break;
+      case ConnectionState::Ready:
+         text = QStringLiteral ("Ready");
+         color = k_dot_ok;
+         break;
+      case ConnectionState::Degraded:
+         text = QStringLiteral ("Using local defaults; retrying");
+         color = k_dot_warn;
+         break;
+   }
+   status_label_->setStyleSheet (QStringLiteral ("color: %1; font-size: 10px;").arg (color));
+   status_label_->setText (text);
 }
 
 void TrayMenu::popup_at (const QPoint& global_pos)

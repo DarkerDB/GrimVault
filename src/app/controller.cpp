@@ -23,8 +23,10 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <iomanip>
 #include <mutex>
 #include <optional>
+#include <sstream>
 #include <thread>
 
 namespace gv::app {
@@ -61,6 +63,27 @@ namespace {
       return "automatic";
    }
 
+   std::string fingerprint_for (const api::TooltipLookup& lookup)
+   {
+      std::uint64_t hash = 1469598103934665603ULL;
+      const auto add = [&hash] (std::string_view value) {
+         for (const unsigned char ch : value) {
+            hash ^= ch;
+            hash *= 1099511628211ULL;
+         }
+         hash ^= 0xff;
+         hash *= 1099511628211ULL;
+      };
+      add (lookup.item_id);
+      for (const auto& roll : lookup.rolls) {
+         add (roll.attribute_id);
+         add (roll.formatted_value);
+      }
+      std::ostringstream out;
+      out << std::hex << std::setfill ('0') << std::setw (16) << hash;
+      return out.str ();
+   }
+
    // Empty handler = unknown action. Bind and rebind both dispatch through
    // here so a new action can never be bindable from one path and not the
    // other.
@@ -91,6 +114,10 @@ struct Controller::Impl
    Dependencies           deps;
 
    std::atomic<Mode>      mode { Mode::Auto };
+   std::atomic<bool>      authenticated { false };
+   std::mutex             session_lock;
+   std::int64_t           session_id = 0;
+   std::string            account_id;
 
    // What overlay:mode last said. toggle_overlay flips between Disabled and
    // this, so a player in Manual who hides and re-shows the card lands back
@@ -138,6 +165,73 @@ struct Controller::Impl
    ocr::Pipeline::AnchorEvent live_anchor {};
    bool                       has_live_anchor = false;
 
+   void sync_pipeline ()
+   {
+      const auto current = mode.load (std::memory_order_relaxed);
+      const bool active = authenticated.load (std::memory_order_relaxed)
+         && current != Mode::Disabled;
+
+      if (deps.pipeline) {
+         deps.pipeline->set_automatic (current == Mode::Auto);
+         deps.pipeline->set_enabled (active);
+      }
+
+      if (active) return;
+
+      if (deps.api) deps.api->cancel_pending ();
+
+      {
+         std::lock_guard lk { analysis_lock };
+         pending_analysis.reset ();
+      }
+      has_live_anchor = false;
+      {
+         std::lock_guard lk { browse_lock };
+         last_item_id.clear ();
+      }
+      if (deps.overlay) deps.overlay->clear ();
+      if (deps.debug) deps.debug->clear_anchor ();
+   }
+
+   void start_session (std::string principal)
+   {
+      std::lock_guard lk { session_lock };
+      account_id = std::move (principal);
+      if (!deps.db || account_id.empty () || session_id != 0) return;
+      try {
+         SQLite::Statement insert { deps.db->sqlite (), R"sql(
+            INSERT INTO session_runs (started_at, language, account_id)
+            VALUES (unixepoch (), ?, ?)
+         )sql" };
+         insert.bind (1, game_language);
+         insert.bind (2, account_id);
+         insert.exec ();
+         session_id = deps.db->sqlite ().getLastInsertRowid ();
+      } catch (const std::exception& e) {
+         core::Logger::warn ("controller: session start failed: {}", e.what ());
+      }
+   }
+
+   void end_session ()
+   {
+      std::lock_guard lk { session_lock };
+      if (!deps.db || session_id == 0) {
+         session_id = 0;
+         account_id.clear ();
+         return;
+      }
+      try {
+         SQLite::Statement update { deps.db->sqlite (),
+            "UPDATE session_runs SET ended_at = unixepoch () WHERE session_id = ?" };
+         update.bind (1, session_id);
+         update.exec ();
+      } catch (const std::exception& e) {
+         core::Logger::warn ("controller: session close failed: {}", e.what ());
+      }
+      session_id = 0;
+      account_id.clear ();
+   }
+
    void apply_anchor ()
    {
       core::WindowEvent ev;
@@ -175,6 +269,7 @@ struct Controller::Impl
 
    void stop_analysis_worker ()
    {
+      if (deps.api) deps.api->cancel_pending ();
       {
          std::lock_guard lk { analysis_lock };
          analysis_stopping = true;
@@ -207,12 +302,20 @@ struct Controller::Impl
             pending_analysis.reset ();
          }
 
+         if (!authenticated.load (std::memory_order_relaxed)
+             || mode.load (std::memory_order_relaxed) == Mode::Disabled) continue;
          if (!deps.api) continue;
          if (deps.pipeline && !deps.pipeline->is_current (job.tooltip.generation)) continue;
 
+         const auto analysis_started = std::chrono::steady_clock::now ();
          auto result = deps.api->analyze_tooltip (
-            job.tooltip.text, job.language, job.tooltip.confidence);
+            job.tooltip.text, job.language, job.tooltip.confidence,
+            capture::backend_name (job.tooltip.backend), job.tooltip.gems);
+         const auto analysis_ms = std::chrono::duration_cast<std::chrono::milliseconds> (
+            std::chrono::steady_clock::now () - analysis_started).count ();
 
+         if (!authenticated.load (std::memory_order_relaxed)
+             || mode.load (std::memory_order_relaxed) == Mode::Disabled) continue;
          if (deps.pipeline && !deps.pipeline->is_current (job.tooltip.generation)) {
             core::log::ocr.event ("analysis_discarded", {
                { "reason", "stale_generation" },
@@ -230,8 +333,10 @@ struct Controller::Impl
             { "generation", std::to_string (job.tooltip.generation) },
             { "item_id", lookup.item_id },
             { "request_id", lookup.request_id },
+            { "capture_backend", std::string { capture::backend_name (job.tooltip.backend) } },
             { "comps", std::to_string (lookup.pricing.sample_size) },
             { "confidence", lookup.pricing.confidence },
+            { "elapsed_ms", std::to_string (analysis_ms) },
          });
          persist_find (lookup);
          {
@@ -244,8 +349,7 @@ struct Controller::Impl
             [guard, lookup = std::move (lookup), rect = job.tooltip.rect,
              generation = job.tooltip.generation] () mutable {
                if (!guard || !guard->impl_->deps.overlay) return;
-               // overlay:mode disabled (or the toggle_overlay hotkey): the
-               // analysis still ran and still persisted, it just isn't drawn.
+               if (!guard->impl_->authenticated.load ()) return;
                if (guard->impl_->mode.load () == Mode::Disabled) return;
                if (guard->impl_->deps.pipeline
                    && !guard->impl_->deps.pipeline->is_current (generation)) return;
@@ -299,7 +403,8 @@ struct Controller::Impl
       while (mouse_running.load (std::memory_order_relaxed)) {
          std::this_thread::sleep_for (std::chrono::milliseconds (k_mouse_poll_ms));
 
-         if (mode.load () != Mode::Auto) {
+         if (!authenticated.load (std::memory_order_relaxed)
+             || mode.load () != Mode::Auto) {
             already_fired = false;
             continue;
          }
@@ -338,25 +443,44 @@ struct Controller::Impl
       }
    }
 
-   void persist_find (const api::TooltipLookup& lookup) const
+   void persist_find (const api::TooltipLookup& lookup)
    {
       if (!deps.db) return;
+      std::int64_t active_session = 0;
+      {
+         std::lock_guard lk { session_lock };
+         active_session = session_id;
+      }
+      if (active_session == 0) return;
       try {
+         nlohmann::json attrs {
+            { "item_id", lookup.item_id },
+            { "quantity", lookup.quantity },
+            { "rolls", nlohmann::json::array () },
+         };
+         for (const auto& roll : lookup.rolls) {
+            attrs ["rolls"].push_back ({
+               { "attribute_id", roll.attribute_id },
+               { "formatted_value", roll.formatted_value },
+               { "roll_percentile", roll.roll_percentile },
+            });
+         }
          SQLite::Statement ins { deps.db->sqlite (), R"sql(
             INSERT INTO item_finds (
-               found_at, canonical_name, locres_hash, rarity,
+               session_id, found_at, canonical_name, locres_hash, rarity,
                attrs_json, market_price, vendor_price, fingerprint
             ) VALUES (
-               unixepoch (), ?, '', ?, ?, ?, ?, ?
+               ?, unixepoch (), ?, '', ?, ?, ?, ?, ?
             )
          )sql" };
 
-         ins.bind (1, lookup.canonical_name);
-         ins.bind (2, lookup.rarity);
-         ins.bind (3, lookup.raw.dump ());
-         ins.bind (4, static_cast<long long> (lookup.pricing.median));
-         ins.bind (5, static_cast<long long> (lookup.utility.vendor_value));
-         ins.bind (6, lookup.canonical_name);   // fingerprint placeholder
+         ins.bind (1, active_session);
+         ins.bind (2, lookup.canonical_name);
+         ins.bind (3, lookup.rarity);
+         ins.bind (4, attrs.dump ());
+         ins.bind (5, static_cast<long long> (lookup.pricing.median));
+         ins.bind (6, static_cast<long long> (lookup.utility.vendor_value));
+         ins.bind (7, fingerprint_for (lookup));
          ins.exec ();
       } catch (const std::exception& e) {
          core::Logger::warn ("controller: item_finds insert failed: {}", e.what ());
@@ -387,6 +511,7 @@ Controller::Controller (Dependencies deps, QObject* parent)
 
    if (impl_->deps.pipeline) {
       impl_->deps.pipeline->set_language (ocr::family_of (impl_->game_language));
+      impl_->sync_pipeline ();
    }
    core::Logger::info ("controller: game language '{}' (ocr family '{}')",
       impl_->game_language,
@@ -402,21 +527,9 @@ Controller::Controller (Dependencies deps, QObject* parent)
             if (!self) return;
             QMetaObject::invokeMethod (self, [self, ev] {
                if (!self) return;
-               const bool fresh = !self->impl_->has_live_anchor
-                  || self->impl_->live_anchor.generation != ev.generation;
-
                self->impl_->live_anchor     = ev;
                self->impl_->has_live_anchor = true;
                self->impl_->apply_anchor ();
-
-               // A newly acquired region: put the skeleton up now rather than
-               // leaving the screen empty until OCR and the API return. Only
-               // on a generation change, or the 120 Hz follow would re-post it
-               // on every tick.
-               if (fresh && self->impl_->mode.load () != Mode::Disabled
-                   && self->impl_->deps.overlay) {
-                  self->impl_->deps.overlay->present_loading ();
-               }
             }, Qt::QueuedConnection);
          });
 
@@ -435,9 +548,54 @@ Controller::Controller (Dependencies deps, QObject* parent)
    impl_->start_analysis_worker ();
 }
 
-Controller::~Controller () = default;
+Controller::~Controller ()
+{
+   stop ();
+   impl_->end_session ();
+}
 
 Mode Controller::mode () const noexcept { return impl_->mode.load (); }
+
+void Controller::set_authenticated (bool authenticated, std::string principal)
+{
+   const bool was_authenticated = impl_->authenticated.load ();
+   bool same_account = false;
+   {
+      std::lock_guard lk { impl_->session_lock };
+      same_account = principal == impl_->account_id;
+   }
+   if (was_authenticated == authenticated && (!authenticated || same_account)) return;
+
+   if (!authenticated) {
+      impl_->authenticated.store (false);
+      impl_->sync_pipeline ();
+      impl_->end_session ();
+      return;
+   }
+
+   // Treat an account switch as a complete sign-out boundary. This cancels
+   // old bearer requests and invalidates the current OCR generation before
+   // the new account is allowed to capture or persist anything.
+   if (was_authenticated && !same_account) {
+      impl_->authenticated.store (false);
+      impl_->sync_pipeline ();
+      impl_->end_session ();
+   }
+
+   impl_->start_session (std::move (principal));
+   impl_->authenticated.store (true);
+   impl_->sync_pipeline ();
+}
+
+void Controller::stop ()
+{
+   if (!impl_) return;
+   impl_->authenticated.store (false, std::memory_order_relaxed);
+   impl_->sync_pipeline ();
+   impl_->stop_analysis_worker ();
+   impl_->stop_mouse_watcher ();
+   impl_->end_session ();
+}
 
 void Controller::set_configured_mode (Mode m)
 {
@@ -450,6 +608,7 @@ void Controller::set_configured_mode (Mode m)
    if (impl_->mode.load () == m) return;
 
    impl_->mode.store (m);
+   impl_->sync_pipeline ();
    core::Logger::info ("controller: overlay mode → {}", mode_name (m));
 
    // Leaving Auto/Manual for Disabled has to take down whatever is on
@@ -555,7 +714,8 @@ core::Result<void> Controller::rebind_hotkey (std::string action, std::string ac
 void Controller::action_scan_now ()
 {
    QMetaObject::invokeMethod (this, [this] {
-      if (impl_->deps.pipeline) {
+      if (impl_->authenticated.load ()
+          && impl_->mode.load () != Mode::Disabled && impl_->deps.pipeline) {
          core::Logger::info ("hotkey: scan_now");
          impl_->deps.pipeline->request_immediate_scan ();
       }
@@ -567,6 +727,7 @@ void Controller::action_toggle_mode ()
    QMetaObject::invokeMethod (this, [this] {
       const Mode next = (impl_->mode.load () == Mode::Auto) ? Mode::Manual : Mode::Auto;
       impl_->mode.store (next);
+      impl_->sync_pipeline ();
       core::Logger::info ("hotkey: mode → {}", mode_name (next));
       emit modeChanged (next);
    }, Qt::QueuedConnection);
@@ -612,6 +773,7 @@ void Controller::action_toggle_overlay ()
       }
 
       impl_->mode.store (next);
+      impl_->sync_pipeline ();
       core::Logger::info ("hotkey: overlay → {}", mode_name (next));
 
       if (next == Mode::Disabled && impl_->deps.overlay) impl_->deps.overlay->clear ();
@@ -701,6 +863,9 @@ void Controller::on_window_event (const core::WindowEvent& ev)
 
 void Controller::on_tooltip (const ocr::RecognizedTooltip& rt)
 {
+   if (!impl_->authenticated.load (std::memory_order_relaxed)
+       || impl_->mode.load (std::memory_order_relaxed) == Mode::Disabled) return;
+
    {
       QPointer<Controller> self { this };
       QMetaObject::invokeMethod (this, [self] {

@@ -5,16 +5,12 @@
 #include <gv/ui/placement.h>
 #include <gv/ui/screen.h>
 
-#include <QTimer>
-#include <QAbstractAnimation>
-#include <QColor>
-#include <QImage>
 #include <QEasingCurve>
+#include <QImage>
 #include <QPainter>
-#include <QPen>
 #include <QPaintEvent>
-#include <QElapsedTimer>
 #include <QPointer>
+#include <QTimer>
 #include <QVariantAnimation>
 #include <QWidget>
 
@@ -27,6 +23,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <optional>
 
 namespace gv::ui {
 
@@ -36,11 +33,6 @@ namespace {
 
    constexpr int k_grace_ms = 40;    // reserved for future soft-loss signals
    constexpr int k_visual_align_up_css = 5; // ignore top ornament for alignment
-
-   // Floor on how long the loading skeleton stays up once shown. Purely a
-   // perception number: below roughly this, the spinner's whole life is
-   // read as a flicker rather than as the overlay working.
-   constexpr qint64 k_loading_min_ms = 1000;
 
    QPoint cursor_physical ()
    {
@@ -99,17 +91,6 @@ namespace {
                update ();
             });
 
-         // One turn a second, forever, but only while a spinner box is set.
-         spin_.setDuration (1000);
-         spin_.setStartValue (0.0);
-         spin_.setEndValue (360.0);
-         spin_.setLoopCount (-1);
-         QObject::connect (&spin_, &QVariantAnimation::valueChanged,
-            this, [this] (const QVariant& value) {
-               spin_angle_ = value.toReal ();
-               if (!spinner_.isEmpty ()) update ();
-            });
-
          hide ();
       }
 
@@ -154,29 +135,6 @@ namespace {
          if (animate) enter_.start ();
       }
 
-      // The moving part of the loading indicator, drawn natively over the
-      // still capture. Re-photographing the page at 20 fps to animate a CSS
-      // spinner cost a full WebView2 present + PNG encode/decode per frame
-      // and still stuttered; the ring is in the bitmap already, so only the
-      // arc has to move, and a QPainter can do that at repaint rate for
-      // nothing.
-      //
-      // `box` is a fraction of this window, so it survives every scale the
-      // card is rendered at. A null box stops the animation.
-      void set_spinner (const QRectF& box)
-      {
-         if (box.isEmpty ()) {
-            spin_.stop ();
-            const bool had = !spinner_.isEmpty ();
-            spinner_ = {};
-            if (had && isVisible ()) update ();
-            return;
-         }
-
-         spinner_ = box;
-         if (spin_.state () != QAbstractAnimation::Running) spin_.start ();
-      }
-
       void move_physical (const QPoint& position)
       {
          screen::move (windowHandle (), position);
@@ -211,35 +169,12 @@ namespace {
          painter.scale (scale, scale);
          painter.translate (-origin);
          painter.drawImage (rect (), image_);
-
-         if (spinner_.isEmpty ()) return;
-
-         // Inside the same transform, so the arc rides the enter animation
-         // with the card instead of sitting still while the card slides.
-         const QRectF box {
-            spinner_.x () * width (),  spinner_.y () * height (),
-            spinner_.width () * width (), spinner_.height () * height (),
-         };
-         const qreal thickness = qMax (1.5, box.width () / 5.5);
-
-         painter.setCompositionMode (QPainter::CompositionMode_SourceOver);
-         painter.setRenderHint (QPainter::Antialiasing, true);
-         painter.setBrush (Qt::NoBrush);
-         painter.setPen (QPen (QColor (246, 196, 83), thickness, Qt::SolidLine, Qt::RoundCap));
-
-         // Qt angles are sixteenths of a degree, counter-clockwise.
-         painter.drawArc (box.adjusted (thickness / 2, thickness / 2,
-                                        -thickness / 2, -thickness / 2),
-                          static_cast<int> (-spin_angle_ * 16), -100 * 16);
       }
 
    private:
-      QImage  image_;
-      QRectF  spinner_;          // fraction of the window; empty = no spinner
-      qreal   spin_angle_ = 0.0;
-      qreal   opacity_ = 0.9;
+      QImage image_;
+      qreal opacity_ = 0.9;
       QVariantAnimation enter_;
-      QVariantAnimation spin_;
       qreal enter_progress_ = 0.0;
    };
 
@@ -247,6 +182,14 @@ namespace {
 
 struct AugmentView::Impl
 {
+   struct PendingPresentation {
+      gv::api::TooltipLookup lookup;
+      QRect game;
+      QRect anchor;
+      bool animate = true;
+   };
+
+   AugmentView*                  owner = nullptr;
    std::unique_ptr<WebviewHost> host;
    std::unique_ptr<SnapshotWindow> snapshot;
    std::function<void ()>       on_failed;
@@ -256,6 +199,7 @@ struct AugmentView::Impl
    std::uint64_t pending_seq = 0;
    bool          warm        = false;
    bool          prewarming  = false;
+   std::optional<PendingPresentation> waiting;
 
    // Legacy lookup-driven placement (present ()).
    QRect legacy_game;
@@ -264,24 +208,7 @@ struct AugmentView::Impl
    // Anchoring (anchoring.md §7): card follows the anchored tooltip at
    // presenter rate; anchor-lost starts the grace before hiding.
    bool   anchored = false;
-   // A real analysis has been rendered for this hover, so the loading
-   // skeleton must not come back until the next anchor.
-   bool   showing_result = false;
-
-   // The loading card is a still frame: the renderer captures one PNG and a
-   // CSS animation inside it is frozen at whatever moment the shutter fell,
-   // so the spinner sat there motionless. Re-capture on a timer while the
-   // skeleton is up and it turns. Cheap because it only runs for the few
-   // hundred ms between "a tooltip is anchored" and "the analysis landed",
-   // and only for the small skeleton card.
-   bool          loading = false;
-   QElapsedTimer loading_since;
-
-   // Where the page put its spinner ring, as a fraction of the window. The
-   // ring itself is baked into the capture; the host animates only the arc.
-   QRectF        spinner_box;
    bool   sized    = false;    // css size handshake completed
-   bool   shown    = false;    // window currently revealed
    QRect  game;                // physical screen px
    QPoint offset;              // tooltip top-left minus cursor
    QSize  tip;                 // anchored tooltip size
@@ -316,18 +243,28 @@ struct AugmentView::Impl
    // The card is as tall as its content, and a full analysis on a short
    // window (or at a high overlay:scale) runs off the bottom — the placement
    // clamp can only pin it to an edge, it can't make it fit. Shrink
-   // uniformly instead so the whole card stays readable and on screen.
-   qreal fitted_scale (const QRect& area) const
+   // uniformly instead so the whole card stays on screen.
+   qreal fitted_scale (const QRect& area, const QRect& anchor = {}) const
    {
       const qreal wanted = screen::scale_at (area.center ()) * layout.scale;
+      const QRect view = viewport (area);
+      const bool attached = layout.align == Layout::Align::Attached && !anchor.isEmpty ();
+      const QSize available = attached
+         ? placement::attached_space (view, anchor, 0)
+         : view.size ();
+      const QSize footprint {
+         css_w + 2 * pad_css + (attached ? 12 : 0),
+         css_h + 2 * pad_css,
+      };
       return wanted * placement::fit (
-         viewport (area), QSize { css_w, css_h }, 2 * pad_css, wanted);
+         QRect { QPoint {}, available }, footprint, 0, wanted);
    }
 
    QTimer follow;              // 120 Hz reposition
    QTimer grace;
 
    void on_message (std::string_view text);
+   QRect current_anchor () const;
    void place_legacy (int w, int h);
    void place_anchored ();
    QRect anchored_rect () const;
@@ -344,18 +281,13 @@ struct AugmentView::Impl
    void conceal ()
    {
       host->post_json (json { { "type", "clear" } }.dump ());
-      if (snapshot) {
-         snapshot->set_spinner ({});
-         snapshot->clear ();
-      }
-      shown   = false;
-      loading = false;
-      loading_since.invalidate ();
+      if (snapshot) snapshot->clear ();
    }
 };
 
 AugmentView::AugmentView () : impl_ (std::make_unique<Impl> ())
 {
+   impl_->owner = this;
    impl_->follow.setInterval (8);
 
    QObject::connect (&impl_->follow, &QTimer::timeout, [impl = impl_.get ()] {
@@ -414,7 +346,13 @@ void AugmentView::Impl::prewarm ()
 {
    if (warm) return;
 
-   warm        = true;
+   warm = true;
+   if (waiting.has_value ()) {
+      auto pending = std::move (*waiting);
+      waiting.reset ();
+      owner->present (pending.lookup, pending.game, pending.anchor, pending.animate);
+      return;
+   }
    prewarming  = true;
    pending_seq = ++seq;
    host->post_json (warmup_message (pending_seq).dump ());
@@ -434,7 +372,6 @@ void AugmentView::anchor_shown (const QRect& game, const QPoint& offset,
    impl->pinned_y = pinned_y;
    impl->pin      = pin;
 
-   if (!impl->anchored) impl->showing_result = false;
    impl->anchored = true;
 }
 
@@ -461,46 +398,16 @@ void AugmentView::present (const gv::api::TooltipLookup& lookup,
    auto* impl = impl_.get ();
 
    if (!impl->host || !impl->host->ready ()) {
-      core::Logger::debug ("augment: present before webview ready dropped");
+      impl->waiting = Impl::PendingPresentation { lookup, game, anchor, animate };
+      core::Logger::debug ("augment: queued render until WebView2 is ready");
       return;
    }
 
-   // A spinner that appears and vanishes inside a hundred milliseconds reads
-   // as a glitch rather than as work: the eye registers the arrival and the
-   // departure as one flicker. Holding the skeleton for a beat makes a fast
-   // answer feel deliberate. The analysis is already in hand — this delays
-   // only the paint, and only when the paint would otherwise strobe.
-   if (impl->loading && impl->loading_since.isValid ()) {
-      const auto held = impl->loading_since.elapsed ();
-      if (held < k_loading_min_ms) {
-         const auto for_seq = impl->seq;
-         auto       held_lookup = lookup;
-
-         QTimer::singleShot (static_cast<int> (k_loading_min_ms - held), &impl->follow,
-            [this, for_seq, held_lookup = std::move (held_lookup), game, anchor, animate] {
-               // The hover moved on, or a newer render already won the slot.
-               if (impl_->seq != for_seq || !impl_->loading) return;
-
-               impl_->loading_since.invalidate ();
-               present (held_lookup, game, anchor, animate);
-            });
-         return;
-      }
-   }
-
-   // A skeleton already on screen means this render is a content swap, not
-   // an arrival: replaying the enter animation would make the card fly in a
-   // second time over itself.
-   const bool was_loading = impl->loading;
-
    impl->pending_seq    = ++impl->seq;
-   impl->showing_result = true;
-   impl->loading        = false;
-   impl->loading_since.invalidate ();
    impl->prewarming     = false;
    impl->legacy_game    = game;
    impl->legacy_anchor = anchor;
-   impl->pending_animate = animate && !(was_loading && impl->shown);
+   impl->pending_animate = animate;
 
    // The page picks its own column count on auto, but only the host knows
    // how much room there is. Quote the budget in CSS px against the same
@@ -509,33 +416,24 @@ void AugmentView::present (const gv::api::TooltipLookup& lookup,
    auto options = impl->options;
    options.columns = impl->layout.columns == Layout::Columns::One ? "1"
                    : impl->layout.columns == Layout::Columns::Two ? "2"
+                   : impl->layout.columns == Layout::Columns::Three ? "3"
                                                                   : "auto";
 
    const QRect area = impl->anchored ? impl->viewport (impl->game)
                                      : impl->viewport (impl->legacy_game);
    const qreal css  = std::max (0.1, screen::scale_at (area.center ()) * impl->layout.scale);
-   options.budget_w = static_cast<int> (area.width ()  / css);
+   const QRect active_anchor = impl->anchored ? impl->current_anchor () : impl->legacy_anchor;
+   const QSize available = impl->layout.align == Layout::Align::Attached
+      && !active_anchor.isEmpty ()
+      ? placement::attached_space (area, active_anchor, static_cast<int> (12 * css))
+      : area.size ();
+   options.budget_w = static_cast<int> (available.width () / css);
    options.budget_h = static_cast<int> (area.height () / css);
 
    impl->host->post_json (
       augment::render_message (lookup, impl->pending_seq, options).dump ());
 
    core::Logger::info ("augment: render '{}' seq={}", lookup.canonical_name, impl->seq);
-}
-
-void AugmentView::present_loading ()
-{
-   auto* impl = impl_.get ();
-   if (!impl->host || !impl->host->ready ()) return;
-   if (impl->showing_result || impl->pending_seq != 0) return;
-
-   impl->pending_seq   = ++impl->seq;
-   impl->prewarming    = false;
-   impl->pending_animate = true;
-   impl->loading       = true;
-   impl->loading_since.start ();
-
-   impl->host->post_json (augment::loading_message (impl->pending_seq).dump ());
 }
 
 void AugmentView::set_layout (const Layout& layout)
@@ -565,7 +463,7 @@ void AugmentView::clear ()
    impl_->legacy_anchor = {};
    impl_->follow.stop ();
    impl_->grace.stop ();
-   impl_->loading = false;
+   impl_->waiting.reset ();
 
    if (impl_->host) {
       impl_->conceal ();
@@ -604,12 +502,6 @@ void AugmentView::Impl::on_message (std::string_view text)
       return;
    }
 
-   const auto& spin = msg ["spin"];
-   spinner_box = spin.is_object ()
-      ? QRectF { spin.value ("x", 0.0), spin.value ("y", 0.0),
-                 spin.value ("w", 0.0), spin.value ("h", 0.0) }
-      : QRectF {};
-
    css_w   = msg.value ("w", 0);       // bare card, no headroom
    css_h   = msg.value ("h", 0);
    pad_css = msg.value ("pad", 0);     // transparent animation headroom
@@ -637,10 +529,7 @@ void AugmentView::Impl::on_message (std::string_view text)
 // Input is disabled at the WebView2 controller and host-window layers, so the
 // geometry does not need to dodge the pointer.
 //
-// The returned rect is the WINDOW: the card grown by the transparent pad on
-// all sides (the card sits inset by pad, the enter transform animates in that
-// headroom).
-QRect AugmentView::Impl::anchored_rect () const
+QRect AugmentView::Impl::current_anchor () const
 {
    const QPoint c = cursor_physical () - game.topLeft ();
 
@@ -651,6 +540,13 @@ QRect AugmentView::Impl::anchored_rect () const
       : std::clamp (c.y () + offset.y (), 0,
          std::max (0, game.height () - tip.height ())));
 
+   return { tip_x, tip_y, tip.width (), tip.height () };
+}
+
+QRect AugmentView::Impl::anchored_rect () const
+{
+   const QRect anchor = current_anchor ();
+
    const int pad = static_cast<int> (pad_css * scale);
    const int gap = static_cast<int> (12 * scale);
    const QSize card {
@@ -659,8 +555,7 @@ QRect AugmentView::Impl::anchored_rect () const
    };
 
    // Clamp into what is actually visible, not the raw game rect.
-   const QRect view   = viewport (game);
-   const QRect anchor { tip_x, tip_y, tip.width (), tip.height () };
+   const QRect view = viewport (game);
 
    // overlay:offset_x / offset_y are authored in CSS px so the same nudge
    // means the same thing on every monitor. They apply to the corner modes
@@ -687,7 +582,7 @@ void AugmentView::Impl::place_anchored ()
    // overlay:scale rides on top of the monitor's DPI scale, so a player who
    // wants a bigger card gets one at every DPI — then shrunk if the result
    // wouldn't fit the game area vertically.
-   scale = fitted_scale (game);
+   scale = fitted_scale (game, current_anchor ());
 
    placed = anchored_rect ();
    capture_to_snapshot (placed);
@@ -700,7 +595,7 @@ void AugmentView::Impl::place_anchored ()
 
 void AugmentView::Impl::place_legacy (int w_css, int h_css)
 {
-   const qreal s   = fitted_scale (legacy_game);
+   const qreal s   = fitted_scale (legacy_game, legacy_anchor);
    const int   gap = static_cast<int> (12 * s);
    const int   w   = static_cast<int> (w_css * s);
    const int   h   = static_cast<int> (h_css * s);
@@ -748,8 +643,6 @@ void AugmentView::Impl::capture_to_snapshot (const QRect& rect)
          // The monitor's own ratio, not `scale` — see SnapshotWindow::present.
          snapshot->present (std::move (image), rect,
                             screen::scale_at (rect.center ()), capture_animate);
-         snapshot->set_spinner (loading ? spinner_box : QRectF {});
-         shown = true;
       });
    });
 }

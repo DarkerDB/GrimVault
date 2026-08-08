@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Added
+
+- Standalone SSL.com-signed Windows release and appcast pipeline.
+- Windows 10/11 compatibility matrix and display-scale E2E tests.
+- Branded GrimVault installer art and multi-resolution icons.
+- Gem-family recognition for analyzer socket observations.
+- Persistent onboarding, settings-sync, degraded-network, and reauthentication states.
+- Per-request transport and server-phase latency metrics.
+
+### Changed
+
+- Replaced the sealed-scroll app branding with the GrimVault appraisal-lens mark across the tray, executable, desktop shell, and installer.
+- Hardened WGC, DXGI, and GDI capture across resize, multi-monitor layouts, and runtime backend failures.
+- Isolated tokens, settings, sessions, and history by environment and account.
+- Hardened OAuth, TLS, retry, cancellation, retention, and fallback rendering.
+- Bounded repeated-hover analysis caching and response-size limits.
+- Fixed HTTP runtime teardown ordering and first-run overlay offsets.
+- Trust Windows-native certificate authorities from the OpenSSL HTTP backend.
+
 ## [0.0.2] - 2026-07-28
 
 ### Changed

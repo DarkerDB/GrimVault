@@ -48,6 +48,8 @@ struct AnalysisRoll {
    std::string           slot;
    double                value = 0.0;
    std::string           formatted_value;
+   std::string           gem;
+   std::string           gem_icon_url;
    std::optional<double> minimum;
    std::optional<double> maximum;
    std::optional<int>    roll_percentile;
@@ -67,6 +69,7 @@ struct GemChange {
 };
 
 struct GemPlan {
+   int                    sockets         = 0;
    std::vector<GemChange> changes;
    std::int64_t projected_value = 0;
    std::int64_t value_uplift    = 0;
@@ -78,6 +81,9 @@ struct GemPlan {
 
 struct GemOptimization {
    std::string            assumption;
+   std::vector<GemPlan>    plans;
+   // Parsed aliases for servers and callers that still use the original
+   // fixed one/two-plan contract.
    std::optional<GemPlan> one_socket;
    std::optional<GemPlan> two_socket;
    std::string            reason;
@@ -96,6 +102,26 @@ struct MarketAnalysis {
    std::optional<double>       days_supply;
    std::string                  price_stability;
    std::string        liquidity;
+};
+
+struct SimilarSaleRoll {
+   std::string attribute_id;
+   std::string label;
+   std::string formatted_value;
+};
+
+// One sold copy from the bounded nearest-neighbour set used by valuation.
+// `rolls` is additive to the original highlight pair so mixed client/server
+// versions keep rendering during rollout.
+struct SimilarSale {
+   std::int64_t                price        = 0;
+   std::int32_t                similarity   = 0;
+   std::string                 sold_at;
+   std::int64_t                age_seconds  = 0;
+   std::optional<std::int64_t> sale_seconds;
+   std::vector<SimilarSaleRoll> rolls;
+   std::string                 highlight_label;
+   std::string                 highlight_value;
 };
 
 // One quest that wants this item. `merchant_*` and the chain position are
@@ -145,6 +171,13 @@ struct ValueDriver {
    std::string  basis;
 };
 
+struct SourceAlternative {
+   std::string           id;
+   std::string           icon_url;
+   std::string           name;
+   std::optional<double> drop_rate;
+};
+
 struct SourceAnalysis {
    std::string           kind;
    std::string           heading;
@@ -155,6 +188,7 @@ struct SourceAnalysis {
    std::optional<double> drop_rate;
    std::optional<double> luck_drop_rate;
    std::optional<int>    luck;
+   std::vector<SourceAlternative> alternates;
 };
 
 struct TradeChatItem {
@@ -242,6 +276,7 @@ struct TooltipLookup {
    std::optional<int>             relative_percentile;
    std::optional<ValueDriver>     value_driver;
    MarketAnalysis                 market_analysis;
+   std::vector<SimilarSale>        similar_sales;
    std::optional<SourceAnalysis>  source_analysis;
    TradeChatAnalysis              trade_chat;
    UtilityAnalysis                utility;
@@ -276,10 +311,11 @@ struct SettingsBundle {
    struct Overlay {
       std::string  mode      = "automatic";
       std::string  alignment = "attached";
+      std::string  columns   = "auto";
       double       opacity   = 0.9;
       double       scale     = 1.0;
-      std::int32_t offset_x  = 0;
-      std::int32_t offset_y  = 0;
+      std::int32_t offset_x  = 20;
+      std::int32_t offset_y  = 20;
    };
 
    struct TooltipSections {
@@ -372,8 +408,8 @@ public:
    DDBClient (const DDBClient&)            = delete;
    DDBClient& operator= (const DDBClient&) = delete;
 
-   // POST /v2/grimvault/lookup. Sends the OCR text per contract §4.2, parses
-   // the response per §4.3. Cached locally for `cache_ttl`.
+   // POST /v2/grimvault/lookup. Personalized responses are partitioned by
+   // account and cached briefly so repeated hovers do not repeat a round trip.
    core::Result<TooltipLookup> lookup_tooltip (
       std::string_view raw_text,
       std::string_view language,
@@ -386,6 +422,8 @@ public:
       std::string_view raw_text,
       std::string_view language,
       float            confidence,
+      std::string_view capture_backend,
+      const std::unordered_map<std::string, std::string>& gems = {},
       std::chrono::seconds cache_ttl = std::chrono::seconds (180)
    );
 
@@ -396,15 +434,9 @@ public:
    // bundle. Source of truth for any key the server manages.
    core::Result<SettingsBundle> get_settings ();
 
-   // POST /diagnostics. Used by Diagnostics page's "send diagnostics" button.
-   core::Result<void> send_diagnostics (const nlohmann::json& payload);
-
-   // Stable Windows machine id (HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid).
-   static std::string machine_id ();
-
-   // One-shot curl_global_init / curl_global_cleanup. Call once per process.
-   static void global_init    ();
-   static void global_cleanup ();
+   // Abort current transfers. Safe to call from another thread and reusable;
+   // future requests are assigned a new cancellation generation.
+   void cancel_pending () noexcept;
 
 private:
    struct Impl;

@@ -45,10 +45,6 @@ public:
    void present (const gv::api::TooltipLookup& lookup,
                  const QRect& game, const QRect& anchor, bool animate = true);
 
-   // Skeleton card for the gap between "a tooltip is anchored" and "the
-   // analysis came back". Ignored once a real render for this hover has
-   // landed, so a late anchor tick can't flash the spinner back up.
-   void present_loading ();
    void clear ();
 
    // Anchoring (docs/architecture/anchoring.md §7): show the card beside

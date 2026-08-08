@@ -1,6 +1,5 @@
 #include <gv/core/env_resolver.h>
-
-#include <cstdlib>
+#include <gv/core/environment.h>
 
 namespace gv::core {
 
@@ -11,16 +10,6 @@ const EnvDef& env_for_name (std::string_view name)
    if (name == k_env_prod.name) return k_env_prod;
    return k_env_default;
 }
-
-namespace {
-
-   std::string getenv_or_empty (const char* name)
-   {
-      if (const char* v = std::getenv (name); v && *v) return std::string { v };
-      return {};
-   }
-
-} // namespace
 
 const EnvDef& resolve_active_env (std::vector<std::string>& argv)
 {
@@ -50,7 +39,7 @@ const EnvDef& resolve_active_env (std::vector<std::string>& argv)
    }
 
    // 2. Environment variable.
-   if (const auto v = getenv_or_empty ("GRIMVAULT_ENV"); !v.empty ()) {
+   if (const auto v = environment::get ("GRIMVAULT_ENV"); !v.empty ()) {
       return env_for_name (v);
    }
 
@@ -60,7 +49,7 @@ const EnvDef& resolve_active_env (std::vector<std::string>& argv)
 
 const EnvDef& resolve_active_env ()
 {
-   if (const auto v = getenv_or_empty ("GRIMVAULT_ENV"); !v.empty ()) {
+   if (const auto v = environment::get ("GRIMVAULT_ENV"); !v.empty ()) {
       return env_for_name (v);
    }
    return k_env_default;

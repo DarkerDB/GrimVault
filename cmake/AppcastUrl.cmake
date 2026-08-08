@@ -16,13 +16,24 @@ set (GRIMVAULT_APPCAST_PUBKEY "zqNoGIvc3ZHM3bzq59W7hUkseoIODaMd/nsXn42sXRU="
 if (NOT DEFINED GRIMVAULT_ENV)
    set (GRIMVAULT_ENV "prod")
 endif ()
+if (NOT DEFINED GRIMVAULT_CHANNEL)
+   set (GRIMVAULT_CHANNEL "stable")
+endif ()
+if (NOT GRIMVAULT_CHANNEL MATCHES "^(stable|beta)$")
+   message (FATAL_ERROR "GRIMVAULT_CHANNEL must be stable or beta")
+endif ()
+
+set (_GV_APPCAST_FILE "appcast.xml")
+if (GRIMVAULT_CHANNEL STREQUAL "beta")
+   set (_GV_APPCAST_FILE "appcast-beta.xml")
+endif ()
 
 if (GRIMVAULT_ENV STREQUAL "dev")
    set (_GV_APPCAST_DEFAULT "")
 elseif (GRIMVAULT_ENV STREQUAL "qa")
-   set (_GV_APPCAST_DEFAULT "https://katforge-releases.s3.us-west-2.amazonaws.com/grimvault/appcast-qa.xml")
+   set (_GV_APPCAST_DEFAULT "https://releases.katforge.com/grimvault/qa/${_GV_APPCAST_FILE}")
 else ()
-   set (_GV_APPCAST_DEFAULT "https://katforge-releases.s3.us-west-2.amazonaws.com/grimvault/appcast.xml")
+   set (_GV_APPCAST_DEFAULT "https://releases.katforge.com/grimvault/${_GV_APPCAST_FILE}")
 endif ()
 
 set (GRIMVAULT_APPCAST_URL "${_GV_APPCAST_DEFAULT}"
