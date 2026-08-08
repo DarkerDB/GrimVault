@@ -29,10 +29,10 @@ the result as an analysis card over the game window.
 - One authenticated analyze request returns the whole card atomically: canonical item, parsed roll vector, valuation, and context.
 - Similarity- and recency-weighted valuation from sold comparables, with quick-list guidance, active listings, trend, liquidity, median sale time, days of supply, roll-aware price stability, and confidence.
 - Per-roll quality, a market-relative percentile, and the strongest observed value driver measured against that roll's legal minimum.
-- Comparable sales drawn from the same bounded nearest-roll set the estimate uses, each with a localized highlight for that sale's strongest relevant roll.
+- Comparable sales drawn from the same bounded nearest-roll set the estimate uses, including each sale's complete localized roll vector.
 - Highest-valued legal one- and two-gem replacements, evaluated at the item's maximum enchanted ranges with socket fees included and already-detected gems left immutable.
 - Vendor value, quest turn-ins, recipes, adventure points, gear score, stack size, and market value per inventory slot.
-- Best-drop provenance with zero-luck and 500-luck rates, or merchant acquisition context for items that cannot be traded.
+- Best-drop provenance with zero-luck and 500-luck rates plus alternate sources, or merchant acquisition context for items that cannot be traded.
 - Recent trade-chat mentions of the hovered item from the last 14 days.
 
 **Account sync and entitlements**

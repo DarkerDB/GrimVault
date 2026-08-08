@@ -449,6 +449,19 @@ namespace {
          .luck_drop_rate = optional_number<double> (j, "luck_drop_rate"),
          .luck           = optional_number<int> (j, "luck"),
       };
+
+      with_array (j, "alternates", [&] (const nlohmann::json& alternatives) {
+         out->alternates.reserve (alternatives.size ());
+         for (const auto& alternative : alternatives) {
+            if (!alternative.is_object ()) continue;
+            out->alternates.push_back (SourceAlternative {
+               .id        = alternative.value ("id", ""),
+               .icon_url  = alternative.value ("icon_url", ""),
+               .name      = alternative.value ("name", ""),
+               .drop_rate = optional_number<double> (alternative, "drop_rate"),
+            });
+         }
+      });
    }
 
    TradeChatMessage parse_trade_chat_message (const nlohmann::json& j)
@@ -491,7 +504,7 @@ namespace {
       out.reserve (arr.size ());
       for (const auto& sale : arr) {
          if (!sale.is_object ()) continue;
-         out.push_back (SimilarSale {
+         SimilarSale parsed {
             .price        = integer_or_zero (sale, "price"),
             .similarity   = static_cast<std::int32_t> (integer_or_zero (sale, "similarity")),
             .sold_at      = sale.value ("sold_at", ""),
@@ -499,7 +512,21 @@ namespace {
             .sale_seconds = optional_number<std::int64_t> (sale, "sale_seconds"),
             .highlight_label = sale.value ("highlight_label", ""),
             .highlight_value = sale.value ("highlight_value", ""),
+         };
+         with_array (sale, "rolls", [&] (const nlohmann::json& rolls) {
+            parsed.rolls.reserve (rolls.size ());
+            for (const auto& roll : rolls) {
+               if (!roll.is_object ()) continue;
+               const auto label = roll.value ("label", "");
+               if (label.empty ()) continue;
+               parsed.rolls.push_back (SimilarSaleRoll {
+                  .attribute_id = roll.value ("attribute_id", ""),
+                  .label = label,
+                  .formatted_value = roll.value ("formatted_value", ""),
+               });
+            }
          });
+         out.push_back (std::move (parsed));
       }
    }
 

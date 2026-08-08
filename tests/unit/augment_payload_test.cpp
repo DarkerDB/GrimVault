@@ -99,6 +99,10 @@ TEST (AugmentPayload, CompleteAnalysisRendersPremiumSections)
       .sold_at = "2026-08-02T12:00:00Z",
       .age_seconds = 900,
       .sale_seconds = 1800,
+      .rolls = {
+         { .attribute_id = "magical_damage_bonus", .label = "Magic Damage Bonus", .formatted_value = "+4.8%" },
+         { .attribute_id = "knowledge", .label = "Knowledge", .formatted_value = "+3" },
+      },
       .highlight_label = "Magic Damage Bonus",
       .highlight_value = "+4.8%",
    });
@@ -137,6 +141,19 @@ TEST (AugmentPayload, CompleteAnalysisRendersPremiumSections)
       .drop_rate = 0.0284,
       .luck_drop_rate = 0.041,
       .luck = 500,
+      .alternates = {
+         gv::api::SourceAlternative {
+            .id = "id.monster.frost_wolf",
+            .icon_url = "https://cdn.example/frost-wolf",
+            .name = "Frost Wolf",
+            .drop_rate = 0.019,
+         },
+         gv::api::SourceAlternative {
+            .id = "id.monster.frost_skeleton",
+            .name = "Frost Skeleton",
+            .drop_rate = 0.012,
+         },
+      },
    };
    lookup.trade_chat.mentions_14d = 12;
    lookup.trade_chat.messages.push_back ({
@@ -204,9 +221,15 @@ TEST (AugmentPayload, CompleteAnalysisRendersPremiumSections)
    EXPECT_EQ (analysis ["similar_sales"][0]["sale_seconds"], 1800);
    EXPECT_EQ (analysis ["similar_sales"][0]["highlight_label"], "Magic Damage Bonus");
    EXPECT_EQ (analysis ["similar_sales"][0]["highlight_value"], "+4.8%");
+   EXPECT_EQ (analysis ["similar_sales"][0]["rolls"].size (), 2);
+   EXPECT_EQ (analysis ["similar_sales"][0]["rolls"][0]["attribute_id"], "magical_damage_bonus");
+   EXPECT_EQ (analysis ["similar_sales"][0]["rolls"][1]["formatted_value"], "+3");
    EXPECT_EQ (analysis ["value_driver"]["gold_contribution"], 117);
    EXPECT_EQ (analysis ["source"]["name"], "Frost Skeleton Footman");
    EXPECT_EQ (analysis ["source"]["luck_drop_rate"], 0.041);
+   ASSERT_EQ (analysis ["source"]["alternates"].size (), 2u);
+   EXPECT_EQ (analysis ["source"]["alternates"][0]["name"], "Frost Wolf");
+   EXPECT_EQ (analysis ["source"]["alternates"][0]["drop_rate"], 0.019);
    ASSERT_EQ (analysis ["rolls"].size (), 1u);
    EXPECT_EQ (analysis ["rolls"][0]["formatted_value"], "+4.1%");
    EXPECT_EQ (analysis ["rolls"][0]["minimum"], 3.0);
