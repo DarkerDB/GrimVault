@@ -190,14 +190,17 @@ RelWithDebInfo — the Debug preset's debug OpenCV makes detection ~10x slower.
 
 ### Switching env at runtime
 
-Each binary bakes a *default* env at compile time (set via
-`-DGRIMVAULT_ENV=dev|qa|prod`; `dev-run.ps1` defaults to `dev`). Override at
-runtime either way:
+Each binary bakes an env at compile time (set via
+`-DGRIMVAULT_ENV=dev|qa|prod`; `dev-run.ps1` defaults to `dev`). Development
+and QA builds can override it at runtime either way:
 
 ```powershell
 grimvault --env qa status
 $env:GRIMVAULT_ENV = "qa"; grimvault status
 ```
+
+Production builds ignore `--env`, `GRIMVAULT_ENV`, and `APP_ENV`. Their API,
+authentication, SPA, credential, data, and update environments remain `prod`.
 
 Host map:
 

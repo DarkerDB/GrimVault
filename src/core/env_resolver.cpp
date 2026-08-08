@@ -3,6 +3,29 @@
 
 namespace gv::core {
 
+namespace {
+
+std::string consume_cli_env_override (std::vector<std::string>& argv)
+{
+   for (std::size_t i = 0; i < argv.size (); ++i) {
+      if (argv [i].rfind ("--env=", 0) == 0) {
+         const auto name = argv [i].substr (6);
+         argv.erase (argv.begin () + static_cast<std::ptrdiff_t> (i));
+         return name;
+      }
+
+      if (argv [i] == "--env" && i + 1 < argv.size ()) {
+         const auto name = argv [i + 1];
+         argv.erase (argv.begin () + static_cast<std::ptrdiff_t> (i),
+                     argv.begin () + static_cast<std::ptrdiff_t> (i) + 2);
+         return name;
+      }
+   }
+   return {};
+}
+
+} // namespace
+
 const EnvDef& env_for_name (std::string_view name)
 {
    if (name == k_env_dev.name)  return k_env_dev;
@@ -13,42 +36,20 @@ const EnvDef& env_for_name (std::string_view name)
 
 const EnvDef& resolve_active_env (std::vector<std::string>& argv)
 {
-   // 1. --env <name> in argv.
-   for (std::size_t i = 0; i + 1 < argv.size (); ++i) {
-      if (argv [i] == "--env") {
-         const auto& name = argv [i + 1];
-         const auto& def  = env_for_name (name);
-         argv.erase (argv.begin () + static_cast<std::ptrdiff_t> (i),
-                     argv.begin () + static_cast<std::ptrdiff_t> (i) + 2);
-         return def;
-      }
-      // --env=<name> form
-      if (argv [i].rfind ("--env=", 0) == 0) {
-         const auto name = argv [i].substr (6);
-         const auto& def = env_for_name (name);
-         argv.erase (argv.begin () + static_cast<std::ptrdiff_t> (i));
-         return def;
-      }
-   }
-   // Also handle --env=<name> in the last position (loop above skips the last).
-   if (!argv.empty () && argv.back ().rfind ("--env=", 0) == 0) {
-      const auto name = argv.back ().substr (6);
-      const auto& def = env_for_name (name);
-      argv.pop_back ();
-      return def;
-   }
+   const auto requested = consume_cli_env_override (argv);
+   if (!k_runtime_env_overrides_enabled) return k_env_default;
+   if (!requested.empty ()) return env_for_name (requested);
 
-   // 2. Environment variable.
    if (const auto v = environment::get ("GRIMVAULT_ENV"); !v.empty ()) {
       return env_for_name (v);
    }
 
-   // 3. Compile-time default.
    return k_env_default;
 }
 
 const EnvDef& resolve_active_env ()
 {
+   if (!k_runtime_env_overrides_enabled) return k_env_default;
    if (const auto v = environment::get ("GRIMVAULT_ENV"); !v.empty ()) {
       return env_for_name (v);
    }

@@ -431,7 +431,12 @@ namespace {
          "grimvault " << gv::core::version::string
             << " (env: " << core::active_env ().name << ")\n"
          "\n"
-         "Usage: grimvault [--env <dev|qa|prod>] <command> [flags]\n"
+         "Usage: grimvault ";
+      if (core::k_runtime_env_overrides_enabled) {
+         std::cout << "[--env <dev|qa|prod>] ";
+      }
+      std::cout <<
+         "<command> [flags]\n"
          "\n"
          "Commands:\n"
          "  login             Sign in to DDB via the browser.\n"
@@ -442,11 +447,15 @@ namespace {
          "  settings          Print all locally synced settings (the addon's view).\n"
          "  settings get      GET /v2/grimvault/settings and print the server's view.\n"
          "  logs              Print the path of the log file.\n"
-         "  doctor            Run end-to-end diagnostics.\n"
-         "\n"
-         "Global flags:\n"
-         "  --env <name>      Override the active env (dev | qa | prod). Also\n"
-         "                    settable via GRIMVAULT_ENV.\n"
+         "  doctor            Run end-to-end diagnostics.\n";
+      if (core::k_runtime_env_overrides_enabled) {
+         std::cout <<
+            "\n"
+            "Global flags:\n"
+            "  --env <name>      Override the active env (dev | qa | prod). Also\n"
+            "                    settable via GRIMVAULT_ENV.\n";
+      }
+      std::cout <<
          "\n"
          "Run with no args from a window manager / Explorer to start GUI (tray) mode.\n";
    }

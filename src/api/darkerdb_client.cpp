@@ -285,6 +285,7 @@ namespace {
       out.canonical_name   = j.value ("canonical_name", "");
       out.display_name     = j.value ("display_name", out.canonical_name);
       out.rarity           = j.value ("rarity", "");
+      out.artifact_type    = j.value ("artifact_type", "");
       out.match_confidence = optional_number<double> (j, "confidence").value_or (0.0);
    }
 
