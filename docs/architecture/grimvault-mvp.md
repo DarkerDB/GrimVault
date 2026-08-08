@@ -155,7 +155,7 @@ No client secret. Reference: RFC 7636.
    ```
    https://darkerdb.com/oauth/authorize
       ?response_type=code
-      &client_id=grimvault-desktop
+      &client_id=grimvault
       &redirect_uri=http%3A%2F%2F127.0.0.1%3A<port>%2Fcallback
       &scope=grimvault.read%20grimvault.write
       &state=<state>
@@ -168,7 +168,7 @@ No client secret. Reference: RFC 7636.
 
    ```
    GET https://api.darkerdb.com/v1/oauth/authorize/validate
-      ?client_id=grimvault-desktop
+      ?client_id=grimvault
       &redirect_uri=http%3A%2F%2F127.0.0.1%3A<port>%2Fcallback
       &scope=grimvault.read%20grimvault.write
    ```
@@ -179,7 +179,7 @@ No client secret. Reference: RFC 7636.
    {
       "body": {
          "client": {
-            "id":             "grimvault-desktop",
+            "id":             "grimvault",
             "name":           "GrimVault",
             "is_first_party": true,
             "scopes": [
@@ -200,7 +200,7 @@ No client secret. Reference: RFC 7636.
    Cookie: <katforge session cookie>
 
    {
-      "client_id":             "grimvault-desktop",
+      "client_id":             "grimvault",
       "redirect_uri":          "http://127.0.0.1:<port>/callback",
       "response_type":         "code",
       "state":                 "<state>",
@@ -236,7 +236,7 @@ No client secret. Reference: RFC 7636.
    grant_type=authorization_code
    &code=<code>
    &redirect_uri=http://127.0.0.1:<port>/callback
-   &client_id=grimvault-desktop
+   &client_id=grimvault
    &code_verifier=<code_verifier>
    ```
 
@@ -278,7 +278,7 @@ Content-Type: application/x-www-form-urlencoded
 
 grant_type=refresh_token
 &refresh_token=<refresh_token>
-&client_id=grimvault-desktop
+&client_id=grimvault
 ```
 
 Refresh-token rotation is **required by this contract**: each refresh
@@ -308,7 +308,7 @@ Content-Type: application/x-www-form-urlencoded
 
 token=<refresh_token>
 &token_type_hint=refresh_token
-&client_id=grimvault-desktop
+&client_id=grimvault
 ```
 
 Then locally: delete keychain entry, clear in-memory copies, set state
@@ -431,7 +431,7 @@ Required claims:
 | `iat` | int (epoch seconds) | Issued-at. |
 | `nbf` | int (epoch seconds) | Not-before. Equal to `iat` in practice. |
 | `scope` | string | Space-separated, e.g. `"grimvault.read grimvault.write"`. |
-| `client_id` | string | Echoes the OAuth `client_id` (e.g. `grimvault-desktop`). |
+| `client_id` | string | Echoes the OAuth `client_id` (e.g. `grimvault`). |
 | `jti` | string (ULID) | Unique token id. Required for the denylist check below. |
 
 **Why `sub` is `player_id` and not `user_id`.** KATforge models
@@ -592,7 +592,7 @@ live server-side so the client stays language-agnostic.
 
 ```json
 {
-   "client_id":      "grimvault-desktop",
+   "client_id":      "grimvault",
    "client_version": "1.2.3",
    "captured_at":    "2026-05-23T14:11:09Z",
    "language":       "en",
@@ -1054,7 +1054,7 @@ States and content:
 
 | State | Source | Content shown |
 |---|---|---|
-| **Connected** | `GET api.darkerdb.com/v1/oauth/grants/grimvault-desktop` returns 200 | "GrimVault is connected" with `created_at` timestamp. Client metadata if available: `last_used_at`, `client_version`. Actions: **Disconnect** (calls `POST /v1/oauth/grants/grimvault-desktop/revoke`); **Manage connected apps** link to `/account/connected-apps`. No Download CTA. |
+| **Connected** | `GET api.darkerdb.com/v1/oauth/grants/grimvault` returns 200 | "GrimVault is connected" with `created_at` timestamp. Client metadata if available: `last_used_at`, `client_version`. Actions: **Disconnect** (calls `POST /v1/oauth/grants/grimvault/revoke`); **Manage connected apps** link to `/account/connected-apps`. No Download CTA. |
 | **Not connected** | same call returns 404 | "GrimVault is not connected. Install the desktop app to get started." Actions: **Download GrimVault** (links to releases). No Disconnect, no Manage link. |
 
 The `client_version` and `last_used_at` fields are best-effort: the
@@ -1103,29 +1103,35 @@ DNS: the `darkerdb.com` zone is owned by the KATforge AWS account
 and managed via Terraform under `infra/terraform/dns/`. DevOps owns
 the records; per-env CNAMEs above are the contract.
 
-### 10.2 OAuth client ids
+### 10.2 OAuth client id
 
-| Env | `client_id` |
-|---|---|
-| `dev` | `grimvault-desktop-dev` |
-| `qa` | `grimvault-desktop-qa` |
-| `prod` | `grimvault-desktop` |
+A single OAuth client_id `grimvault` is used across all three envs.
+Per-env separation lives in the API host (dev / qa / prod) and the
+KATforge realm that owns the client registration, not in the client_id
+itself.
 
-Per-env `client_id` naming uses the `<base>-<env>` suffix pattern with
-prod as the unsuffixed canonical id. This keeps the prod id short and
-makes non-prod ids self-describing in logs. Reserved for future client
-families: `grimvault-mobile`, `grimvault-mobile-dev`, etc.
+Rationale: this is a PKCE + first-party + loopback-redirect client.
+There is no client secret to protect, no third-party trust boundary,
+and the loopback wildcard means redirect-URI separation gives us
+nothing useful. Per-env client_ids would only matter for incident-
+response isolation (revoke `grimvault-dev` without touching `grimvault`
+in prod) — until that need actually surfaces, the simpler single-id
+model wins.
+
+Reserved for future client families: `grimvault-mobile` (separate
+client_id because mobile is a separate codebase + signing identity, not
+because of env separation).
 
 ### 10.3 Client config and shared invariants
 
 Per-env config in the desktop binary lives behind a single compile-time
-flag, `GRIMVAULT_ENV` (default `prod`). It selects the SPA host, API
-host, and `client_id` from a baked-in table. No runtime env var
-override in the shipped build; dev builds get a runtime `--env` flag
-for engineers.
+flag, `GRIMVAULT_ENV` (default `prod`). It selects the SPA host and API
+host from a baked-in table; `client_id` is a constant `grimvault` and
+does not vary. No runtime env var override in the shipped build; dev
+builds get a runtime `--env` flag for engineers.
 
 Loopback redirect URI is the same shape in every env: `http://127.0.0.1:<port>/callback`.
-DevOps registers each `client_id` with the appropriate KATforge realm
+DevOps registers the `grimvault` client with each KATforge realm
 allowing wildcard loopback ports per RFC 8252 §7.3.
 
 Scopes are identical across envs: `grimvault.read`, `grimvault.write`,
