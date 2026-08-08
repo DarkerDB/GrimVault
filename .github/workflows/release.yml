@@ -108,8 +108,8 @@ jobs:
            run: |
               $preset = "release-windows-$env:TARGET_ENV"
               cmake --preset $preset `
-                 -DGRIMVAULT_CHANNEL=$env:CHANNEL `
-                 -DGRIMVAULT_VERSION=$env:RELEASE_VERSION
+                 "-DGRIMVAULT_CHANNEL=$env:CHANNEL" `
+                 "-DGRIMVAULT_VERSION=$env:RELEASE_VERSION"
 
          - name: Build
            shell: pwsh
