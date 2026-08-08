@@ -104,15 +104,22 @@ struct MarketAnalysis {
    std::string        liquidity;
 };
 
+struct SimilarSaleRoll {
+   std::string attribute_id;
+   std::string label;
+   std::string formatted_value;
+};
+
 // One sold copy from the bounded nearest-neighbour set used by valuation.
-// Attributes stay server-side. One localized highlight describes the sale's
-// strongest relevant roll without sending or rendering the whole stat list.
+// `rolls` is additive to the original highlight pair so mixed client/server
+// versions keep rendering during rollout.
 struct SimilarSale {
    std::int64_t                price        = 0;
    std::int32_t                similarity   = 0;
    std::string                 sold_at;
    std::int64_t                age_seconds  = 0;
    std::optional<std::int64_t> sale_seconds;
+   std::vector<SimilarSaleRoll> rolls;
    std::string                 highlight_label;
    std::string                 highlight_value;
 };
@@ -164,6 +171,13 @@ struct ValueDriver {
    std::string  basis;
 };
 
+struct SourceAlternative {
+   std::string           id;
+   std::string           icon_url;
+   std::string           name;
+   std::optional<double> drop_rate;
+};
+
 struct SourceAnalysis {
    std::string           kind;
    std::string           heading;
@@ -174,6 +188,7 @@ struct SourceAnalysis {
    std::optional<double> drop_rate;
    std::optional<double> luck_drop_rate;
    std::optional<int>    luck;
+   std::vector<SourceAlternative> alternates;
 };
 
 struct TradeChatItem {

@@ -9,7 +9,6 @@
 
 #include <array>
 #include <filesystem>
-#include <fstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -72,13 +71,23 @@ TEST (ClientCompatibilityE2E, EveryBundledLanguageModelLoadsAndRuns)
    }
 }
 
-TEST (ClientCompatibilityE2E, CapturedEnglishCorpusRunsAcrossDisplayScales)
+TEST (ClientCompatibilityE2E, CapturedEnglishTooltipRunsAcrossDisplayScales)
 {
    const fs::path root { GRIMVAULT_TEST_SOURCE_DIR };
-   const auto manifest = root / "tools/ocr-train/real-train.tsv";
-   const auto crops = root / "tools/ocr-train/real-crops";
-   if (!fs::exists (manifest) || !fs::exists (crops))
-      GTEST_SKIP () << "local labelled OCR corpus not present";
+   const auto fixture = root / "tests/fixtures/lyre_socketed_stats.png";
+   ASSERT_TRUE (fs::exists (fixture));
+
+   const cv::Mat tooltip = cv::imread (fixture.string (), cv::IMREAD_UNCHANGED);
+   ASSERT_FALSE (tooltip.empty ());
+
+   // Real captured lines exercise ordinary, percentage, and gemmed blue
+   // rolls without depending on the developer-only OCR training corpus.
+   const std::array lines {
+      cv::Rect { 145, 88, 230, 31 },
+      cv::Rect { 135, 124, 250, 31 },
+      cv::Rect { 80, 163, 350, 31 },
+      cv::Rect { 62, 271, 390, 35 },
+   };
 
    gv::ocr::PaddleRecognizer recognizer;
    recognizer.set_family (LanguageFamily::English);
@@ -87,31 +96,18 @@ TEST (ClientCompatibilityE2E, CapturedEnglishCorpusRunsAcrossDisplayScales)
       root / "models/paddle/en/font_dict.txt");
    ASSERT_TRUE (initialized.has_value ()) << initialized.error ().message;
 
-   std::ifstream rows { manifest };
-   ASSERT_TRUE (rows.good ());
-
-   std::string row;
-   int checked = 0;
-   while (std::getline (rows, row) && checked < 24) {
-      const auto tab = row.find ('\t');
-      if (tab == std::string::npos) continue;
-
-      const auto path = crops / fs::path { row.substr (0, tab) };
-      cv::Mat original = cv::imread (path.string (), cv::IMREAD_UNCHANGED);
-      if (original.empty ()) continue;
-
+   for (const auto& bounds : lines) {
+      const cv::Mat original = tooltip (bounds).clone ();
       for (const double scale : { 1.0, 1.25, 1.5, 2.0 }) {
-         SCOPED_TRACE (path.string () + " scale=" + std::to_string (scale));
+         SCOPED_TRACE (fixture.string () + " y=" + std::to_string (bounds.y)
+                       + " scale=" + std::to_string (scale));
          cv::Mat sample;
          cv::resize (original, sample, {}, scale, scale, cv::INTER_LINEAR);
          const auto result = recognizer.read (sample);
          ASSERT_TRUE (result.has_value ()) << result.error ().message;
          EXPECT_FALSE (result->text.empty ());
       }
-      ++checked;
    }
-
-   EXPECT_EQ (checked, 24);
 }
 
 TEST (ClientCompatibilityE2E, GemRecognitionSurvivesDisplayScaling)

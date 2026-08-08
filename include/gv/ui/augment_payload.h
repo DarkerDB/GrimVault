@@ -155,6 +155,14 @@ inline nlohmann::json analysis_entity (const gv::api::TooltipLookup& lookup,
    }
    nlohmann::json similar_sales = nlohmann::json::array ();
    for (const auto& sale : lookup.similar_sales) {
+      nlohmann::json sale_rolls = nlohmann::json::array ();
+      for (const auto& roll : sale.rolls) {
+         sale_rolls.push_back ({
+            { "attribute_id", roll.attribute_id },
+            { "label", roll.label },
+            { "formatted_value", roll.formatted_value },
+         });
+      }
       nlohmann::json row {
          { "price", sale.price },
          { "similarity", sale.similarity },
@@ -162,6 +170,7 @@ inline nlohmann::json analysis_entity (const gv::api::TooltipLookup& lookup,
          { "age_seconds", sale.age_seconds },
          { "highlight_label", sale.highlight_label },
          { "highlight_value", sale.highlight_value },
+         { "rolls", std::move (sale_rolls) },
       };
       if (sale.sale_seconds) row ["sale_seconds"] = *sale.sale_seconds;
       similar_sales.push_back (std::move (row));
@@ -314,6 +323,18 @@ inline nlohmann::json analysis_entity (const gv::api::TooltipLookup& lookup,
       }
       if (lookup.source_analysis->luck) {
          analysis ["source"]["luck"] = *lookup.source_analysis->luck;
+      }
+      if (!lookup.source_analysis->alternates.empty ()) {
+         analysis ["source"]["alternates"] = nlohmann::json::array ();
+         for (const auto& alternate : lookup.source_analysis->alternates) {
+            nlohmann::json candidate = {
+               { "id", alternate.id },
+               { "icon_url", alternate.icon_url },
+               { "name", alternate.name },
+            };
+            if (alternate.drop_rate) candidate ["drop_rate"] = *alternate.drop_rate;
+            analysis ["source"]["alternates"].push_back (std::move (candidate));
+         }
       }
    }
    if (lookup.utility.value_per_slot) {
