@@ -35,6 +35,7 @@ core::Result<std::unique_ptr<Database>> Database::open (const std::filesystem::p
       );
 
       impl->conn->exec ("PRAGMA foreign_keys  = ON");
+      impl->conn->exec ("PRAGMA busy_timeout  = 5000");
       impl->conn->exec ("PRAGMA journal_mode  = WAL");
       impl->conn->exec ("PRAGMA synchronous   = NORMAL");
       impl->conn->exec ("PRAGMA temp_store    = MEMORY");
@@ -46,6 +47,27 @@ core::Result<std::unique_ptr<Database>> Database::open (const std::filesystem::p
       if (!migrated.has_value ()) {
          return core::fail (migrated.error ());
       }
+
+      // API projections are personalized and must never survive locally.
+      // History is bounded by age and count so unattended installs stay small.
+      db->impl_->conn->exec ("DELETE FROM pricing_cache");
+      db->impl_->conn->exec (
+         "DELETE FROM item_finds WHERE found_at < unixepoch () - 7776000");
+      db->impl_->conn->exec (R"sql(
+         DELETE FROM item_finds
+          WHERE find_id NOT IN (
+             SELECT find_id FROM item_finds ORDER BY found_at DESC LIMIT 10000
+          )
+      )sql");
+      db->impl_->conn->exec (R"sql(
+         DELETE FROM session_runs
+          WHERE ended_at IS NOT NULL
+            AND ended_at < unixepoch () - 7776000
+            AND NOT EXISTS (
+               SELECT 1 FROM item_finds
+                WHERE item_finds.session_id = session_runs.session_id
+            )
+      )sql");
 
       core::Logger::info ("db: opened {} (user_version={})",
          path.string (), *migrated);

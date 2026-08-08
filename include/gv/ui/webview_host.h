@@ -3,11 +3,13 @@
 #include <gv/core/result.h>
 
 #include <QRect>
+#include <QSize>
 
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace gv::ui {
 
@@ -37,7 +39,7 @@ public:
       // initial navigation loads <web_dir>/augment.html from it.
       std::filesystem::path web_dir;
 
-      // WebView2 user-data folder (%APPDATA%\GrimVault\webview2).
+      // WebView2 user-data folder under the active LocalAppData directory.
       std::filesystem::path user_data_dir;
    };
 
@@ -70,6 +72,18 @@ public:
    // WebView2 rasterization scale for the target monitor.
    void place (const QRect& physical, double scale);
 
+   // Resize the hidden renderer without placing its HWND on the desktop.
+   // Used by snapshot mode before CapturePreview.
+   void resize (const QSize& physical, double scale);
+
+   // Capture the current WebView viewport as PNG bytes. Callback runs on the
+   // GUI/COM apartment thread. An empty vector indicates capture failure.
+   void capture_png (std::function<void (std::vector<std::uint8_t>)> callback);
+
+   // Reposition only (presenter ticks): one SetWindowPos, no resize, no
+   // rescale, no web round-trip.
+   void move (const QPoint& physical);
+
    void show ();
    void hide ();
 
@@ -77,7 +91,10 @@ private:
    WebviewHost ();
 
    struct Impl;
-   std::unique_ptr<Impl> impl_;
+   // Shared with the asynchronous WebView2 creation callbacks. Public
+   // methods release their owner in the destructor; an in-progress callback
+   // keeps Impl alive only until that callback completes.
+   std::shared_ptr<Impl> impl_;
 };
 
 } // namespace gv::ui

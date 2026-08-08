@@ -1,96 +1,102 @@
 # Release engineering
 
-## Pipeline overview
+## Pipeline
 
-Releases are cut by publishing a GitHub Release (tag `vX.Y.Z`) on this
-repo. `.github/workflows/release.yml` fires on the `release: published`
-event and delegates to the reusable workflow in `katforge/hearth`:
+`.github/workflows/release.yml` is standalone. It does not depend on a
+cross-organization reusable workflow.
 
-```
-.github/workflows/release.yml
-   → katforge/hearth/.github/workflows/release-template-desktop-windows.yml
-        → build (CMake release-windows preset, vcpkg, ninja, MSVC)
-        → unit tests (ctest --preset unit)
-        → e2e tests   (matrix: 3 resolutions × 5 modes, fixtures from S3)
-        → sign        (SSL.com eSigner CodeSignTool, cloud HSM)
-        → upload      (artifacts/* → s3://katforge-releases/grimvault/<tag>/)
-        → publish     (prepend <item> to appcast.xml, ed25519-sign enclosure)
-        → attach      (gh release upload <tag> artifacts/*)
-```
+A published GitHub Release runs this gate:
 
-Source-of-truth for what Hearth actually does:
-`/home/ethan/Projects/katforge/hearth/.github/workflows/release-template-desktop-windows.yml`.
+1. Validate `vX.Y.Z` or `vX.Y.Z-rc.N`. A prerelease version fails unless the
+   resolved channel is `beta`, so an `-alpha`, `-beta`, or `-rc` build cannot
+   reach the stable feed or the `latest` alias.
+2. Build and test on `windows-2022` and `windows-2025`.
+3. Fetch the Microsoft-signed WebView2 Evergreen bootstrapper.
+4. Sign `grimvault.exe` with the SSL.com eSigner certificate.
+5. build the branded NSIS installer.
+6. Sign the installer with the same certificate.
+7. Install silently and verify Authenticode, publisher metadata, icon resources, and executable identity.
+8. Publish the installer, SHA-256 file, symbols, and signed WinSparkle appcast.
+9. For stable production, atomically refresh the website's no-cache `latest` installer and checksum aliases.
 
-## Auto-update
+The `windows-2022` arm packages the release. The `windows-2025` arm is an
+independent compatibility build and test gate.
 
-Client uses **WinSparkle 0.8+ with ed25519 signature verification**.
+Manual runs can target `dev`, `qa`, or `prod`. Publishing is opt-in for a
+manual run. Published GitHub Releases target `prod`.
 
-- Public key: baked into the binary from `cmake/AppcastUrl.cmake`
-  → `GRIMVAULT_APPCAST_PUBKEY` (base64-encoded 32-byte ed25519).
-- Private key: lives in GitHub Secrets as `APPCAST_ED25519_PRIV`, used
-  by Hearth's `publish-appcast` action to sign installer enclosures.
-- Appcast URL is hardcoded:
-  `https://katforge-releases.s3.us-west-2.amazonaws.com/grimvault/appcast.xml`.
-- The client refuses to enable auto-updates if the pubkey constant is
-  empty (`gv::update::UpdateService::start` fail-closed).
+## Required secrets
 
-## Channels
-
-Only `stable` is shipped at v1. Hearth's template supports a second
-appcast (`appcast-beta.xml`) keyed off the GitHub Release prerelease
-flag. The client only knows about one URL, so beta opt-in is not
-user-facing yet. To enable it later: add a runtime channel toggle that
-swaps the base URL between `appcast.xml` and `appcast-beta.xml` (single
-binary, single S3 layout, no rebuild).
-
-## Code signing
-
-SSL.com eSigner OV cert via CodeSignTool (cloud HSM, no local key
-material). Wired in `cmake/Signing.cmake` for local dry-runs; real CI
-signing happens in Hearth's `release-template-shared/sign-windows`
-action. Required secrets in the consuming repo:
+The workflow fails closed when signing material is absent.
 
 - `SSL_COM_USERNAME`
 - `SSL_COM_PASSWORD`
 - `SSL_COM_CREDENTIAL_ID`
 - `SSL_COM_TOTP_SECRET`
+- `APPCAST_ED25519_PRIV`
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
 
-### Known issue: SmartScreen "Windows protected your PC"
+`tools/release/sign-windows.ps1` downloads SSL.com's official CodeSignTool,
+signs in place, and verifies both PowerShell Authenticode status and
+`signtool verify /pa`.
 
-OV certs do **not** carry instant SmartScreen reputation. For the first
-~hundreds of downloads, Windows 10/11 will show "Windows protected your
-PC" on first launch of the installer. Users must click "More info" →
-"Run anyway".
+## Auto-update
 
-This is expected for v1. Mitigations we explicitly chose **not** to do:
+WinSparkle verifies every enclosure with the Ed25519 public key embedded by
+`cmake/AppcastUrl.cmake`.
 
-- EV cert upgrade — deferred indefinitely; we accept the early friction
-  in exchange for cloud HSM simplicity.
-- Skipping code-signing — would make it strictly worse (Defender
-  SmartScreen treats unsigned binaries as malicious by default).
+| Environment | Stable feed | Beta feed |
+|---|---|---|
+| `dev` | disabled | disabled |
+| `qa` | `https://releases.katforge.com/grimvault/qa/appcast.xml` | `https://releases.katforge.com/grimvault/qa/appcast-beta.xml` |
+| `prod` | `https://releases.katforge.com/grimvault/appcast.xml` | `https://releases.katforge.com/grimvault/appcast-beta.xml` |
 
-The reputation builds automatically with download volume; expect the
-prompt to disappear within a few weeks of consistent releases.
+Artifacts remain private in `s3://katforge-releases`. CloudFront OAC serves
+the public `releases.katforge.com` URLs.
 
-## Install layout
+The appcast generator verifies that the configured private key derives the
+embedded public key before publishing.
 
-Per-user install (no admin required, no UAC prompt). Matches VS Code,
-Discord, GitHub Desktop convention.
+The V2 website cutover should download
+`https://releases.katforge.com/grimvault/latest/GrimVault-Setup.exe` only after
+the first stable production publish has created it. Only stable production
+publishes update that alias. Versioned release artifacts stay immutable.
 
-- Install root: `%LOCALAPPDATA%\Programs\GrimVault\`
-- Per-user data: `%APPDATA%\GrimVault\` (database, logs, settings)
-- Start Menu shortcut + desktop link
+## Compatibility
 
-The app manifest declares `asInvoker` (not `requireAdministrator`).
-WGC capture works fine unelevated; nothing in GrimVault needs admin
-at runtime.
+The supported runtime is 64-bit Windows 10 version 1809 or newer and
+Windows 11.
 
-## Symbols / crash reports
+- WGC is preferred and recreates its frame pool after game resize.
+- DXGI selects the correct adapter and monitor, crops to the client area, and recovers from access loss.
+- Three consecutive capture failures advance WGC to DXGI, then DXGI to GDI.
+- Successful frames reset the failure threshold. A new capture target also reprobes preferred backends.
+- Unavailable runtime candidates are skipped. GDI remains the last-resort backend.
+- Negative monitor origins and per-monitor DPI are supported.
+- WebView2 is bootstrapped when missing. QML remains the renderer fallback.
+- The app and installer run per-user without elevation.
 
-`gv::core::CrashHandler` writes minidumps to `%APPDATA%\GrimVault\crashes\`.
-PDBs are produced by the Release-with-IPO build but are **not currently
-uploaded to a symbol server**. Hearth's template does not handle this
-either. Symbolicating a user-supplied minidump today requires the PDB
-from the matching tagged build — pull it from the GitHub Release attach
-step if needed (currently only the installer is attached; PDB upload is
-a Phase 3 task).
+## Branding
+
+The executable, installer, Start Menu shortcut, desktop shortcut, welcome
+art, uninstaller, and version metadata all use GrimVault branding.
+
+Source art is under `assets/images/`. Installer art is under
+`assets/installer/`. Regenerate both with `tools/build/png_to_ico.py`.
+
+## Layout
+
+- Install: `%LOCALAPPDATA%\Programs\GrimVault\`
+- Production data: `%LOCALAPPDATA%\GrimVault\`
+- Dev and QA data: `%LOCALAPPDATA%\GrimVault\<env>\`
+- Credential target: `GrimVault:tokens:<env>`
+
+Production reads and writes the legacy `GrimVault:tokens` target during the
+V2 transition so older clients remain signed in. Dev and QA never share it.
+
+## Symbols
+
+Release PDBs are archived as `GrimVault-Symbols-<version>.zip` and attached
+to the workflow artifact and GitHub Release. Local minidumps are retained
+under the GrimVault data directory.

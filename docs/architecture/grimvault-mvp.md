@@ -1,5 +1,8 @@
 # GrimVault MVP architecture
 
+> Historical V1 design record. The current client contract is
+> [`grimvault-v2.md`](grimvault-v2.md). Where the documents differ, V2 wins.
+
 Status: contract. Every other agent builds against this. Decisions are
 settled; resolved rulings are appended in §13.
 
@@ -82,7 +85,7 @@ client change.
                 │   /v1/oauth/authorize/validate, /v1/oauth/authorize
                 │   /v1/oauth/grants, /v1/oauth/grants/:client_id[/revoke]
                 │   /v1/gateway/login/url
-                │   /v2/grimvault/lookup, /v2/grimvault/ping
+                │   /v2/grimvault/analyze, /lookup, /ping
                 ▼
    +-------------------------------------------------------------------+
    |     api.katforge.com (Symfony) — single codebase, single deploy   |
@@ -152,7 +155,7 @@ No client secret. Reference: RFC 7636.
    ```
    https://darkerdb.com/oauth/authorize
       ?response_type=code
-      &client_id=grimvault-desktop
+      &client_id=grimvault
       &redirect_uri=http%3A%2F%2F127.0.0.1%3A<port>%2Fcallback
       &scope=grimvault.read%20grimvault.write
       &state=<state>
@@ -165,7 +168,7 @@ No client secret. Reference: RFC 7636.
 
    ```
    GET https://api.darkerdb.com/v1/oauth/authorize/validate
-      ?client_id=grimvault-desktop
+      ?client_id=grimvault
       &redirect_uri=http%3A%2F%2F127.0.0.1%3A<port>%2Fcallback
       &scope=grimvault.read%20grimvault.write
    ```
@@ -176,7 +179,7 @@ No client secret. Reference: RFC 7636.
    {
       "body": {
          "client": {
-            "id":             "grimvault-desktop",
+            "id":             "grimvault",
             "name":           "GrimVault",
             "is_first_party": true,
             "scopes": [
@@ -197,7 +200,7 @@ No client secret. Reference: RFC 7636.
    Cookie: <katforge session cookie>
 
    {
-      "client_id":             "grimvault-desktop",
+      "client_id":             "grimvault",
       "redirect_uri":          "http://127.0.0.1:<port>/callback",
       "response_type":         "code",
       "state":                 "<state>",
@@ -233,7 +236,7 @@ No client secret. Reference: RFC 7636.
    grant_type=authorization_code
    &code=<code>
    &redirect_uri=http://127.0.0.1:<port>/callback
-   &client_id=grimvault-desktop
+   &client_id=grimvault
    &code_verifier=<code_verifier>
    ```
 
@@ -275,7 +278,7 @@ Content-Type: application/x-www-form-urlencoded
 
 grant_type=refresh_token
 &refresh_token=<refresh_token>
-&client_id=grimvault-desktop
+&client_id=grimvault
 ```
 
 Refresh-token rotation is **required by this contract**: each refresh
@@ -305,7 +308,7 @@ Content-Type: application/x-www-form-urlencoded
 
 token=<refresh_token>
 &token_type_hint=refresh_token
-&client_id=grimvault-desktop
+&client_id=grimvault
 ```
 
 Then locally: delete keychain entry, clear in-memory copies, set state
@@ -428,7 +431,7 @@ Required claims:
 | `iat` | int (epoch seconds) | Issued-at. |
 | `nbf` | int (epoch seconds) | Not-before. Equal to `iat` in practice. |
 | `scope` | string | Space-separated, e.g. `"grimvault.read grimvault.write"`. |
-| `client_id` | string | Echoes the OAuth `client_id` (e.g. `grimvault-desktop`). |
+| `client_id` | string | Echoes the OAuth `client_id` (e.g. `grimvault`). |
 | `jti` | string (ULID) | Unique token id. Required for the denylist check below. |
 
 **Why `sub` is `player_id` and not `user_id`.** KATforge models
@@ -505,14 +508,52 @@ On each `grant_type=refresh_token`:
 
 ## 4. `/v2/grimvault/*` contracts
 
-Two endpoints in MVP: `lookup` (the runtime path, **stub-implemented
-for MVP**) and `ping` (auth sanity check, used by CLI `doctor`).
+Three endpoints are retained: `analyze` is the runtime overlay path,
+`lookup` is the legacy-shaped compatibility path, and `ping` is the auth
+sanity check used by CLI `doctor`.
 
 Public path prefix is `/v2/` on `api.darkerdb.com` (per
 `config/routes/darkerdb.yaml`'s `darkerdb_shadow` mount). The same
 controllers are also reachable at `/v1/realms/darkerdb/grimvault/*`
 on `api.katforge.com` for KATforge-canonical access; the desktop
 client only uses the `api.darkerdb.com` host.
+
+### 4.0 `POST /v2/grimvault/analyze`
+
+The desktop sends the complete OCR tooltip using the request in §4.2. The
+server resolves localized text against the current item catalog and returns
+one atomic analysis containing:
+
+- the canonical item and parsed roll vector;
+- similarity- and recency-weighted sold-comparable valuation, quick-list
+  guidance, active listings, trend, liquidity, median sale time, days of
+  supply, roll-aware price stability, and confidence;
+- per-roll quality, a market-relative percentile, and the strongest observed
+  value driver measured against that roll's legal minimum;
+- vendor, quest, recipe, adventure-point, gear-score, stack-size, and
+  market-value-per-inventory-slot context;
+- cached best-drop provenance (including zero- and 500-luck rates) for
+  stackable items, or merchant acquisition context for non-tradeable items;
+- the highest-valued legal one- and two-gem replacements, evaluated at the
+  item's maximum enchanted ranges with socket fees included.
+
+The analytical core always returns the complete premium result. Product
+entitlements may redact capabilities at an API presentation boundary later;
+pricing and gem logic must not contain plan checks.
+
+Live market reads are deliberately bounded: at most the 250 newest sold
+comparables from the prior 30 days are loaded, price-sorted once, and reused
+for every counterfactual. Sold comparables cache for 30 seconds, active asks
+for 15 seconds, and patch-derived catalog/range/gem/source data for five
+minutes to one hour. The endpoint's warm-response budget is 300 ms; adding an
+unbounded query or a per-comparable database lookup violates this contract.
+
+The client caches a response for at most `valuation.ttl_seconds`, coalesces
+pending hover work, and reveals no card until the complete response has been
+laid out and captured. Results from a stale OCR/anchor generation are dropped.
+
+`lookup` remains available for backward compatibility, but new desktop code
+must use `analyze`.
 
 ### 4.1 `POST /v2/grimvault/lookup`
 
@@ -526,7 +567,7 @@ client only uses the `api.darkerdb.com` host.
 | Content-Type (res) | `application/json` |
 | Idempotent | Yes. Same request body → same response within cache TTL. |
 | Cacheable | Yes (client side, in `prices.sqlite`). |
-| **Implementation status** | **Stub for MVP.** See §4.1.1. |
+| **Implementation status** | Legacy compatibility endpoint. Runtime uses §4.0. |
 
 #### 4.1.1 MVP stub behavior
 
@@ -551,7 +592,7 @@ live server-side so the client stays language-agnostic.
 
 ```json
 {
-   "client_id":      "grimvault-desktop",
+   "client_id":      "grimvault",
    "client_version": "1.2.3",
    "captured_at":    "2026-05-23T14:11:09Z",
    "language":       "en",
@@ -575,7 +616,7 @@ live server-side so the client stays language-agnostic.
 | `ocr.raw_text` | string | yes | Newline-separated OCR output. UTF-8. Max 4 KB. |
 | `ocr.confidence` | number (0..1) | no | Aggregate OCR confidence if available. |
 | `hints.rarity_color_hex` | string | no | Sampled rarity-tier pixel, helps server disambiguate. |
-| `hints.capture_backend` | string | no | `wgc` or `gdi`. Diagnostic only. |
+| `hints.capture_backend` | string | no | `wgc`, `dxgi`, or `gdi`. Diagnostic only. Unknown values remain compatible and are recorded as `unknown`. |
 
 ### 4.3 Response schema (200)
 
@@ -745,7 +786,8 @@ lives in the API. The pages above are URL contracts only.
 | GET | `/v1/oauth/grants/:client_id` | session | Fetch one grant. 404 = not connected. Used by `/dashboard/grimvault`. |
 | POST | `/v1/oauth/grants/:client_id/revoke` | session + CSRF | Revoke a grant. Called by SPA Disconnect buttons. |
 | GET | `/v1/gateway/login/url` | none | Provider-agnostic sign-in URL. Returns `{ url }`. Replaces the discord-only path. |
-| POST | `/v2/grimvault/lookup` | Bearer, `grimvault.read`, `aud=darkerdb:grimvault` | Price lookup (stub-implemented; §4.1). |
+| POST | `/v2/grimvault/analyze` | Bearer, `grimvault.read`, `aud=darkerdb:grimvault` | Complete roll-aware valuation and gem optimization (§4.0). |
+| POST | `/v2/grimvault/lookup` | Bearer, `grimvault.read`, `aud=darkerdb:grimvault` | Legacy-shaped compatibility lookup (§4.1). |
 | POST | `/v2/grimvault/ping` | Bearer, `grimvault.read`, `aud=darkerdb:grimvault` | Auth-validation probe. Used by CLI `doctor`. |
 | GET | `/.well-known/jwks.json` | none | JWKS endpoint. Returns the public-key set used to verify access-token signatures. See §3.8 for why it lives on this host. |
 
@@ -776,7 +818,20 @@ containing the shapes referenced in their per-row descriptions above.
 |---|---|---|
 | GET | `/v2/grimvault/history` | reserved |
 | GET | `/v2/grimvault/stats` | reserved |
-| GET/PUT | `/v2/grimvault/settings` | reserved (cloud-synced settings) |
+
+`GET/PATCH/DELETE /v2/grimvault/settings` has shipped ahead of this doc's
+original MVP scope (§6 called it "later") — cloud-synced settings, nested
+wire contract (`overlay`/`tooltip`/`pricing`/`behavior`/`hotkeys`), flat
+colon-namespaced storage internally. `tooltip.analysis.*` covers the
+GrimVault Analysis augment's per-section visibility toggles (added
+alongside a redesign of that card's layout). The same contract is served on
+two auth surfaces: the desktop app uses its Bearer token at
+`/v2/grimvault/settings`; the darkerdb.com dashboard uses the signed-in
+user's own session at `GET/PATCH/DELETE /v1/grimvault/settings` (identical
+body/response, session auth instead of `aud=darkerdb:grimvault`). See the
+settings reference pages under
+`docs.katforge.com/reference/realms/darkerdb/grimvault-settings*` for the
+full contract — this doc no longer tracks it as the source of truth.
 
 ---
 
@@ -786,12 +841,11 @@ containing the shapes referenced in their per-row descriptions above.
 |---|---|---|
 | `access_token`, `refresh_token`, `expires_at` | Windows Credential Manager (DPAPI), single JSON blob, target `GrimVault:tokens` | OS-level protection, per-user, survives reinstall, integrates with Windows account lock. |
 | `pkce_verifier`, `state` (in flight) | Process memory only | Discarded after `/token` exchange. Never written to disk. |
-| User preferences (hotkey, region, OCR tuning) | `%APPDATA%\GrimVault\settings.toml` | OS-bound by definition. Plain text, user-readable. |
+| All user preferences (overlay, tooltip section toggles, pricing, behavior, hotkeys) | Cloud only — `/v2/grimvault/settings` | **Superseded MVP decision**: no `settings.toml`, no OS-bound preferences at all. Sign-in is now mandatory to use the app (§13), so there's no unauthenticated state that would need a local fallback — one settings surface, synced across machines. |
 | Cached price lookups | `%APPDATA%\GrimVault\prices.sqlite` | Local cache + offline serving. Non-sensitive. |
 | Logs, crash dumps | `%APPDATA%\GrimVault\logs\`, `%APPDATA%\GrimVault\crashes\` | Local diagnostics. Already in place (see `docs/release.md`). |
 | Account identity, billing, API-key issuance | KATforge | Out of client scope. |
 | Price history aggregates | Server-side (`api.darkerdb.com` Postgres, under the realm's tables) | Server-side only. Client never holds raw market data. Stub-implemented for MVP (§4.1.1). |
-| User overlay settings (future) | Local now. Cloud `/v2/grimvault/settings` later. | MVP keeps OS-bound settings local; deferred cloud sync respects the same `/settings` path convention. |
 
 ---
 
@@ -802,13 +856,23 @@ containing the shapes referenced in their per-row descriptions above.
 | Path | Purpose |
 |---|---|
 | `%LOCALAPPDATA%\Programs\GrimVault\` | Install root (binaries). Unchanged from `docs/release.md`. |
-| `%APPDATA%\GrimVault\settings.toml` | All OS-bound user preferences. |
-| `%APPDATA%\GrimVault\prices.sqlite` | Cached `/v2/grimvault/lookup` responses. |
+| ~~`%APPDATA%\GrimVault\settings.toml`~~ | Removed — see §6. All preferences are cloud-synced via `/v2/grimvault/settings`; there is no local settings file. |
+| `%LOCALAPPDATA%\GrimVault\grimvault.db` | Cached `/v2/grimvault/analyze` and legacy lookup responses. |
 | `%APPDATA%\GrimVault\logs\grimvault.log` | spdlog rotating sink. |
 | `%APPDATA%\GrimVault\crashes\*.dmp` | Crash minidumps. |
 | Windows Credential Manager: `GrimVault:tokens` | OAuth tokens. |
 
-### 7.2 `settings.toml`
+### 7.2 `settings.toml` — superseded, kept for historical reference
+
+> **Superseded per §13.** Sign-in is now mandatory (no `no_token` tray
+> state), so there is no local-only file — the schema below moved to
+> the cloud-synced `/v2/grimvault/settings` contract (see
+> `docs.katforge.com/reference/realms/darkerdb/grimvault-settings*`).
+> The first-run wizard's confirmed values (hotkey, capture region, OCR
+> tuning) now need a home in that cloud schema instead of writing this
+> file directly — that migration is native-client implementation work
+> for a future pass, not yet done. Left below as the reference for what
+> that migration needs to cover.
 
 TOML, ASCII, written atomically (write-temp + rename). Keys are flat,
 two-segment namespaces. Defaults shipped if file is missing.
@@ -850,17 +914,21 @@ telemetry        = "diag-only"   # "diag-only" | "off" (no analytics in MVP)
 | `app.autostart` | bool | `true` | `HKCU\...\Run` entry. |
 | `app.telemetry` | enum | `diag-only` | Only on-request diagnostics bundle (already implemented). |
 
-**First-run trigger.** The first-run setup wizard (hotkey + capture
-region) fires on launch **iff `%APPDATA%\GrimVault\settings.toml`
-does not exist**. The wizard writes the file with confirmed values
-(or shipped defaults if the user hits Skip), and subsequent launches
-go straight to tray. There is no "first run" flag inside the file:
-presence of the file IS the flag. Sign-in is independent: the tray
-sits in `no_token` after the wizard until the user clicks Sign In.
+**First-run trigger (as originally designed, now superseded).** The
+first-run setup wizard (hotkey + capture region) fired on launch iff
+`%APPDATA%\GrimVault\settings.toml` did not exist, writing confirmed
+values (or shipped defaults on Skip) so subsequent launches went
+straight to tray — independent of sign-in, which left the tray in
+`no_token` until the user clicked Sign In.
 
-No cloud-synced keys in MVP. The `settings.toml` location and schema
-are stable contracts; the future cloud `/settings` endpoint mirrors
-this exact key set.
+Per §13's superseding ruling, sign-in is no longer optional: the app
+requires a valid, authenticated session before it does anything beyond
+showing a sign-in prompt, so there is no unauthenticated `no_token`
+tray state and no local settings file for the wizard to gate on. The
+wizard's confirmed values now need to persist via `/v2/grimvault/settings`
+(authenticated) instead — the exact first-run UX (e.g. whether the
+wizard runs before or after the sign-in gate) is unspecified pending
+that native-client work.
 
 ### 7.3 `prices.sqlite`
 
@@ -986,7 +1054,7 @@ States and content:
 
 | State | Source | Content shown |
 |---|---|---|
-| **Connected** | `GET api.darkerdb.com/v1/oauth/grants/grimvault-desktop` returns 200 | "GrimVault is connected" with `created_at` timestamp. Client metadata if available: `last_used_at`, `client_version`. Actions: **Disconnect** (calls `POST /v1/oauth/grants/grimvault-desktop/revoke`); **Manage connected apps** link to `/account/connected-apps`. No Download CTA. |
+| **Connected** | `GET api.darkerdb.com/v1/oauth/grants/grimvault` returns 200 | "GrimVault is connected" with `created_at` timestamp. Client metadata if available: `last_used_at`, `client_version`. Actions: **Disconnect** (calls `POST /v1/oauth/grants/grimvault/revoke`); **Manage connected apps** link to `/account/connected-apps`. No Download CTA. |
 | **Not connected** | same call returns 404 | "GrimVault is not connected. Install the desktop app to get started." Actions: **Download GrimVault** (links to releases). No Disconnect, no Manage link. |
 
 The `client_version` and `last_used_at` fields are best-effort: the
@@ -1035,29 +1103,35 @@ DNS: the `darkerdb.com` zone is owned by the KATforge AWS account
 and managed via Terraform under `infra/terraform/dns/`. DevOps owns
 the records; per-env CNAMEs above are the contract.
 
-### 10.2 OAuth client ids
+### 10.2 OAuth client id
 
-| Env | `client_id` |
-|---|---|
-| `dev` | `grimvault-desktop-dev` |
-| `qa` | `grimvault-desktop-qa` |
-| `prod` | `grimvault-desktop` |
+A single OAuth client_id `grimvault` is used across all three envs.
+Per-env separation lives in the API host (dev / qa / prod) and the
+KATforge realm that owns the client registration, not in the client_id
+itself.
 
-Per-env `client_id` naming uses the `<base>-<env>` suffix pattern with
-prod as the unsuffixed canonical id. This keeps the prod id short and
-makes non-prod ids self-describing in logs. Reserved for future client
-families: `grimvault-mobile`, `grimvault-mobile-dev`, etc.
+Rationale: this is a PKCE + first-party + loopback-redirect client.
+There is no client secret to protect, no third-party trust boundary,
+and the loopback wildcard means redirect-URI separation gives us
+nothing useful. Per-env client_ids would only matter for incident-
+response isolation (revoke `grimvault-dev` without touching `grimvault`
+in prod) — until that need actually surfaces, the simpler single-id
+model wins.
+
+Reserved for future client families: `grimvault-mobile` (separate
+client_id because mobile is a separate codebase + signing identity, not
+because of env separation).
 
 ### 10.3 Client config and shared invariants
 
 Per-env config in the desktop binary lives behind a single compile-time
-flag, `GRIMVAULT_ENV` (default `prod`). It selects the SPA host, API
-host, and `client_id` from a baked-in table. No runtime env var
-override in the shipped build; dev builds get a runtime `--env` flag
-for engineers.
+flag, `GRIMVAULT_ENV` (default `prod`). It selects the SPA host and API
+host from a baked-in table; `client_id` is a constant `grimvault` and
+does not vary. No runtime env var override in the shipped build; dev
+builds get a runtime `--env` flag for engineers.
 
 Loopback redirect URI is the same shape in every env: `http://127.0.0.1:<port>/callback`.
-DevOps registers each `client_id` with the appropriate KATforge realm
+DevOps registers the `grimvault` client with each KATforge realm
 allowing wildcard loopback ports per RFC 8252 §7.3.
 
 Scopes are identical across envs: `grimvault.read`, `grimvault.write`,
@@ -1223,8 +1297,16 @@ traceability.
 | 12 | JWT issuer build-out specifics? | **Build on existing Lexik foundation.** Adds: public JWKS at `api.{env.}darkerdb.com/.well-known/jwks.json` (see ruling 19), `iss` matching JWKS host per OIDC convention, `aud` / `nbf` / `jti` claims, per-controller `#[RequireAudience]` and `#[RequireScope]` attributes, refresh-token rotation table with family-wide reuse detection, Postgres `revoked_jtis` denylist with APCu cache. | §3.8, §3.9 |
 | 13 | JWT `sub` claim: `user_id` or `player_id`? | **`player_id`** (universal identity; works for guest players). Optional `user_id` claim when the player has a registered user. Per-product code reads `user_id` and handles its absence explicitly. | §3.8, §4.7 |
 | 14 | Host topology for SPA vs API? | **Split.** `darkerdb.com` = Vue/Vite SPA (consent, dashboard, connected-apps). `api.darkerdb.com` = Symfony API (OAuth endpoints, grants, grimvault). Per-env: `api.{dev,qa}.darkerdb.com`. Grimvault API paths use `/v2/*` prefix on the darkerdb host. | §2, §2.1, §3, §4, §5, §10.1 |
-| 15 | `/v2/grimvault/lookup` MVP scope? | **Stub-implemented.** Response shape is the contract; implementation returns plausible-shaped pricing data. Client must wire to the schema, not the stub's specific numbers. Real pricing is post-MVP. | §4.1.1 |
+| 15 | Runtime item-analysis endpoint? | **`/v2/grimvault/analyze`.** It returns live roll-aware pricing and premium gem plans atomically. `/lookup` remains compatibility-only. | §4.0 |
 | 16 | Dashboard connected-state content? | **Disconnect + Manage link only.** No Download CTA. Download stays in the not-connected state. | §9.2 |
 | 17 | Scope description registry? | **First-class architectural element.** KATforge owns one registry mapping `scope_id → description`. Exposed via `/v1/oauth/authorize/validate` response. Consent screen renders read-only from registry. MVP scopes: `grimvault.read` ("Look up item prices on your behalf."), `grimvault.write` ("Submit price observations on your behalf."). | §4.8 |
 | 18 | Additional API endpoints needed by SPA? | **Four added.** `GET /v1/oauth/grants`, `GET /v1/oauth/grants/:client_id`, `POST /v1/oauth/grants/:client_id/revoke`, `GET /v1/gateway/login/url`. Grant-revoke is the user-facing surface; `POST /oauth/revoke` remains as the RFC 7009 token-revoke surface used by the desktop. Both routes feed the denylist. | §5.2, §3.4 |
 | 19 | JWKS host: katforge or darkerdb? | **Mirror on `api.{env.}darkerdb.com`.** `iss` pinned to the darkerdb host. Hides the KATforge relationship from third-party `curl` inspection of the JWKS URL or the `iss` claim. The signing key still lives in the KATforge namespace of the shared Symfony app; "mirror" is a route bound to the darkerdb host group returning the same `JWKSet`. | §3.8, §5.2, §10.1, §11.3 |
+
+### 13.3 Round 3 rulings
+
+| # | Question | Ruling | Where applied |
+|---|---|---|---|
+| 20 | Is sign-in required to use GrimVault at all, or only to sync/analyze? | **Sign-in is now mandatory.** Supersedes ruling 6's "sign-in is independent of the wizard" and the `no_token` tray state described in §7.2/§8: without a valid session the app shows a sign-in prompt rather than a functioning (but unauthenticated) tray/overlay shell. Rationale: usage attribution per user, no meaningful "default settings" identity to fall back to, and — since an account is now required regardless — no reason to keep any preference local/unsynced. | §6, §7.2, §8 (native-client behavior change; not yet implemented) |
+| 21 | Local settings file (`settings.toml`) or cloud-only? | **Cloud-only.** Ruling 20 removes the rationale for a local fallback. All preferences (overlay, tooltip section toggles including the new GrimVault Analysis augment toggles, pricing, behavior, hotkeys) live in `/v2/grimvault/settings`; `settings.toml` is retired. | §6, §7.1, §7.2 |
+| 22 | Settings wire contract shape? | **Nested groups on the wire** (`overlay`/`tooltip`/`pricing`/`behavior`/`hotkeys`), **flat colon-namespaced keys in storage** (`overlay:opacity`, `tooltip:analysis:roll_quality`, ...) — matches this codebase's existing `namespace:key` convention for storage while keeping the already-built dashboard UI's nested shape as the contract. | §5.4, settings reference docs |

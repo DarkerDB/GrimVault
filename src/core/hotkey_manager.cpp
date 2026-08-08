@@ -4,6 +4,7 @@
 #include <Windows.h>
 
 #include <atomic>
+#include <charconv>
 #include <condition_variable>
 #include <future>
 #include <mutex>
@@ -24,7 +25,7 @@ namespace {
    // Parse "Ctrl+Shift+F6" -> (MOD_CONTROL | MOD_SHIFT, VK_F6).
    bool parse_accelerator (std::string_view s, UINT& mods, UINT& vk)
    {
-      mods = 0;
+      mods = MOD_NOREPEAT;
       vk   = 0;
 
       std::string lower { s };
@@ -41,9 +42,15 @@ namespace {
          else if (part == "alt")                       mods |= MOD_ALT;
          else if (part == "win" || part == "meta")     mods |= MOD_WIN;
          else if (part.size () >= 2 && part [0] == 'f') {
-            try { vk = VK_F1 + std::stoi (part.substr (1)) - 1; }
-            catch (...) { return false; }
-         } else if (part.size () == 1) {
+            int number = 0;
+            const auto first = part.data () + 1;
+            const auto last = part.data () + part.size ();
+            const auto [end, ec] = std::from_chars (first, last, number);
+            if (ec != std::errc {} || end != last || number < 1 || number > 24) return false;
+            vk = VK_F1 + number - 1;
+         } else if (part.size () == 1
+                    && ((part [0] >= 'a' && part [0] <= 'z')
+                        || (part [0] >= '0' && part [0] <= '9'))) {
             vk = static_cast<UINT> (std::toupper (static_cast<unsigned char> (part [0])));
          } else {
             return false;
@@ -89,12 +96,6 @@ struct HotkeyManager::Impl
 
    void apply_bind (BindRequest& req)
    {
-      // Unregister any prior hotkey with the same id before allocating a new one.
-      if (auto it = bindings.find (req.id); it != bindings.end ()) {
-         ::UnregisterHotKey (nullptr, it->second.id);
-         bindings.erase (it);
-      }
-
       const int hkid = next_id++;
 
       if (!::RegisterHotKey (nullptr, hkid, req.mods, req.vk)) {
@@ -102,6 +103,10 @@ struct HotkeyManager::Impl
          req.promise->set_value (fail (Error::make (ErrorKind::Permission,
             "hotkey: RegisterHotKey failed for '{}' (err={})", req.accelerator, err)));
          return;
+      }
+
+      if (auto it = bindings.find (req.id); it != bindings.end ()) {
+         ::UnregisterHotKey (nullptr, it->second.id);
       }
 
       bindings [req.id] = Binding {

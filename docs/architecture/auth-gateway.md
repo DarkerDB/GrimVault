@@ -646,7 +646,7 @@ Pointer only. Full spec in `docs/architecture/grimvault-mvp.md` §3.
         binds 127.0.0.1:<port>
         launches browser
         ====================>   GET auth.darkerdb.com/oauth/authorize?
-                                  client_id=grimvault-desktop&
+                                  client_id=grimvault&
                                   redirect_uri=http://127.0.0.1:<port>/callback&
                                   state=...&code_challenge=...
                                 (consent screen, single Allow button)

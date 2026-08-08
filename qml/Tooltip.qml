@@ -33,6 +33,7 @@ Item {
    id: root
 
    property string title:     ""
+   property string body:      ""
    property string rarity:    "common"
    property var    primary:   []
    property var    secondary: []
@@ -41,6 +42,7 @@ Item {
    property int    vendor:    0
 
    readonly property bool hasStats:   primary.length > 0
+   readonly property bool hasBody:    body.length > 0
    readonly property bool hasEnchant: secondary.length > 0
    readonly property bool hasDetails: details.length > 0
    readonly property bool hasPricing: market > 0 || vendor > 0
@@ -147,6 +149,17 @@ Item {
                fillMode: Image.Stretch
                opacity:  0.85
             }
+         }
+
+         Text {
+            Layout.fillWidth:    true
+            visible:             root.hasBody
+            text:                root.body
+            color:               "#ffffff"
+            font.family:         Theme.fontLight
+            font.pixelSize:      14
+            horizontalAlignment: Text.AlignLeft
+            wrapMode:            Text.WordWrap
          }
 
          // ---- Primary stats ----

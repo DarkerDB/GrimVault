@@ -54,6 +54,7 @@ core::Result<void> FakeStrategy::load_image (const std::filesystem::path& path)
       .monitor_id = 0,
       .window_id  = 0,
       .timestamp  = std::chrono::steady_clock::now (),
+      .cursor     = cursor_now (),
    });
 
    return {};
@@ -109,6 +110,7 @@ void FakeStrategy::push_solid (int w, int h, std::uint8_t r, std::uint8_t g, std
       .monitor_id = 0,
       .window_id  = 0,
       .timestamp  = std::chrono::steady_clock::now (),
+      .cursor     = cursor_now (),
    });
 }
 
@@ -128,6 +130,7 @@ core::Result<Frame> FakeStrategy::capture_monitor (void*)
 
    Frame copy        = f;
    copy.timestamp    = std::chrono::steady_clock::now ();
+   copy.cursor       = cursor_now ();
    return copy;
 }
 

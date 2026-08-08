@@ -1,5 +1,7 @@
 #pragma once
 
+#include <gv/ui/layout.h>
+
 #include <QObject>
 #include <QRect>
 
@@ -11,10 +13,12 @@ namespace gv::api { struct TooltipLookup; }
 
 namespace gv::ui {
 
+namespace augment { struct Options; }
+
 // The overlay surface that draws the Augment beside the in-game tooltip.
-// Renderer is WebView2 + ddb-tooltips (AugmentView) by default; the legacy
-// QML card remains as fallback when the WebView2 runtime is missing or its
-// browser process dies (`overlay:renderer` = webview | qml).
+// Renderer is the DDB SDK in a permanently hidden WebView2, captured to a
+// bitmap and presented by a disabled native window. The QML card remains as
+// fallback (`overlay:renderer` = webview | qml).
 //
 // present()/clear() are the whole contract; Controller and main() are
 // renderer-agnostic. Both rects are physical (Win32) screen pixels: game
@@ -29,10 +33,10 @@ public:
       // Directory holding augment.html + the vendored ddb-tooltips dist.
       std::filesystem::path web_dir;
 
-      // WebView2 user-data folder (under %APPDATA%\GrimVault).
+      // WebView2 user-data folder under the active LocalAppData directory.
       std::filesystem::path user_data_dir;
 
-      // "webview" (default) or "qml".
+      // "webview" (hidden snapshot renderer, default) or "qml".
       std::string renderer = "webview";
    };
 
@@ -40,8 +44,18 @@ public:
    ~OverlayWindow () override;
 
    void present (const gv::api::TooltipLookup& lookup,
-                 const QRect& game, const QRect& anchor);
+                 const QRect& game, const QRect& anchor, bool animate = true);
    void clear ();
+
+   // Live settings. Both are cheap and idempotent — SettingsBridge calls
+   // them whenever the dashboard changes, including mid-hover.
+   void set_layout  (const Layout& layout);
+   void set_options (const augment::Options& options);
+
+   // Anchoring passthrough (WebView2 renderer only; QML is lookup-driven).
+   void anchor_shown (const QRect& game, const QPoint& offset, const QSize& tip,
+                      bool pinned_x, bool pinned_y, const QPoint& pin);
+   void anchor_lost (bool immediate);
 
 private:
    void fall_back_to_qml ();

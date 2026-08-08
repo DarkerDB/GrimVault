@@ -27,7 +27,7 @@ UpdateService::UpdateService (QObject* parent) : QObject (parent)
 
    win_sparkle_set_appcast_url    (gv::update::appcast_url);
    win_sparkle_set_app_details    (
-      L"DarkerDB", L"GrimVault",
+      L"DDB", L"GrimVault",
       reinterpret_cast<const wchar_t*> (
          QString::fromLatin1 (gv::core::version::string).utf16 ())
    );

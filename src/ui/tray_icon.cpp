@@ -47,4 +47,9 @@ void TrayIcon::set_signed_in (bool signed_in)
    if (menu_) menu_->set_signed_in (signed_in);
 }
 
+void TrayIcon::set_connection_state (ConnectionState state)
+{
+   if (menu_) menu_->set_connection_state (state);
+}
+
 } // namespace gv::ui

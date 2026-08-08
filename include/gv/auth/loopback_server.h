@@ -46,7 +46,7 @@ public:
    // server falls back to the embedded close_page_html () body.
    //
    // The realm SPA's `/grimvault/callback` page renders the branded
-   // "you're signed in" surface, so the user sees DarkerDB chrome
+   // "you're signed in" surface, so the user sees DDB chrome
    // instead of the loopback's bare HTML.
    core::Result<CallbackResult> await_callback (
       std::string_view     expected_state,

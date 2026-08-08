@@ -20,9 +20,9 @@ struct TokenSet {
    bool empty () const noexcept { return access_token.empty () && refresh_token.empty (); }
 };
 
-// Windows Credential Manager-backed token store. One blob under the target
-// name "GrimVault:tokens" (per contract §7.1). On non-Windows builds every
-// call returns an Io error so the source still configures for dev.
+// Windows Credential Manager-backed token store. Credentials are isolated by
+// environment. Production also mirrors the legacy "GrimVault:tokens" target
+// so V1 and V2 clients can coexist during rollout.
 class TokenStore
 {
 public:

@@ -1,8 +1,93 @@
 #include <gv/auth/session.h>
 
+#include <gv/core/env_resolver.h>
 #include <gv/core/logger.h>
 
+#include <nlohmann/json.hpp>
+
+#ifdef _WIN32
+   #include <Windows.h>
+#endif
+
 namespace gv::auth {
+
+namespace {
+
+std::optional<std::string> jwt_subject (std::string_view token)
+{
+   const auto first = token.find ('.');
+   if (first == std::string_view::npos) return std::nullopt;
+   const auto second = token.find ('.', first + 1);
+   if (second == std::string_view::npos) return std::nullopt;
+
+   std::string_view encoded = token.substr (first + 1, second - first - 1);
+   std::string decoded;
+   decoded.reserve ((encoded.size () * 3) / 4 + 3);
+   unsigned int buffer = 0;
+   int bits = 0;
+   for (const char ch : encoded) {
+      int value = -1;
+      if (ch >= 'A' && ch <= 'Z') value = ch - 'A';
+      else if (ch >= 'a' && ch <= 'z') value = 26 + ch - 'a';
+      else if (ch >= '0' && ch <= '9') value = 52 + ch - '0';
+      else if (ch == '-' || ch == '+') value = 62;
+      else if (ch == '_' || ch == '/') value = 63;
+      else if (ch == '=') break;
+      else return std::nullopt;
+
+      buffer = (buffer << 6) | static_cast<unsigned int> (value);
+      bits += 6;
+      if (bits < 8) continue;
+      bits -= 8;
+      decoded.push_back (static_cast<char> ((buffer >> bits) & 0xff));
+      buffer &= bits == 0 ? 0u : (1u << bits) - 1u;
+   }
+
+   auto json = nlohmann::json::parse (decoded, nullptr, false);
+   if (json.is_discarded () || !json.is_object ()) return std::nullopt;
+   auto subject = json.find ("sub");
+   if (subject == json.end ()) return std::nullopt;
+   if (subject->is_string ()) return subject->get<std::string> ();
+   if (subject->is_number_integer ()) return std::to_string (subject->get<std::int64_t> ());
+   return std::nullopt;
+}
+
+#ifdef _WIN32
+class RefreshGuard
+{
+public:
+   RefreshGuard ()
+   {
+      const auto env = gv::core::active_env ().name;
+      const std::wstring name = L"Local\\DarkerDB.GrimVault.TokenRefresh."
+         + std::wstring { env.begin (), env.end () };
+      handle_ = ::CreateMutexW (nullptr, FALSE, name.c_str ());
+      if (!handle_) return;
+      const DWORD wait = ::WaitForSingleObject (handle_, 20'000);
+      owned_ = wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED;
+   }
+
+   ~RefreshGuard ()
+   {
+      if (owned_) ::ReleaseMutex (handle_);
+      if (handle_) ::CloseHandle (handle_);
+   }
+
+   bool acquired () const noexcept { return owned_; }
+
+private:
+   HANDLE handle_ = nullptr;
+   bool   owned_ = false;
+};
+#else
+class RefreshGuard
+{
+public:
+   bool acquired () const noexcept { return true; }
+};
+#endif
+
+} // namespace
 
 Session::Session (std::shared_ptr<OauthClient> oauth)
    : oauth_ (std::move (oauth))
@@ -19,6 +104,20 @@ bool Session::signed_in () const
    if (!cache_.has_value () || cache_->refresh_token.empty ()) load_locked ();
 
    return cache_.has_value () && !cache_->refresh_token.empty ();
+}
+
+std::optional<std::string> Session::principal () const
+{
+   std::lock_guard lk { lock_ };
+   if (!cache_loaded_) load_locked ();
+   if (!cache_.has_value () || cache_->access_token.empty ()) return std::nullopt;
+   return jwt_subject (cache_->access_token);
+}
+
+void Session::reload ()
+{
+   std::lock_guard lk { lock_ };
+   load_locked ();
 }
 
 void Session::load_locked () const
@@ -55,6 +154,23 @@ core::Result<void> Session::refresh_locked ()
 
    const auto attempted = cache_->refresh_token;
 
+   RefreshGuard refresh_guard;
+   if (!refresh_guard.acquired ()) {
+      return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
+         "session: timed out waiting for another client to refresh"));
+   }
+
+   // Another GrimVault process may have refreshed while this process waited.
+   load_locked ();
+   if (!cache_.has_value () || cache_->refresh_token.empty ()) {
+      return core::fail (core::Error::make (core::ErrorKind::Permission,
+         "session: tokens were cleared by another client"));
+   }
+   if (cache_->refresh_token != attempted) {
+      force_refresh_ = false;
+      return {};
+   }
+
    auto r = oauth_->refresh (attempted);
 
    if (!r.has_value () && r.error ().kind == core::ErrorKind::Permission) {
@@ -75,7 +191,7 @@ core::Result<void> Session::refresh_locked ()
       // invalid_grant — drop to signed-out.
       if (r.error ().kind == core::ErrorKind::Permission) {
          core::log::api.warn ("session: refresh rejected, clearing tokens");
-         TokenStore::clear ();
+         (void) TokenStore::clear ();
          cache_.reset ();
          force_refresh_ = false;
       }

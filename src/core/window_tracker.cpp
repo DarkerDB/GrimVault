@@ -6,7 +6,9 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <cstdint>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -75,6 +77,23 @@ namespace {
          /*bIgnoreCase=*/ TRUE) == CSTR_EQUAL;
    }
 
+   bool client_rect_screen (HWND hwnd, RECT& out)
+   {
+      RECT client {};
+      POINT origin {};
+      if (!::GetClientRect (hwnd, &client) || !::ClientToScreen (hwnd, &origin)) {
+         return false;
+      }
+
+      out = {
+         origin.x,
+         origin.y,
+         origin.x + client.right - client.left,
+         origin.y + client.bottom - client.top,
+      };
+      return out.right > out.left && out.bottom > out.top;
+   }
+
 } // namespace
 
 struct WindowTracker::Impl
@@ -88,6 +107,7 @@ struct WindowTracker::Impl
 
    std::mutex                      lock;
    HWND                            target = nullptr;
+   std::optional<WindowEvent>      last_emitted;
 
    HWINEVENTHOOK                   h_location = nullptr;
    HWINEVENTHOOK                   h_foreground = nullptr;
@@ -99,6 +119,7 @@ struct WindowTracker::Impl
    std::wstring                    want_process;
 
    HWINEVENTHOOK                   h_destroy = nullptr;
+   UINT_PTR                        reconcile_timer = 0;
 
    // Single instance lookup for the WinEventProc trampoline. Only one tracker
    // is needed in practice (the game window); if that changes, switch to a
@@ -108,20 +129,45 @@ struct WindowTracker::Impl
    // Full candidate check. Title alone is spoofable by any window that
    // happens to mention the game (browser tab, Discord); class + process
    // pin the match to the actual game window.
-   bool window_matches (HWND hwnd)
+   bool window_matches (HWND hwnd, bool log_rejection = true)
    {
       if (!title_matches (hwnd, needle)) return false;
 
       if (!class_matches (hwnd, want_class) || !process_matches (hwnd, want_process)) {
-         wchar_t cls [128] {};
-         ::GetClassNameW (hwnd, cls, 128);
-         char cls_utf8 [256] {};
-         ::WideCharToMultiByte (CP_UTF8, 0, cls, -1, cls_utf8, sizeof cls_utf8, nullptr, nullptr);
-         Logger::info ("window_tracker: candidate rejected — title matched but "
-            "class/process did not (class='{}')", cls_utf8);
+         if (log_rejection) {
+            wchar_t cls [128] {};
+            ::GetClassNameW (hwnd, cls, 128);
+            char cls_utf8 [256] {};
+            ::WideCharToMultiByte (CP_UTF8, 0, cls, -1, cls_utf8,
+               sizeof cls_utf8, nullptr, nullptr);
+            Logger::info ("window_tracker: candidate rejected — title matched but "
+               "class/process did not (class='{}')", cls_utf8);
+         }
          return false;
       }
       return true;
+   }
+
+   bool target_is_valid (HWND hwnd) const
+   {
+      return hwnd && ::IsWindow (hwnd)
+         && class_matches (hwnd, want_class)
+         && process_matches (hwnd, want_process);
+   }
+
+   static bool same_rect (const WindowRect& a, const WindowRect& b)
+   {
+      return a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h;
+   }
+
+   static bool same_event (const WindowEvent& a, const WindowEvent& b)
+   {
+      return a.hwnd == b.hwnd
+         && same_rect (a.bounds, b.bounds)
+         && same_rect (a.monitor, b.monitor)
+         && a.scale == b.scale
+         && a.visible == b.visible
+         && a.focused == b.focused;
    }
 
    // The target window is gone (destroyed or unreadable). Tell the consumer
@@ -129,12 +175,17 @@ struct WindowTracker::Impl
    // the next game launch.
    void emit_gone (HWND hwnd)
    {
-      { std::lock_guard lk { lock }; if (target == hwnd) target = nullptr; }
-
       WindowEvent ev;
       ev.hwnd    = hwnd;
       ev.visible = false;
       ev.focused = false;
+
+      {
+         std::lock_guard lk { lock };
+         if (target == hwnd) target = nullptr;
+         if (last_emitted && same_event (*last_emitted, ev)) return;
+         last_emitted = ev;
+      }
 
       if (handler) {
          try { handler (ev); }
@@ -150,7 +201,7 @@ struct WindowTracker::Impl
       ev.hwnd = hwnd;
 
       RECT r {};
-      if (!::IsWindow (hwnd) || !::GetWindowRect (hwnd, &r)) {
+      if (!::IsWindow (hwnd) || !client_rect_screen (hwnd, r)) {
          emit_gone (hwnd);
          return;
       }
@@ -177,10 +228,67 @@ struct WindowTracker::Impl
       ev.visible = ::IsWindowVisible (hwnd) && !::IsIconic (hwnd);
       ev.focused = ::GetForegroundWindow () == hwnd;
 
+      {
+         std::lock_guard lk { lock };
+         if (last_emitted && same_event (*last_emitted, ev)) return;
+         last_emitted = ev;
+      }
+
       if (handler) {
          try { handler (ev); }
          catch (...) { Logger::error ("window_tracker: handler threw"); }
       }
+   }
+
+   HWND find_candidate ()
+   {
+      // Prefer the foreground game when multiple matching windows exist.
+      if (HWND foreground = ::GetForegroundWindow ();
+          foreground && window_matches (foreground, /*log_rejection=*/ false)) {
+         return foreground;
+      }
+
+      struct ProbeCtx { Impl* self; HWND found; } ctx { this, nullptr };
+      ::EnumWindows ([] (HWND hwnd, LPARAM lp) -> BOOL {
+         auto* c = reinterpret_cast<ProbeCtx*> (lp);
+         if (!::IsWindowVisible (hwnd)) return TRUE;
+         if (!c->self->window_matches (hwnd, /*log_rejection=*/ false)) return TRUE;
+         c->found = hwnd;
+         return FALSE;
+      }, reinterpret_cast<LPARAM> (&ctx));
+      return ctx.found;
+   }
+
+   void reconcile ()
+   {
+      HWND current;
+      { std::lock_guard lk { lock }; current = target; }
+
+      if (current && !target_is_valid (current)) {
+         Logger::info ("window_tracker: tracked game window became invalid; reacquiring");
+         emit_gone (current);
+         current = nullptr;
+      }
+
+      // A game may keep its startup HWND alive while replacing or hiding the
+      // actual render window. Prefer a newly matching foreground/visible HWND
+      // even when the old handle is still technically valid.
+      if (HWND preferred = find_candidate (); preferred && preferred != current) {
+         { std::lock_guard lk { lock }; target = preferred; }
+         Logger::info ("window_tracker: rebound game window hwnd={} -> {}",
+            reinterpret_cast<std::uintptr_t> (current),
+            reinterpret_cast<std::uintptr_t> (preferred));
+         emit (preferred);
+         return;
+      }
+
+      if (!current) {
+         return;
+      }
+
+      // Hooks are the fast path; this deduplicated snapshot catches missed
+      // focus, minimize, geometry, and visibility transitions.
+      emit (current);
    }
 
    void on_event (DWORD event, HWND hwnd, LONG id_object)
@@ -280,21 +388,15 @@ struct WindowTracker::Impl
       // Initial probe — if the game is already running we won't get a
       // foreground event for it. EnumWindows + the full matcher, not
       // FindWindowW: exact-title lookup can't apply the class/process checks.
-      if (config.emit_on_start) {
-         struct ProbeCtx { Impl* self; HWND found; };
-         ProbeCtx ctx { this, nullptr };
+      if (config.emit_on_start) reconcile ();
 
-         ::EnumWindows ([] (HWND hwnd, LPARAM lp) -> BOOL {
-            auto* c = reinterpret_cast<ProbeCtx*> (lp);
-            if (!::IsWindowVisible (hwnd))     return TRUE;
-            if (!c->self->window_matches (hwnd)) return TRUE;
-            c->found = hwnd;
-            return FALSE;
-         }, reinterpret_cast<LPARAM> (&ctx));
-
-         if (ctx.found) {
-            { std::lock_guard lk { lock }; target = ctx.found; }
-            emit (ctx.found);
+      if (config.reconcile_interval_ms > 0) {
+         reconcile_timer = ::SetTimer (nullptr, 0, config.reconcile_interval_ms, nullptr);
+         if (!reconcile_timer) {
+            Logger::warn ("window_tracker: failed to start reconciliation timer");
+         } else {
+            Logger::info ("window_tracker: reconciliation poll={}ms",
+               config.reconcile_interval_ms);
          }
       }
 
@@ -304,8 +406,17 @@ struct WindowTracker::Impl
       MSG msg;
       while (::GetMessage (&msg, nullptr, 0, 0) > 0) {
          if (msg.message == WM_QUIT) break;
+         if (msg.message == WM_TIMER && msg.wParam == reconcile_timer) {
+            reconcile ();
+            continue;
+         }
          ::TranslateMessage (&msg);
          ::DispatchMessage  (&msg);
+      }
+
+      if (reconcile_timer) {
+         ::KillTimer (nullptr, reconcile_timer);
+         reconcile_timer = 0;
       }
 
       if (h_location)   ::UnhookWinEvent (h_location);

@@ -9,7 +9,7 @@ using gv::ocr::family_of;
 TEST (Language, AllTenLocalesResolve)
 {
    EXPECT_EQ (family_of ("de"),      LanguageFamily::Latin);
-   EXPECT_EQ (family_of ("en"),      LanguageFamily::Latin);
+   EXPECT_EQ (family_of ("en"),      LanguageFamily::English);
    EXPECT_EQ (family_of ("es"),      LanguageFamily::Latin);
    EXPECT_EQ (family_of ("fr"),      LanguageFamily::Latin);
    EXPECT_EQ (family_of ("pt-BR"),   LanguageFamily::Latin);
@@ -28,6 +28,7 @@ TEST (Language, UnknownLocaleFallsBackToLatin)
 
 TEST (Language, FamilyDirsMatchModelLayout)
 {
+   EXPECT_EQ (family_dir (LanguageFamily::English), "en");
    EXPECT_EQ (family_dir (LanguageFamily::Latin),   "latin");
    EXPECT_EQ (family_dir (LanguageFamily::Eslav),   "eslav");
    EXPECT_EQ (family_dir (LanguageFamily::Korean),  "korean");

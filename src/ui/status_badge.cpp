@@ -1,6 +1,7 @@
 #include <gv/ui/status_badge.h>
 #include <gv/ui/screen.h>
 
+#include <QExposeEvent>
 #include <QQuickItem>
 
 namespace gv::ui {
@@ -49,11 +50,25 @@ void StatusBadge::set_game (const QRect& bounds, bool active)
    // bounds arrive as Win32 physical pixels; width()/height() are logical.
    const qreal s = screen::scale_at (bounds.center ());
 
-   screen::move (this, {
+   const QPoint target {
       bounds.right ()  - qRound ((width ()  + k_margin) * s),
       bounds.bottom () - qRound ((height () + k_margin) * s)
-   });
-   show ();
+   };
+
+   // Idempotent: window events repeat identical bounds; re-moving and
+   // re-showing every time storms expose events across the other topmost
+   // windows (debug overlay, augment).
+   if (target == applied_ && isVisible ()) return;
+   applied_ = target;
+
+   screen::move (this, target);
+   if (!isVisible ()) show ();
+}
+
+void StatusBadge::exposeEvent (QExposeEvent* event)
+{
+   QQuickView::exposeEvent (event);
+   if (isExposed ()) screen::make_passthrough (this);
 }
 
 void StatusBadge::pulse ()
