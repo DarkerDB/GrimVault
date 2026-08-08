@@ -19,12 +19,12 @@ struct Layout
 
    // How many columns the card lays its widgets out in.
    //
-   // Auto is the default and the reason this isn't a plain 1/2 flag: two
+   // Auto is the default and the reason this isn't a plain flag: extra
    // columns exist to stop a tall card being shrunk to fit the screen, and
    // the renderer already computes that shrink. So auto can decide exactly
    // rather than guess — and a player running three widgets, who never had
    // the problem, never sees the card change shape.
-   enum class Columns { Auto, One, Two };
+   enum class Columns { Auto, One, Two, Three };
 
    Align   align   = Align::Attached;
    Columns columns = Columns::Auto;

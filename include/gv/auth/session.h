@@ -33,6 +33,14 @@ public:
    // refresh; this is just "is the user signed in?").
    bool signed_in () const;
 
+   // Unverified JWT subject for local cache partitioning only. Authorization
+   // always remains server-side.
+   std::optional<std::string> principal () const;
+
+   // Force a fresh Credential Manager read. Used by the GUI watcher when a
+   // CLI or older client changes tokens in another process.
+   void reload ();
+
    // Returns a fresh access token, refreshing on the fly if needed. On
    // refresh failure (invalid_grant) the session drops to signed-out and
    // returns nullopt.

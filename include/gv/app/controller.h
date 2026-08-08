@@ -1,5 +1,6 @@
 #pragma once
 
+#include <gv/app/mode.h>
 #include <gv/core/result.h>
 #include <gv/core/window_tracker.h>
 
@@ -45,12 +46,6 @@ struct DefaultAccelerators {
    static constexpr const char* open_in_browser = "Ctrl+Shift+D";
 };
 
-// Auto     — hover a tooltip and the card appears (overlay:mode automatic).
-// Manual   — nothing is scanned until the scan_now hotkey (overlay:mode manual).
-// Disabled — the pipeline still runs, but nothing is ever drawn
-//            (overlay:mode disabled, and what toggle_overlay flips to).
-enum class Mode { Auto, Manual, Disabled };
-
 // Owns the runtime wiring between the window tracker, capture pipeline,
 // API client, overlay window, and hotkey manager. Lives on the Qt main
 // thread; worker threads marshal back via queued invocations.
@@ -86,6 +81,13 @@ public:
    std::string accelerator_for (std::string_view action) const;
 
    Mode mode () const noexcept;
+
+   // Authentication is a runtime boundary. Signed-out clients perform no
+   // capture, OCR, analysis, persistence, or presentation work.
+   void set_authenticated (bool authenticated, std::string principal = {});
+
+   // Cancel pending network work and join owned workers. Idempotent.
+   void stop ();
 
    // The dashboard's overlay:mode. Remembered separately from the live mode
    // so toggle_overlay can flip to Disabled and back to whatever the player

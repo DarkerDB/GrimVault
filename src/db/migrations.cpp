@@ -16,8 +16,13 @@ namespace {
 #include "migrations/0001_init.sql.inc"
    ;
 
-   constexpr std::array<Migration, 1> k_table {{
+   constexpr std::string_view k_migration_0002 =
+#include "migrations/0002_account_sessions.sql.inc"
+   ;
+
+   constexpr std::array<Migration, 2> k_table {{
       { 1, k_migration_0001 },
+      { 2, k_migration_0002 },
    }};
 
 } // namespace

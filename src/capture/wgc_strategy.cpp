@@ -67,6 +67,38 @@ namespace {
       }
    }
 
+   HMONITOR resolve_monitor (HMONITOR monitor)
+   {
+      if (monitor) return monitor;
+      POINT cursor {};
+      if (!::GetCursorPos (&cursor)) cursor = { 0, 0 };
+      return ::MonitorFromPoint (cursor, MONITOR_DEFAULTTOPRIMARY);
+   }
+
+   POINT monitor_origin (HMONITOR monitor)
+   {
+      MONITORINFO info { .cbSize = sizeof (MONITORINFO) };
+      if (monitor && ::GetMonitorInfoW (monitor, &info)) {
+         return { info.rcMonitor.left, info.rcMonitor.top };
+      }
+      return {};
+   }
+
+   POINT window_origin (HWND window, int capture_width, int capture_height)
+   {
+      RECT client {};
+      POINT origin {};
+      if (::GetClientRect (window, &client) && ::ClientToScreen (window, &origin)
+            && client.right - client.left == capture_width
+            && client.bottom - client.top == capture_height) {
+         return origin;
+      }
+
+      RECT bounds {};
+      if (::GetWindowRect (window, &bounds)) return { bounds.left, bounds.top };
+      return origin;
+   }
+
 } // namespace
 
 struct WgcStrategy::Impl
@@ -90,6 +122,10 @@ struct WgcStrategy::Impl
    std::atomic<bool>                         cont_active  { false };
    std::uint64_t                             cont_monitor_id = 0;
    std::uint64_t                             cont_window_id  = 0;
+   void*                                     cont_target     = nullptr;
+   bool                                      cont_is_window  = false;
+   int                                       cont_width      = 0;
+   int                                       cont_height     = 0;
 
    bool init_d3d ()
    {
@@ -172,7 +208,9 @@ struct WgcStrategy::Impl
    core::Result<Frame> capture_item (
       const GraphicsCaptureItem& item,
       std::uint64_t              monitor_id,
-      std::uint64_t              window_id
+      std::uint64_t              window_id,
+      int                        origin_x,
+      int                        origin_y
    ) {
       const auto size = item.Size ();
 
@@ -298,6 +336,8 @@ struct WgcStrategy::Impl
          .width      = width,
          .height     = height,
          .stride     = stride,
+         .origin_x   = origin_x,
+         .origin_y   = origin_y,
          .dpi_scale  = 1.0,                  // caller may set from HMONITOR DPI
          .monitor_id = monitor_id,
          .window_id  = window_id,
@@ -352,6 +392,7 @@ void WgcStrategy::shutdown () noexcept
 {
    if (!impl_) return;
 
+   stop_continuous ();
    impl_->winrt_device = nullptr;
    impl_->d3d_context.Reset ();
    impl_->d3d_device.Reset ();
@@ -368,10 +409,14 @@ core::Result<Frame> WgcStrategy::capture_window (void* window)
 
    try {
       auto item = impl_->item_for_window (hwnd);
+      const auto size = item.Size ();
+      const auto origin = window_origin (hwnd, size.Width, size.Height);
       return impl_->capture_item (
          item,
          0,
-         reinterpret_cast<std::uintptr_t> (hwnd)
+         reinterpret_cast<std::uintptr_t> (hwnd),
+         origin.x,
+         origin.y
       );
    } catch (const winrt::hresult_error& e) {
       return core::fail (core::Error::make (
@@ -387,14 +432,17 @@ core::Result<Frame> WgcStrategy::capture_monitor (void* monitor)
       return core::fail (core::Error::make (core::ErrorKind::Capture, "wgc: not initialized"));
    }
 
-   auto hmon = static_cast<HMONITOR> (monitor);
+   auto hmon = resolve_monitor (static_cast<HMONITOR> (monitor));
 
    try {
       auto item = impl_->item_for_monitor (hmon);
+      const auto origin = monitor_origin (hmon);
       return impl_->capture_item (
          item,
          reinterpret_cast<std::uintptr_t> (hmon),
-         0
+         0,
+         origin.x,
+         origin.y
       );
    } catch (const winrt::hresult_error& e) {
       return core::fail (core::Error::make (
@@ -440,6 +488,7 @@ core::Result<void> WgcStrategy::start_continuous (void* target, bool is_window)
    stop_continuous ();
 
    try {
+      if (!is_window) target = resolve_monitor (static_cast<HMONITOR> (target));
       auto item = is_window
          ? impl_->item_for_window  (static_cast<HWND> (target))
          : impl_->item_for_monitor (static_cast<HMONITOR> (target));
@@ -455,17 +504,44 @@ core::Result<void> WgcStrategy::start_continuous (void* target, bool is_window)
 
       impl_->cont_session = impl_->cont_pool.CreateCaptureSession (item);
 
-      if (impl_->borderless_supported)    impl_->cont_session.IsBorderRequired       (false);
-      if (impl_->cursor_toggle_supported) impl_->cont_session.IsCursorCaptureEnabled (false);
+      if (impl_->borderless_supported) {
+         try { impl_->cont_session.IsBorderRequired (false); }
+         catch (const winrt::hresult_error&) { /* optional on older builds */ }
+      }
+      if (impl_->cursor_toggle_supported) {
+         try { impl_->cont_session.IsCursorCaptureEnabled (false); }
+         catch (const winrt::hresult_error&) { /* optional on older builds */ }
+      }
 
       impl_->cont_window_id  = is_window  ? reinterpret_cast<std::uintptr_t> (target) : 0;
       impl_->cont_monitor_id = !is_window ? reinterpret_cast<std::uintptr_t> (target) : 0;
+      impl_->cont_target     = target;
+      impl_->cont_is_window  = is_window;
+      impl_->cont_width      = size.Width;
+      impl_->cont_height     = size.Height;
       impl_->cont_active.store (true);
 
       impl_->cont_token = impl_->cont_pool.FrameArrived (
          [this, is_window] (auto&& sender, auto&&) {
             auto next = sender.TryGetNextFrame ();
             if (!next) return;
+
+            const auto content_size = next.ContentSize ();
+            if (content_size.Width <= 0 || content_size.Height <= 0) return;
+            if (content_size.Width != impl_->cont_width
+                  || content_size.Height != impl_->cont_height) {
+               impl_->cont_width  = content_size.Width;
+               impl_->cont_height = content_size.Height;
+               next.Close ();
+               sender.Recreate (
+                  impl_->winrt_device,
+                  DirectXPixelFormat::B8G8R8A8UIntNormalized,
+                  2,
+                  content_size);
+               core::Logger::info ("wgc: frame pool resized to {}x{}",
+                  content_size.Width, content_size.Height);
+               return;
+            }
 
             auto surface = next.Surface ();
             auto access  = surface.as<::IDirect3DDxgiInterfaceAccess> ();
@@ -495,6 +571,9 @@ core::Result<void> WgcStrategy::start_continuous (void* target, bool is_window)
             const int width  = static_cast<int> (desc.Width);
             const int height = static_cast<int> (desc.Height);
             const int stride = static_cast<int> (map.RowPitch);
+            const POINT origin = is_window
+               ? window_origin (static_cast<HWND> (impl_->cont_target), width, height)
+               : monitor_origin (static_cast<HMONITOR> (impl_->cont_target));
 
             auto pixels = std::shared_ptr<std::uint8_t []> (
                new std::uint8_t [ static_cast<std::size_t> (stride) * height ]
@@ -508,6 +587,8 @@ core::Result<void> WgcStrategy::start_continuous (void* target, bool is_window)
                .width      = width,
                .height     = height,
                .stride     = stride,
+               .origin_x   = origin.x,
+               .origin_y   = origin.y,
                .dpi_scale  = 1.0,
                .monitor_id = impl_->cont_monitor_id,
                .window_id  = impl_->cont_window_id,
@@ -564,6 +645,9 @@ void WgcStrategy::stop_continuous () noexcept
    impl_->cont_pool    = nullptr;
    impl_->cont_session = nullptr;
    impl_->cont_token   = {};
+   impl_->cont_target  = nullptr;
+   impl_->cont_width   = 0;
+   impl_->cont_height  = 0;
 }
 
 } // namespace gv::capture

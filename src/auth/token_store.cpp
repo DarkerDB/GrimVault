@@ -1,5 +1,6 @@
 #include <gv/auth/token_store.h>
 
+#include <gv/core/env_resolver.h>
 #include <gv/core/logger.h>
 
 #include <nlohmann/json.hpp>
@@ -17,7 +18,13 @@ namespace gv::auth {
 
 namespace {
 
-   constexpr const wchar_t* k_target_name = L"GrimVault:tokens";
+   constexpr const wchar_t* k_legacy_target = L"GrimVault:tokens";
+
+   std::wstring target_name ()
+   {
+      const auto env = gv::core::active_env ().name;
+      return L"GrimVault:tokens:" + std::wstring { env.begin (), env.end () };
+   }
 
    nlohmann::json to_json (const TokenSet& t)
    {
@@ -48,10 +55,12 @@ namespace {
 
 #ifdef _WIN32
 
-core::Result<std::optional<TokenSet>> TokenStore::load ()
+namespace {
+
+core::Result<std::optional<TokenSet>> read_named (const wchar_t* target)
 {
    PCREDENTIALW cred = nullptr;
-   if (!::CredReadW (k_target_name, CRED_TYPE_GENERIC, 0, &cred)) {
+   if (!::CredReadW (target, CRED_TYPE_GENERIC, 0, &cred)) {
       const auto err = ::GetLastError ();
       if (err == ERROR_NOT_FOUND) return std::optional<TokenSet> {};
       return core::fail (core::Error::make (core::ErrorKind::Io,
@@ -74,13 +83,13 @@ core::Result<std::optional<TokenSet>> TokenStore::load ()
    return std::optional<TokenSet> { from_json (json) };
 }
 
-core::Result<void> TokenStore::save (const TokenSet& tokens)
+core::Result<void> write_named (const wchar_t* target, const TokenSet& tokens)
 {
    const std::string blob = to_json (tokens).dump ();
 
    CREDENTIALW cred {};
    cred.Type            = CRED_TYPE_GENERIC;
-   cred.TargetName      = const_cast<LPWSTR> (k_target_name);
+   cred.TargetName      = const_cast<LPWSTR> (target);
    cred.CredentialBlob  = reinterpret_cast<LPBYTE> (const_cast<char*> (blob.data ()));
    cred.CredentialBlobSize = static_cast<DWORD> (blob.size ());
    cred.Persist         = CRED_PERSIST_LOCAL_MACHINE;
@@ -90,17 +99,64 @@ core::Result<void> TokenStore::save (const TokenSet& tokens)
       return core::fail (core::Error::make (core::ErrorKind::Io,
          "token_store: CredWrite failed: {}", err));
    }
-   core::log::api.info ("token_store: wrote credential blob ({} bytes)", blob.size ());
+   return {};
+}
+
+core::Result<void> clear_named (const wchar_t* target)
+{
+   if (!::CredDeleteW (target, CRED_TYPE_GENERIC, 0)) {
+      const auto err = ::GetLastError ();
+      if (err == ERROR_NOT_FOUND) return {};
+      return core::fail (core::Error::make (core::ErrorKind::Io,
+         "token_store: CredDelete failed: {}", err));
+   }
+   return {};
+}
+
+} // namespace
+
+core::Result<std::optional<TokenSet>> TokenStore::load ()
+{
+   const auto target = target_name ();
+   auto current = read_named (target.c_str ());
+   if (gv::core::active_env ().name != "prod") return current;
+
+   auto legacy = read_named (k_legacy_target);
+   if (!legacy.has_value ()) return current.has_value () ? current : legacy;
+   if (!legacy->has_value ()) return current;
+   if (!current.has_value () || !current->has_value ()
+       || (*legacy)->expires_at > (**current).expires_at) {
+      auto migrated = write_named (target.c_str (), **legacy);
+      if (!migrated.has_value ()) return core::fail (migrated.error ());
+      core::log::api.info ("token_store: synchronized legacy production credential");
+      return legacy;
+   }
+   return current;
+}
+
+core::Result<void> TokenStore::save (const TokenSet& tokens)
+{
+   const auto target = target_name ();
+   auto saved = write_named (target.c_str (), tokens);
+   if (!saved.has_value ()) return saved;
+
+   if (gv::core::active_env ().name == "prod") {
+      auto legacy = write_named (k_legacy_target, tokens);
+      if (!legacy.has_value ()) return legacy;
+   }
+   core::log::api.info ("token_store: wrote credential blob");
    return {};
 }
 
 core::Result<void> TokenStore::clear ()
 {
-   if (!::CredDeleteW (k_target_name, CRED_TYPE_GENERIC, 0)) {
-      const auto err = ::GetLastError ();
-      if (err == ERROR_NOT_FOUND) return {};
-      return core::fail (core::Error::make (core::ErrorKind::Io,
-         "token_store: CredDelete failed: {}", err));
+   const auto target = target_name ();
+   auto cleared = clear_named (target.c_str ());
+   if (!cleared.has_value ()) return cleared;
+
+   if (gv::core::active_env ().name == "prod") {
+      auto legacy = clear_named (k_legacy_target);
+      if (!legacy.has_value ()) return legacy;
    }
    core::log::api.info ("token_store: cleared credential blob");
    return {};

@@ -11,18 +11,23 @@
    CMake preset to use (default: windows-msvc-test).
 
 .PARAMETER Tests
-   Skip configure + build; just run ctest with the given preset's test set.
+   Skip configure + build; just run ctest with the selected label.
+
+.PARAMETER Label
+   CTest label to run. Defaults to unit.
 
 .EXAMPLE
    pwsh tools/check-build.ps1
    pwsh tools/check-build.ps1 -Preset windows-msvc-release
-   pwsh tools/check-build.ps1 -Tests
+   pwsh tools/check-build.ps1 -Tests -Label e2e
 #>
 
 [CmdletBinding ()]
 param (
    [string] $Preset = "windows-msvc-test",
-   [switch] $Tests
+   [switch] $Tests,
+   [ValidateSet ("unit", "e2e", "integration")]
+   [string] $Label = "unit"
 )
 
 $ErrorActionPreference = "Stop"
@@ -59,14 +64,34 @@ if ($IsLinux) {
    exit $LASTEXITCODE
 }
 
-$root                  = (Resolve-Path "$PSScriptRoot\..").Path
+$root                  = (Resolve-Path "$PSScriptRoot\..").ProviderPath
+
+# Windows PowerShell may resolve a script launched through
+# \\wsl.localhost\... back to its UNC provider path even when that tree also
+# has a drive mapping. Qt invokes cmd.exe during the build, and cmd cannot use
+# a UNC working directory, so recover the mapped spelling when one exists.
+if ($root -like '\\*') {
+   $mapping = Get-PSDrive -PSProvider FileSystem | Where-Object {
+      $_.DisplayRoot -and $root.StartsWith($_.DisplayRoot, [StringComparison]::OrdinalIgnoreCase)
+   } | Select-Object -First 1
+   if ($mapping) {
+      $root = "$($mapping.Name):$($root.Substring($mapping.DisplayRoot.Length))"
+   }
+}
 
 # Build tree stays on a local Windows drive when the source lives in WSL
 # (W: mapping of \\wsl.localhost\Ubuntu; see DEV.md): MSVC and Qt tooling
 # spawn cmd.exe (no UNC cwd), and build-output writes over 9P are slow.
-$remote = ($root -like '\\*') -or
-          ((Get-PSDrive -Name (Split-Path -Qualifier $root).TrimEnd(':')).DisplayRoot -like '\\*') -or
-          ((New-Object System.IO.DriveInfo ($root)).DriveType -eq 'Network')
+$remote = $root -like '\\*'
+if (-not $remote) {
+   $qualifier = Split-Path -Qualifier $root
+   if ($qualifier) {
+      $driveName = $qualifier.TrimEnd(':')
+      $drive = Get-PSDrive -Name $driveName -ErrorAction SilentlyContinue
+      $remote = ($drive -and $drive.DisplayRoot -like '\\*') -or
+                ((New-Object System.IO.DriveInfo ($root)).DriveType -eq 'Network')
+   }
+}
 $out = if ($remote) { "$env:LOCALAPPDATA\GrimVault\build\$Preset" }
        else         { Join-Path $root "build\$Preset" }
 
@@ -77,6 +102,8 @@ function Fail ([string] $msg) {
 
 function Ok ([string] $msg) { Write-Host "OK     $msg" -ForegroundColor Green }
 function Inf ([string] $msg) { Write-Host "       $msg" -ForegroundColor DarkGray }
+
+. (Join-Path $PSScriptRoot 'build\msvc-env.ps1')
 
 # ---- Prerequisites ---------------------------------------------------------
 
@@ -100,9 +127,10 @@ if (-not (Test-Path "$env:VCPKG_ROOT\vcpkg.exe")) {
 }
 Ok "VCPKG_ROOT = $env:VCPKG_ROOT"
 
-if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
-   Inf "cl.exe not on PATH - make sure you're running from a Developer PowerShell, or vcvars64.bat is sourced."
+if (-not (Initialize-MsvcEnv { param ($message) Inf $message })) {
+   Fail "MSVC x64 tools not found. Install Visual Studio 2022 Build Tools."
 }
+Ok "MSVC environment (cl.exe sourced)"
 
 # ---- Configure -------------------------------------------------------------
 
@@ -114,16 +142,20 @@ if (-not $Tests) {
 
    $cfgArgs = @("-S", $root, "--preset", $Preset, "-B", $out)
 
-   $proc = Start-Process -FilePath "cmake" -ArgumentList $cfgArgs -WorkingDirectory $env:LOCALAPPDATA `
-      -NoNewWindow -PassThru -RedirectStandardOutput $configLog -RedirectStandardError "$configLog.err"
-   $proc.WaitForExit()
+   Push-Location $env:LOCALAPPDATA
+   try {
+      & cmake @cfgArgs 1> $configLog 2> "$configLog.err"
+      $exitCode = $LASTEXITCODE
+   } finally {
+      Pop-Location
+   }
 
-   if ($proc.ExitCode -ne 0) {
+   if ($exitCode -ne 0) {
       Write-Host "`n--- configure errors (last 40 lines) ---" -ForegroundColor Red
       Get-Content "$configLog.err" -Tail 40
       Get-Content $configLog | Where-Object { $_ -match "(error|warning|not found|cannot find|missing)" } |
          Select-Object -Last 20 | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
-      Fail "cmake configure failed (exit $($proc.ExitCode)). Full log: $configLog"
+      Fail "cmake configure failed (exit $exitCode). Full log: $configLog"
    }
    Ok "configure -> $configLog"
 
@@ -132,32 +164,36 @@ if (-not $Tests) {
    Write-Host "`n==> Build" -ForegroundColor Cyan
 
    $buildLog = Join-Path $out "build.log"
-   $proc = Start-Process -FilePath "cmake" -ArgumentList @("--build", $out) `
-      -WorkingDirectory $env:LOCALAPPDATA -NoNewWindow -PassThru -RedirectStandardOutput $buildLog -RedirectStandardError "$buildLog.err"
-   $proc.WaitForExit()
+   Push-Location $env:LOCALAPPDATA
+   try {
+      & cmake --build $out 1> $buildLog 2> "$buildLog.err"
+      $exitCode = $LASTEXITCODE
+   } finally {
+      Pop-Location
+   }
 
-   if ($proc.ExitCode -ne 0) {
+   if ($exitCode -ne 0) {
       Write-Host "`n--- build errors (last 40 lines) ---" -ForegroundColor Red
       Get-Content $buildLog        | Select-String -Pattern "error", "fatal error" |
          Select-Object -Last 20 | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
-      Fail "build failed (exit $($proc.ExitCode)). Full log: $buildLog"
+      Fail "build failed (exit $exitCode). Full log: $buildLog"
    }
    Ok "build -> $buildLog"
 }
 
 # ---- Tests -----------------------------------------------------------------
 
-Write-Host "`n==> Unit tests" -ForegroundColor Cyan
+Write-Host "`n==> $Label tests" -ForegroundColor Cyan
 
 Push-Location $out
 try {
-   & ctest --output-on-failure --label-regex unit
+   & ctest --output-on-failure --label-regex $Label
    if ($LASTEXITCODE -ne 0) {
-      Fail "unit tests failed."
+      Fail "$Label tests failed."
    }
 } finally {
    Pop-Location
 }
-Ok "unit tests passed"
+Ok "$Label tests passed"
 
 Write-Host "`n==> Smoke test complete." -ForegroundColor Cyan

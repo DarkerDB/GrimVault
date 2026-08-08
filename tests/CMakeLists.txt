@@ -50,8 +50,17 @@ if (GRIMVAULT_BUILD_E2E)
          gv::db
          gv::api
          gv::capture
+         gv::vision
+         gv::ocr
+         opencv_imgcodecs
+         opencv_imgproc
          GTest::gtest
          GTest::gtest_main
+      )
+
+      target_compile_definitions (grimvault_e2e_tests PRIVATE
+         GRIMVAULT_TEST_MODELS_DIR="${CMAKE_SOURCE_DIR}/models"
+         GRIMVAULT_TEST_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
       )
 
       set_target_properties (grimvault_e2e_tests PROPERTIES

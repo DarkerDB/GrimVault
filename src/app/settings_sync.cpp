@@ -15,6 +15,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace gv::app {
 
@@ -101,6 +102,7 @@ void SettingsSync::stop ()
    impl_->running = false;
    impl_->timer.stop ();
    impl_->generation.fetch_add (1, std::memory_order_relaxed);  // invalidate in-flight worker
+   if (impl_->api) impl_->api->cancel_pending ();
    log.info ("settings sync: stopped");
 }
 
@@ -131,7 +133,10 @@ void SettingsSync::poll_now ()
             impl_->poll_in_flight = false;
 
             // Generation mismatch → caller called stop () + start () again.
-            if (gen != impl_->generation.load (std::memory_order_relaxed)) return;
+            if (gen != impl_->generation.load (std::memory_order_relaxed)) {
+               if (impl_->running) QTimer::singleShot (0, this, [this] { poll_now (); });
+               return;
+            }
             if (!impl_->running) return;
 
             if (!bundle.has_value ()) {
@@ -142,6 +147,9 @@ void SettingsSync::poll_now ()
                log.warn ("settings sync: poll failed: {} (next in {}s)",
                   bundle.error ().message, next.count ());
                emit poll_failed (QString::fromStdString (bundle.error ().message));
+               if (!impl_->session || !impl_->session->signed_in ()) {
+                  emit authentication_required ();
+               }
                impl_->schedule_next (next);
                return;
             }
@@ -176,17 +184,35 @@ void SettingsSync::poll_now ()
                emit settings_changed (QString::fromStdString (key), {});
             }
 
+            std::vector<std::string_view> keys;
+            keys.reserve (bundle->values.size ());
             for (const auto& [key, value] : bundle->values) {
-               const auto it = existing.find (key);
+               (void) value;
+               keys.push_back (key);
+            }
+            std::sort (keys.begin (), keys.end (), [] (const auto left, const auto right) {
+               constexpr std::string_view order = "tooltip:analysis_order";
+               if (left == order) return false;
+               if (right == order) return true;
+               return left < right;
+            });
+
+            // Apply widget values before the explicit order marker. This is
+            // deterministic even though SettingsBundle stores flat values in
+            // an unordered map, and makes first-run/live sync match reload().
+            for (const auto key : keys) {
+               const std::string key_text { key };
+               const auto& value = bundle->values.at (key_text);
+               const auto it = existing.find (key_text);
                if (it != existing.end () && it->second == value) continue;
 
-               auto w = impl_->repo->set (key, value);
+               auto w = impl_->repo->set (key_text, value);
                if (!w.has_value ()) {
                   log.warn ("settings sync: write failed for {}: {}", key, w.error ().message);
                   continue;
                }
                ++changed;
-               emit settings_changed (QString::fromStdString (key),
+               emit settings_changed (QString::fromStdString (key_text),
                                       QString::fromStdString (value));
             }
 

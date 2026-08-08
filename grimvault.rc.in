@@ -22,12 +22,12 @@ BEGIN
       BEGIN
          VALUE "CompanyName",      "DarkerDB"
          VALUE "FileDescription",  "GrimVault"
-         VALUE "FileVersion",      "@PROJECT_VERSION@"
+         VALUE "FileVersion",      "@GRIMVAULT_DISPLAY_VERSION@"
          VALUE "InternalName",     "GrimVault"
          VALUE "LegalCopyright",   "Copyright (c) DarkerDB"
          VALUE "OriginalFilename", "grimvault.exe"
          VALUE "ProductName",      "GrimVault"
-         VALUE "ProductVersion",   "@PROJECT_VERSION@"
+         VALUE "ProductVersion",   "@GRIMVAULT_DISPLAY_VERSION@"
       END
    END
    BLOCK "VarFileInfo"
