@@ -1,5 +1,8 @@
 # GrimVault MVP architecture
 
+> Historical V1 design record. The current client contract is
+> [`grimvault-v2.md`](grimvault-v2.md). Where the documents differ, V2 wins.
+
 Status: contract. Every other agent builds against this. Decisions are
 settled; resolved rulings are appended in §13.
 
@@ -613,7 +616,7 @@ live server-side so the client stays language-agnostic.
 | `ocr.raw_text` | string | yes | Newline-separated OCR output. UTF-8. Max 4 KB. |
 | `ocr.confidence` | number (0..1) | no | Aggregate OCR confidence if available. |
 | `hints.rarity_color_hex` | string | no | Sampled rarity-tier pixel, helps server disambiguate. |
-| `hints.capture_backend` | string | no | `wgc` or `gdi`. Diagnostic only. |
+| `hints.capture_backend` | string | no | `wgc`, `dxgi`, or `gdi`. Diagnostic only. Unknown values remain compatible and are recorded as `unknown`. |
 
 ### 4.3 Response schema (200)
 

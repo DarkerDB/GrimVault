@@ -211,6 +211,7 @@ replacement candidates and rejection, and periodic `anchor_metrics` summaries
 be justified from these measurements rather than visual guesswork.
 
 Debug runs retain the newest 40 replacement-candidate/settled frames in
-`%APPDATA%\GrimVault\logs\anchoring`. These become real-game regression
+`%LOCALAPPDATA%\GrimVault\<env>\logs\anchoring`. Production omits the
+`<env>` segment. These become real-game regression
 fixtures after review and sanitization. `tools/anchor-log-summary.{sh,ps1}`
 summarizes the latest rotating log.

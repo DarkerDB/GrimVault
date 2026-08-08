@@ -1,21 +1,24 @@
-# grimvault_detect_version (<out_var>)
+# grimvault_detect_version (<numeric_out> <display_out>)
 #
 # Resolves the project version from (in order):
-#    1. $ENV{GRIMVAULT_VERSION}                  (CI override)
-#    2. `git describe --tags --abbrev=0` of HEAD (stripped of leading v)
-#    3. 0.0.0                                    (fallback)
+#    1. -DGRIMVAULT_VERSION or $ENV{GRIMVAULT_VERSION} (CI override)
+#    2. an exact SemVer tag on HEAD
+#    3. 0.0.0-dev
 #
-function (grimvault_detect_version out_var)
-   if (DEFINED ENV{GRIMVAULT_VERSION} AND NOT "$ENV{GRIMVAULT_VERSION}" STREQUAL "")
-      set (${out_var} "$ENV{GRIMVAULT_VERSION}" PARENT_SCOPE)
-      return ()
+function (grimvault_detect_version numeric_out display_out)
+   set (raw "")
+
+   if (DEFINED GRIMVAULT_VERSION AND NOT "${GRIMVAULT_VERSION}" STREQUAL "")
+      set (raw "${GRIMVAULT_VERSION}")
+   elseif (DEFINED ENV{GRIMVAULT_VERSION} AND NOT "$ENV{GRIMVAULT_VERSION}" STREQUAL "")
+      set (raw "$ENV{GRIMVAULT_VERSION}")
    endif ()
 
    find_package (Git QUIET)
 
-   if (Git_FOUND)
+   if (NOT raw AND Git_FOUND)
       execute_process (
-         COMMAND "${GIT_EXECUTABLE}" describe --tags --abbrev=0
+         COMMAND "${GIT_EXECUTABLE}" describe --tags --exact-match
          WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
          OUTPUT_VARIABLE git_tag
          OUTPUT_STRIP_TRAILING_WHITESPACE
@@ -24,25 +27,31 @@ function (grimvault_detect_version out_var)
       )
 
       if (git_rc EQUAL 0 AND git_tag)
-         string (REGEX REPLACE "^v" "" git_tag "${git_tag}")
-
-         if (git_tag MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
-            set (${out_var} "${git_tag}" PARENT_SCOPE)
-            return ()
-         endif ()
+         set (raw "${git_tag}")
       endif ()
    endif ()
 
-   set (${out_var} "0.0.0" PARENT_SCOPE)
+   if (NOT raw)
+      set (raw "0.0.0-dev")
+   endif ()
+
+   string (REGEX REPLACE "^v" "" display "${raw}")
+   if (NOT display MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$")
+      message (FATAL_ERROR "Invalid GrimVault version '${raw}'")
+   endif ()
+
+   string (REGEX MATCH "^[0-9]+\\.[0-9]+\\.[0-9]+" numeric "${display}")
+   set (${numeric_out} "${numeric}" PARENT_SCOPE)
+   set (${display_out} "${display}" PARENT_SCOPE)
 endfunction ()
 
 
-# grimvault_write_version_header (<path> <version>)
+# grimvault_write_version_header (<path> <numeric_version> <display_version>)
 #
 # Writes a header exposing the version as compile-time constants under
 # gv::core::version.
 #
-function (grimvault_write_version_header path version)
+function (grimvault_write_version_header path version display_version)
    string (REPLACE "." ";" parts "${version}")
    list (LENGTH parts n)
 
@@ -63,7 +72,7 @@ namespace gv::core::version {
 constexpr int         major  = @major@;
 constexpr int         minor  = @minor@;
 constexpr int         patch  = @patch@;
-constexpr const char* string = "@version@";
+constexpr const char* string = "@display_version@";
 
 } // namespace gv::core::version
 ]=])

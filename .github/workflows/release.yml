@@ -1,134 +1,295 @@
-# Thin caller that fires on a published GitHub Release and invokes the
-# hearth reusable workflow once per env (dev, qa, prod). All build / sign /
-# publish logic lives in:
-#
-#    katforge/hearth/.github/workflows/release-template-desktop-windows.yml
-#
-# Per GrimVault MVP contract (docs/architecture/grimvault-mvp.md §10), each
-# env produces a separate installer with its own client_id and API base URL
-# baked in at compile time via -DGRIMVAULT_ENV=<env> (see cmake/Env.cmake).
-# The three matrix arms differ ONLY in:
-#
-#    build_preset    selects per-env CMake preset (bakes GRIMVAULT_ENV)
-#    installer_glob  per-env build dir
-#    s3_prefix       env-scoped S3 namespace so appcasts don't collide
-#    appcast_path    same filename, different prefix (one appcast per env)
-#
-# S3 layout after a release for tag vX.Y.Z:
-#
-#    s3://katforge-releases/grimvault/dev/vX.Y.Z/GrimVault-Setup-vX.Y.Z.exe
-#    s3://katforge-releases/grimvault/dev/appcast.xml
-#    s3://katforge-releases/grimvault/qa/vX.Y.Z/GrimVault-Setup-vX.Y.Z.exe
-#    s3://katforge-releases/grimvault/qa/appcast.xml
-#    s3://katforge-releases/grimvault/vX.Y.Z/GrimVault-Setup-vX.Y.Z.exe
-#    s3://katforge-releases/grimvault/appcast.xml          ← prod, unchanged URL
-#
-# Prod's S3 prefix (`grimvault`, unsuffixed) matches the existing appcast
-# URL baked into the binary; dev/qa get nested under their env so the prod
-# appcast URL doesn't change.
-#
-# KNOWN FOLLOW-UP: the shared template's `Attach to GitHub Release` step
-# does `gh release upload "$TAG" "$f"`. All three matrix arms produce an
-# installer with the same filename (GrimVault-Setup-vX.Y.Z.exe), which will
-# collide on GitHub Release attach. Either the CPack output name needs to
-# bake the env (engineer change) or the template needs an env-aware filename
-# step. Flagged separately to Anders.
-#
-# Adding a new platform target = add another `with: ...` block calling the
-# corresponding template (release-template-desktop-macos, -linux, -steam).
-
 name: Release
 
 on:
    release:
       types: [ published ]
+   workflow_dispatch:
+      inputs:
+         channel:
+            description: Update channel
+            required: true
+            default: beta
+            type: choice
+            options: [ beta, stable ]
+         publish:
+            description: Publish to S3 and update the appcast
+            required: true
+            default: false
+            type: boolean
+         target_env:
+            description: API environment baked into the client
+            required: true
+            default: qa
+            type: choice
+            options: [ dev, qa, prod ]
+         version:
+            description: SemVer, for example 2.0.0-rc.1
+            required: false
+            type: string
+
+permissions:
+   contents: write
+
+concurrency:
+   group: release-grimvault-${{ github.event_name == 'release' && github.event.release.tag_name || inputs.target_env }}
+   cancel-in-progress: false
+
+env:
+   CHANNEL: ${{ github.event_name == 'release' && (github.event.release.prerelease && 'beta' || 'stable') || inputs.channel }}
+   RELEASE_VERSION: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.version || '0.0.0-dev' }}
+   TARGET_ENV: ${{ github.event_name == 'release' && 'prod' || inputs.target_env }}
+   VCPKG_COMMIT: 2b65c20fc66eda893aa15a15a453c3cf09500b19
 
 jobs:
+   compatibility:
+      name: Windows ${{ matrix.windows }}
+      runs-on: ${{ matrix.windows }}
+      strategy:
+         fail-fast: false
+         matrix:
+            windows: [ windows-2022, windows-2025 ]
+      steps:
+         - uses: actions/checkout@v4
+           with:
+              fetch-depth: 0
 
-   # -------------------------------------------------------------------------
-   windows-dev:
-      uses: katforge/hearth/.github/workflows/release-template-desktop-windows.yml@master
-      with:
-         service:         grimvault
-         build_preset:    release-windows-dev
-         installer_glob:  build/release-windows-dev/GrimVault-Setup-*.exe
-         e2e_cmd:         build/release-windows-dev/tests/grimvault_e2e_tests.exe
-         e2e_resolutions: '["1920x1080", "2560x1440", "3840x2160"]'
-         e2e_modes:       '["normal", "high_roller", "ruins", "inferno", "goblin_caves"]'
-         fixtures_source: s3://grimvault-fixtures/v1/
-         appcast_kind:    winsparkle
-         appcast_path:    ${{ github.event.release.prerelease && 'appcast-beta.xml' || 'appcast.xml' }}
-         s3_bucket:       katforge-releases
-         s3_prefix:       grimvault/dev
-         channel:         ${{ github.event.release.prerelease && 'beta' || 'stable' }}
-         sign_provider:   ssl_com_esigner
-      secrets:
-         KATFORGE_GITHUB_TOKEN: ${{ secrets.KATFORGE_GITHUB_TOKEN }}
-         SSL_COM_USERNAME:      ${{ secrets.SSL_COM_USERNAME }}
-         SSL_COM_PASSWORD:      ${{ secrets.SSL_COM_PASSWORD }}
-         SSL_COM_CREDENTIAL_ID: ${{ secrets.SSL_COM_CREDENTIAL_ID }}
-         SSL_COM_TOTP_SECRET:   ${{ secrets.SSL_COM_TOTP_SECRET }}
-         AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-         AWS_REGION:            ${{ secrets.AWS_REGION }}
-         APPCAST_ED25519_PRIV:  ${{ secrets.APPCAST_ED25519_PRIV }}
+         - uses: ilammy/msvc-dev-cmd@v1
 
-   # -------------------------------------------------------------------------
-   windows-qa:
-      # Gated off during build-out; flip to true when QA infra exists (see §10.4).
-      if: false
-      uses: katforge/hearth/.github/workflows/release-template-desktop-windows.yml@master
-      with:
-         service:         grimvault
-         build_preset:    release-windows-qa
-         installer_glob:  build/release-windows-qa/GrimVault-Setup-*.exe
-         e2e_cmd:         build/release-windows-qa/tests/grimvault_e2e_tests.exe
-         e2e_resolutions: '["1920x1080", "2560x1440", "3840x2160"]'
-         e2e_modes:       '["normal", "high_roller", "ruins", "inferno", "goblin_caves"]'
-         fixtures_source: s3://grimvault-fixtures/v1/
-         appcast_kind:    winsparkle
-         appcast_path:    ${{ github.event.release.prerelease && 'appcast-beta.xml' || 'appcast.xml' }}
-         s3_bucket:       katforge-releases
-         s3_prefix:       grimvault/qa
-         channel:         ${{ github.event.release.prerelease && 'beta' || 'stable' }}
-         sign_provider:   ssl_com_esigner
-      secrets:
-         KATFORGE_GITHUB_TOKEN: ${{ secrets.KATFORGE_GITHUB_TOKEN }}
-         SSL_COM_USERNAME:      ${{ secrets.SSL_COM_USERNAME }}
-         SSL_COM_PASSWORD:      ${{ secrets.SSL_COM_PASSWORD }}
-         SSL_COM_CREDENTIAL_ID: ${{ secrets.SSL_COM_CREDENTIAL_ID }}
-         SSL_COM_TOTP_SECRET:   ${{ secrets.SSL_COM_TOTP_SECRET }}
-         AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-         AWS_REGION:            ${{ secrets.AWS_REGION }}
-         APPCAST_ED25519_PRIV:  ${{ secrets.APPCAST_ED25519_PRIV }}
+         - name: Validate release inputs
+           shell: pwsh
+           run: |
+              if ($env:RELEASE_VERSION -notmatch '^v?\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)(?:[.-]\d+)?)?(?:\+[0-9A-Za-z.-]+)?$' -and
+                  $env:RELEASE_VERSION -ne '0.0.0-dev') {
+                 throw "Invalid release version: $env:RELEASE_VERSION"
+              }
+              if ('${{ github.event_name }}' -eq 'workflow_dispatch' -and '${{ inputs.publish }}' -eq 'true' -and
+                  $env:RELEASE_VERSION -eq '0.0.0-dev') {
+                 throw 'A version is required when publish is enabled.'
+              }
 
-   # -------------------------------------------------------------------------
-   windows-prod:
-      # Gated off until prod cutover lands; flip to true when activating (see §10.4).
-      if: false
-      uses: katforge/hearth/.github/workflows/release-template-desktop-windows.yml@master
-      with:
-         service:         grimvault
-         build_preset:    release-windows-prod
-         installer_glob:  build/release-windows-prod/GrimVault-Setup-*.exe
-         e2e_cmd:         build/release-windows-prod/tests/grimvault_e2e_tests.exe
-         e2e_resolutions: '["1920x1080", "2560x1440", "3840x2160"]'
-         e2e_modes:       '["normal", "high_roller", "ruins", "inferno", "goblin_caves"]'
-         fixtures_source: s3://grimvault-fixtures/v1/
-         appcast_kind:    winsparkle
-         appcast_path:    ${{ github.event.release.prerelease && 'appcast-beta.xml' || 'appcast.xml' }}
-         s3_bucket:       katforge-releases
-         s3_prefix:       grimvault
-         channel:         ${{ github.event.release.prerelease && 'beta' || 'stable' }}
-         sign_provider:   ssl_com_esigner
-      secrets:
-         KATFORGE_GITHUB_TOKEN: ${{ secrets.KATFORGE_GITHUB_TOKEN }}
-         SSL_COM_USERNAME:      ${{ secrets.SSL_COM_USERNAME }}
-         SSL_COM_PASSWORD:      ${{ secrets.SSL_COM_PASSWORD }}
-         SSL_COM_CREDENTIAL_ID: ${{ secrets.SSL_COM_CREDENTIAL_ID }}
-         SSL_COM_TOTP_SECRET:   ${{ secrets.SSL_COM_TOTP_SECRET }}
-         AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-         AWS_REGION:            ${{ secrets.AWS_REGION }}
-         APPCAST_ED25519_PRIV:  ${{ secrets.APPCAST_ED25519_PRIV }}
+         - name: Install build tools
+           shell: pwsh
+           run: choco install ninja nsis -y --no-progress
+
+         - name: Restore vcpkg cache
+           uses: actions/cache@v4
+           with:
+              path: |
+                 vcpkg_installed
+                 ${{ env.LOCALAPPDATA }}\vcpkg\archives
+              key: vcpkg-${{ matrix.windows }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
+              restore-keys: vcpkg-${{ matrix.windows }}-${{ env.VCPKG_COMMIT }}-
+
+         - uses: actions/checkout@v4
+           with:
+              repository: microsoft/vcpkg
+              ref: ${{ env.VCPKG_COMMIT }}
+              path: vcpkg
+              fetch-depth: 1
+
+         - name: Bootstrap pinned vcpkg
+           shell: pwsh
+           run: vcpkg\bootstrap-vcpkg.bat -disableMetrics
+
+         - name: Fetch verified WebView2 bootstrapper
+           if: matrix.windows == 'windows-2022'
+           shell: pwsh
+           run: tools\release\fetch-webview2.ps1
+
+         - name: Configure
+           shell: pwsh
+           env:
+              VCPKG_ROOT: ${{ github.workspace }}\vcpkg
+           run: |
+              $preset = "release-windows-$env:TARGET_ENV"
+              cmake --preset $preset `
+                 -DGRIMVAULT_CHANNEL=$env:CHANNEL `
+                 -DGRIMVAULT_VERSION=$env:RELEASE_VERSION
+
+         - name: Build
+           shell: pwsh
+           run: cmake --build --preset "release-windows-$env:TARGET_ENV" --parallel
+
+         - name: Test
+           shell: pwsh
+           run: |
+              $build = "build/release-windows-$env:TARGET_ENV"
+              ctest --test-dir $build --output-on-failure -L unit
+              ctest --test-dir $build --output-on-failure -L e2e
+
+         - name: Sign application
+           if: matrix.windows == 'windows-2022'
+           shell: pwsh
+           env:
+              SSL_COM_USERNAME: ${{ secrets.SSL_COM_USERNAME }}
+              SSL_COM_PASSWORD: ${{ secrets.SSL_COM_PASSWORD }}
+              SSL_COM_CREDENTIAL_ID: ${{ secrets.SSL_COM_CREDENTIAL_ID }}
+              SSL_COM_TOTP_SECRET: ${{ secrets.SSL_COM_TOTP_SECRET }}
+           run: |
+              $exe = Resolve-Path "build/release-windows-$env:TARGET_ENV/grimvault.exe"
+              tools\release\sign-windows.ps1 -Path $exe
+
+         - name: Package
+           if: matrix.windows == 'windows-2022'
+           shell: pwsh
+           run: cmake --build --preset "release-windows-$env:TARGET_ENV" --target package
+
+         - name: Sign installer
+           if: matrix.windows == 'windows-2022'
+           shell: pwsh
+           env:
+              SSL_COM_USERNAME: ${{ secrets.SSL_COM_USERNAME }}
+              SSL_COM_PASSWORD: ${{ secrets.SSL_COM_PASSWORD }}
+              SSL_COM_CREDENTIAL_ID: ${{ secrets.SSL_COM_CREDENTIAL_ID }}
+              SSL_COM_TOTP_SECRET: ${{ secrets.SSL_COM_TOTP_SECRET }}
+           run: |
+              $installer = Get-ChildItem "build/release-windows-$env:TARGET_ENV/GrimVault-Setup-*.exe" |
+                 Select-Object -First 1
+              if (-not $installer) { throw 'CPack did not produce an installer.' }
+              tools\release\sign-windows.ps1 -Path $installer.FullName
+
+         - name: Validate signed package
+           if: matrix.windows == 'windows-2022'
+           shell: pwsh
+           run: |
+              $installer = Get-ChildItem "build/release-windows-$env:TARGET_ENV/GrimVault-Setup-*.exe" |
+                 Select-Object -First 1
+              tools\release\validate-package.ps1 -Installer $installer.FullName
+
+         - name: Stage release artifacts
+           if: matrix.windows == 'windows-2022'
+           shell: pwsh
+           run: |
+              $build = "build/release-windows-$env:TARGET_ENV"
+              $installer = Get-ChildItem "$build/GrimVault-Setup-*.exe" | Select-Object -First 1
+              New-Item -ItemType Directory -Force artifacts | Out-Null
+              Copy-Item $installer.FullName artifacts\
+
+              $hash = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              [IO.File]::WriteAllText(
+                 "artifacts/$($installer.Name).sha256",
+                 "$hash  $($installer.Name)`n",
+                 [Text.UTF8Encoding]::new($false)
+              )
+
+              $pdb = Join-Path $build 'grimvault.pdb'
+              if (Test-Path $pdb) {
+                 Compress-Archive -Path $pdb -DestinationPath "artifacts/GrimVault-Symbols-$env:RELEASE_VERSION.zip"
+              }
+
+         - uses: actions/upload-artifact@v4
+           if: matrix.windows == 'windows-2022'
+           with:
+              name: grimvault-${{ env.TARGET_ENV }}-${{ env.RELEASE_VERSION }}
+              path: artifacts/*
+              if-no-files-found: error
+              retention-days: 30
+
+   publish:
+      name: Publish release
+      needs: compatibility
+      if: github.event_name == 'release' || inputs.publish
+      runs-on: ubuntu-24.04
+      steps:
+         - uses: actions/checkout@v4
+
+         - uses: actions/setup-python@v5
+           with:
+              python-version: '3.12'
+
+         - uses: actions/download-artifact@v4
+           with:
+              name: grimvault-${{ env.TARGET_ENV }}-${{ env.RELEASE_VERSION }}
+              path: artifacts
+
+         - name: Resolve publish paths
+           shell: bash
+           run: |
+              set -euo pipefail
+              case "$TARGET_ENV" in
+                 dev)  prefix='grimvault/dev' ;;
+                 qa)   prefix='grimvault/qa' ;;
+                 prod) prefix='grimvault' ;;
+                 *) echo "Unknown target: $TARGET_ENV" >&2; exit 1 ;;
+              esac
+              appcast='appcast.xml'
+              if [ "$CHANNEL" = beta ]; then appcast='appcast-beta.xml'; fi
+              version="${RELEASE_VERSION#v}"
+              echo "S3_PREFIX=$prefix" >> "$GITHUB_ENV"
+              echo "APPCAST=$appcast" >> "$GITHUB_ENV"
+              echo "VERSION=$version" >> "$GITHUB_ENV"
+
+         - name: Install appcast dependencies
+           shell: bash
+           run: python3 -m pip install --disable-pip-version-check pynacl==1.5.0
+
+         - name: Test appcast generator
+           shell: bash
+           run: python3 -m unittest tools/release/test_appcast.py
+
+         - name: Generate signed appcast
+           env:
+              APPCAST_ED25519_PRIV: ${{ secrets.APPCAST_ED25519_PRIV }}
+              AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+              AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+              AWS_DEFAULT_REGION: us-west-2
+           shell: bash
+           run: |
+              set -euo pipefail
+              installer=$(find artifacts -maxdepth 1 -name 'GrimVault-Setup-*.exe' -print -quit)
+              test -n "$installer"
+
+              aws s3 cp "s3://katforge-releases/$S3_PREFIX/$APPCAST" old-appcast.xml \
+                 --region us-west-2 --no-progress || true
+
+              python3 tools/release/appcast.py \
+                 --channel "$CHANNEL" \
+                 --existing old-appcast.xml \
+                 --installer "$installer" \
+                 --output appcast.xml \
+                 --public-key 'zqNoGIvc3ZHM3bzq59W7hUkseoIODaMd/nsXn42sXRU=' \
+                 --url "https://releases.katforge.com/$S3_PREFIX/$VERSION/$(basename "$installer")" \
+                 --version "$VERSION"
+
+         - name: Publish artifacts and feed
+           env:
+              AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+              AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+              AWS_DEFAULT_REGION: us-west-2
+           shell: bash
+           run: |
+              set -euo pipefail
+              aws s3 cp artifacts/ "s3://katforge-releases/$S3_PREFIX/$VERSION/" \
+                 --recursive --no-progress \
+                 --cache-control 'public, max-age=31536000, immutable'
+              aws s3 cp appcast.xml "s3://katforge-releases/$S3_PREFIX/$APPCAST" \
+                 --no-progress \
+                 --cache-control 'no-store, max-age=0' \
+                 --content-type 'application/rss+xml; charset=utf-8'
+
+              if [ "$TARGET_ENV" = prod ] && [ "$CHANNEL" = stable ]; then
+                 installer=$(find artifacts -maxdepth 1 -name 'GrimVault-Setup-*.exe' -print -quit)
+                 checksum="$installer.sha256"
+                 test -n "$installer"
+                 test -f "$checksum"
+                 hash=$(cut -d ' ' -f 1 "$checksum")
+                 printf '%s  GrimVault-Setup.exe\n' "$hash" > latest.sha256
+
+                 aws s3 cp "$installer" \
+                    's3://katforge-releases/grimvault/latest/GrimVault-Setup.exe' \
+                    --no-progress \
+                    --cache-control 'no-store, max-age=0' \
+                    --content-type 'application/vnd.microsoft.portable-executable'
+                 aws s3 cp latest.sha256 \
+                    's3://katforge-releases/grimvault/latest/GrimVault-Setup.exe.sha256' \
+                    --no-progress \
+                    --cache-control 'no-store, max-age=0' \
+                    --content-type 'text/plain; charset=utf-8'
+              fi
+
+         - name: Attach signed artifacts to GitHub Release
+           if: github.event_name == 'release'
+           env:
+              GH_TOKEN: ${{ github.token }}
+           shell: bash
+           run: gh release upload "$RELEASE_VERSION" artifacts/* --clobber

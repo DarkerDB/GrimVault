@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+using gv::app::Mode;
 using gv::app::Preferences;
 using gv::app::apply;
 using Align = gv::ui::Layout::Align;
@@ -33,7 +34,7 @@ TEST (Preferences, DefaultsMatchTheServerSchema)
 {
    const Preferences prefs;
 
-   EXPECT_EQ (prefs.overlay_mode, Preferences::OverlayMode::Automatic);
+   EXPECT_EQ (prefs.overlay_mode, Mode::Auto);
    EXPECT_EQ (prefs.layout.align, Align::Attached);
    EXPECT_DOUBLE_EQ (prefs.layout.opacity, 0.9);
    EXPECT_DOUBLE_EQ (prefs.layout.scale, 1.0);
@@ -55,7 +56,7 @@ TEST (Preferences, FoldsTheOverlayGroup)
       { "overlay:columns",   "2" },
    });
 
-   EXPECT_EQ (prefs.overlay_mode, Preferences::OverlayMode::Manual);
+   EXPECT_EQ (prefs.overlay_mode, Mode::Manual);
    EXPECT_EQ (prefs.layout.align, Align::BottomRight);
    EXPECT_DOUBLE_EQ (prefs.layout.opacity, 0.5);
    EXPECT_DOUBLE_EQ (prefs.layout.scale, 1.25);
@@ -74,7 +75,8 @@ TEST (Preferences, ColumnsDefaultToAutoAndRejectNonsense)
    EXPECT_EQ (folded ({}).layout.columns, Columns::Auto);
    EXPECT_EQ (folded ({ { "overlay:columns", "auto" } }).layout.columns, Columns::Auto);
    EXPECT_EQ (folded ({ { "overlay:columns", "1" } }).layout.columns,    Columns::One);
-   EXPECT_EQ (folded ({ { "overlay:columns", "3" } }).layout.columns,    Columns::Auto);
+   EXPECT_EQ (folded ({ { "overlay:columns", "3" } }).layout.columns,    Columns::Three);
+   EXPECT_EQ (folded ({ { "overlay:columns", "4" } }).layout.columns,    Columns::Auto);
    EXPECT_EQ (folded ({ { "overlay:columns", "" } }).layout.columns,     Columns::Auto);
 }
 
@@ -100,10 +102,14 @@ TEST (Preferences, KeepsDefaultsForUnparseableNumbers)
    const auto prefs = folded ({
       { "overlay:opacity",  "not-a-number" },
       { "overlay:offset_x", "" },
+      { "overlay:scale",    "nan" },
+      { "overlay:offset_y", "12px" },
    });
 
    EXPECT_DOUBLE_EQ (prefs.layout.opacity, 0.9);
+   EXPECT_DOUBLE_EQ (prefs.layout.scale, 1.0);
    EXPECT_EQ (prefs.layout.offset_x, 20);
+   EXPECT_EQ (prefs.layout.offset_y, 20);
 }
 
 TEST (Preferences, FoldsWidgetTogglesInKeyOrder)
@@ -145,6 +151,21 @@ TEST (Preferences, ReTogglingAWidgetKeepsItsPosition)
    EXPECT_FALSE (widget (prefs, "market_value"));
 }
 
+TEST (Preferences, AppliesExplicitServerWidgetOrder)
+{
+   Preferences prefs;
+   apply (prefs, "tooltip:analysis:market_value", "true");
+   apply (prefs, "tooltip:analysis:trade_chat", "false");
+   apply (prefs, "tooltip:analysis:roll_quality", "true");
+   apply (prefs, "tooltip:analysis_order",
+      R"(["roll_quality","market_value","trade_chat"])");
+
+   ASSERT_EQ (prefs.options.widgets.size (), 3u);
+   EXPECT_EQ (prefs.options.widgets [0].first, "roll_quality");
+   EXPECT_EQ (prefs.options.widgets [1].first, "market_value");
+   EXPECT_EQ (prefs.options.widgets [2].first, "trade_chat");
+}
+
 TEST (Preferences, FoldsCurrencyDisplay)
 {
    EXPECT_EQ (folded ({ { "pricing:currency_display", "compact" } })
@@ -184,7 +205,7 @@ TEST (Preferences, ErasedKeysRevertToDefaults)
    apply (prefs, "behavior:is_launch_on_startup_enabled", "");
    apply (prefs, "hotkeys:force_refresh",              "");
 
-   EXPECT_EQ (prefs.overlay_mode, Preferences::OverlayMode::Automatic);
+   EXPECT_EQ (prefs.overlay_mode, Mode::Auto);
    EXPECT_TRUE (prefs.layout.enabled);
    EXPECT_EQ (prefs.layout.align, Align::Attached);
    EXPECT_TRUE (prefs.launch_on_startup);

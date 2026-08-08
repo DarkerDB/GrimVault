@@ -33,7 +33,7 @@ public:
       // Directory holding augment.html + the vendored ddb-tooltips dist.
       std::filesystem::path web_dir;
 
-      // WebView2 user-data folder (under %APPDATA%\GrimVault).
+      // WebView2 user-data folder under the active LocalAppData directory.
       std::filesystem::path user_data_dir;
 
       // "webview" (hidden snapshot renderer, default) or "qml".
@@ -46,10 +46,6 @@ public:
    void present (const gv::api::TooltipLookup& lookup,
                  const QRect& game, const QRect& anchor, bool animate = true);
    void clear ();
-
-   // Skeleton card, shown the moment a region is anchored so the hover feels
-   // answered before the analysis actually is. No-op on the QML fallback.
-   void present_loading ();
 
    // Live settings. Both are cheap and idempotent — SettingsBridge calls
    // them whenever the dashboard changes, including mid-hover.

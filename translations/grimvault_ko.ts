@@ -2,6 +2,6 @@
 <!DOCTYPE TS>
 <TS version="2.1" language="ko">
    <!-- Source-of-truth English bundle. Generated/updated by:
-        cmake --build build -t grimvault_lupdate
+        cmake build target: grimvault_lupdate
         Run lrelease (qt_add_translations) to produce grimvault_en.qm. -->
 </TS>

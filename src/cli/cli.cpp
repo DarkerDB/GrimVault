@@ -1,12 +1,12 @@
 #include <gv/cli/cli.h>
 
 #include <gv/api/darkerdb_client.h>
-#include <gv/auth/http.h>
 #include <gv/auth/oauth_client.h>
 #include <gv/auth/session.h>
 #include <gv/auth/token_store.h>
 #include <gv/core/env.h>
 #include <gv/core/env_resolver.h>
+#include <gv/core/http.h>
 #include <gv/core/logger.h>
 #include <gv/core/version.h>
 #include <gv/db/database.h>
@@ -39,6 +39,11 @@ namespace {
    {
       auto qpath = QStandardPaths::writableLocation (QStandardPaths::GenericDataLocation)
          + QStringLiteral ("/GrimVault");
+      const auto env = core::active_env ().name;
+      if (env != "prod") {
+         qpath += QStringLiteral ("/")
+            + QString::fromUtf8 (env.data (), static_cast<qsizetype> (env.size ()));
+      }
       return std::filesystem::path { qpath.toStdWString () };
    }
 
@@ -236,7 +241,7 @@ namespace {
    // overlay actually reads at runtime (the server's view is one poll
    // away; this is the post-poll state).
    //
-   // The DB lives in %APPDATA%\GrimVault\grimvault.db. If it doesn't
+   // The DB lives under %LOCALAPPDATA%\GrimVault. If it doesn't
    // exist, the GUI has never run on this machine and there's nothing
    // to print — say so rather than silently creating an empty DB.
    int cmd_settings_local (const std::vector<std::string>& /*args*/)
@@ -257,6 +262,20 @@ namespace {
       }
 
       gv::db::UserSettingsRepo repo { **db };
+      auth::Session session { make_oauth () };
+      const auto principal = session.principal ();
+      if (!principal.has_value ()) {
+         std::cerr << "settings: not signed in\n";
+         return k_error_auth;
+      }
+
+      const auto owner = repo.get ("auth:subject");
+      if (!owner.has_value () || !owner->has_value () || **owner != *principal) {
+         std::cerr << "settings: local settings are not scoped to this account\n";
+         std::cerr << "          start GrimVault once to sync them safely.\n";
+         return k_error_auth;
+      }
+
       auto all = repo.all ();
       if (!all.has_value ()) {
          std::cerr << "settings: read failed: " << all.error ().message << "\n";
@@ -269,7 +288,8 @@ namespace {
       }
 
       // Sort for deterministic, grouped output.
-      const std::map<std::string, std::string> sorted (all->begin (), all->end ());
+      std::map<std::string, std::string> sorted (all->begin (), all->end ());
+      sorted.erase ("auth:subject");
       print_kv_table (sorted);
       std::cout << "\n(" << sorted.size () << " keys, from " << db_path.string () << ")\n";
       return k_ok;
@@ -357,10 +377,10 @@ namespace {
 
       // 2. JWKS endpoint reachable (TLS + HTTP both verified by one request)
       {
-         auth::http::Request req;
+         core::http::Request req;
          req.method = "GET";
          req.url    = std::string { e.api_base_url } + "/.well-known/jwks.json";
-         auto res = auth::http::perform (req);
+         auto res = core::http::perform (req);
          const bool ok = res.has_value () && res->status == 200;
          std::string detail;
          if (!res.has_value ()) {

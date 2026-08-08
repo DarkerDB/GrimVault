@@ -77,6 +77,23 @@ namespace {
          /*bIgnoreCase=*/ TRUE) == CSTR_EQUAL;
    }
 
+   bool client_rect_screen (HWND hwnd, RECT& out)
+   {
+      RECT client {};
+      POINT origin {};
+      if (!::GetClientRect (hwnd, &client) || !::ClientToScreen (hwnd, &origin)) {
+         return false;
+      }
+
+      out = {
+         origin.x,
+         origin.y,
+         origin.x + client.right - client.left,
+         origin.y + client.bottom - client.top,
+      };
+      return out.right > out.left && out.bottom > out.top;
+   }
+
 } // namespace
 
 struct WindowTracker::Impl
@@ -184,7 +201,7 @@ struct WindowTracker::Impl
       ev.hwnd = hwnd;
 
       RECT r {};
-      if (!::IsWindow (hwnd) || !::GetWindowRect (hwnd, &r)) {
+      if (!::IsWindow (hwnd) || !client_rect_screen (hwnd, r)) {
          emit_gone (hwnd);
          return;
       }

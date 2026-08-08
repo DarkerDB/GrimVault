@@ -46,8 +46,9 @@
       "inherits":    "windows-msvc-base",
       "displayName": "Windows MSVC Test",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
-        "BUILD_TESTING":    "ON"
+        "CMAKE_BUILD_TYPE":      "RelWithDebInfo",
+        "BUILD_TESTING":         "ON",
+        "GRIMVAULT_BUILD_E2E":   "ON"
       }
     },
     {
@@ -56,8 +57,7 @@
       "displayName": "CI Release (Windows)",
       "cacheVariables": {
         "BUILD_TESTING":           "ON",
-        "GRIMVAULT_BUILD_E2E":     "ON",
-        "GRIMVAULT_ENABLE_SIGNING": "ON"
+        "GRIMVAULT_BUILD_E2E":     "ON"
       }
     },
     {

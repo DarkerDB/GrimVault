@@ -39,7 +39,7 @@ public:
       // initial navigation loads <web_dir>/augment.html from it.
       std::filesystem::path web_dir;
 
-      // WebView2 user-data folder (%APPDATA%\GrimVault\webview2).
+      // WebView2 user-data folder under the active LocalAppData directory.
       std::filesystem::path user_data_dir;
    };
 

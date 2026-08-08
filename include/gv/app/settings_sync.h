@@ -65,6 +65,7 @@ signals:
    void settings_changed (QString key, QString value);
    void poll_succeeded   (int num_changed);
    void poll_failed      (QString message);
+   void authentication_required ();
 
 private:
    struct Impl;
