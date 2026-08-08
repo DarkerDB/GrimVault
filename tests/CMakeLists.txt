@@ -10,6 +10,7 @@ if (unit_sources)
       gv::core
       gv::db
       gv::capture
+      nlohmann_json::nlohmann_json
       GTest::gtest
       GTest::gtest_main
    )

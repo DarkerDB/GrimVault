@@ -71,6 +71,11 @@ install (DIRECTORY  "${CMAKE_SOURCE_DIR}/db/"
          FILES_MATCHING
             PATTERN "*.sql")
 
+# Augment page + vendored ddb-tooltips dist (WebView2 virtual-host root).
+install (DIRECTORY  "${CMAKE_SOURCE_DIR}/web/"
+         DESTINATION web
+         COMPONENT   assets)
+
 install (FILES      "${CMAKE_SOURCE_DIR}/LICENSE"
          DESTINATION .
          COMPONENT   application)
@@ -112,6 +117,33 @@ set (CPACK_NSIS_INSTALL_ROOT              "$LOCALAPPDATA\\Programs")
 # Start Menu + uninstaller shortcuts.
 set (CPACK_PACKAGE_EXECUTABLES            "grimvault" "GrimVault")
 set (CPACK_CREATE_DESKTOP_LINKS           "grimvault")
+
+# WebView2 Evergreen runtime: preinstalled on Win11 and pushed to Win10 via
+# Windows Update, but not guaranteed. Bundle the ~2 MB bootstrapper
+# (https://go.microsoft.com/fwlink/p/?LinkId=2124703 →
+# tools/build/MicrosoftEdgeWebView2Setup.exe, not committed) and run it
+# silently when the EdgeUpdate client key is absent. Per-user install, so
+# no UAC. Without the bootstrapper file the installer still builds; the app
+# then falls back to the QML renderer on machines missing the runtime.
+set (grimvault_wv2_bootstrapper "${CMAKE_SOURCE_DIR}/tools/build/MicrosoftEdgeWebView2Setup.exe")
+
+if (EXISTS "${grimvault_wv2_bootstrapper}")
+   string (REPLACE "/" "\\\\" grimvault_wv2_bootstrapper_nsis "${grimvault_wv2_bootstrapper}")
+   set (CPACK_NSIS_EXTRA_INSTALL_COMMANDS "
+      ClearErrors
+      ReadRegStr $0 HKLM 'SOFTWARE\\\\WOW6432Node\\\\Microsoft\\\\EdgeUpdate\\\\Clients\\\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' 'pv'
+      IfErrors 0 wv2_present
+      ReadRegStr $0 HKCU 'Software\\\\Microsoft\\\\EdgeUpdate\\\\Clients\\\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' 'pv'
+      IfErrors 0 wv2_present
+      DetailPrint 'Installing WebView2 runtime...'
+      File '/oname=$TEMP\\\\MicrosoftEdgeWebView2Setup.exe' '${grimvault_wv2_bootstrapper_nsis}'
+      ExecWait '\"$TEMP\\\\MicrosoftEdgeWebView2Setup.exe\" /silent /install'
+      Delete '$TEMP\\\\MicrosoftEdgeWebView2Setup.exe'
+      wv2_present:
+   ")
+else ()
+   message (STATUS "WebView2 bootstrapper not present; installer will skip runtime check")
+endif ()
 
 # Components: bundle as a single .exe (not split-component install). Users
 # never need to pick which paddle model family to install; we ship them all.

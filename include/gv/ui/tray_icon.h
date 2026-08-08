@@ -1,38 +1,39 @@
 #pragma once
 
+#include <gv/ui/tray_menu.h>
+
 #include <QSystemTrayIcon>
 
-class QAction;
+#include <memory>
 
 namespace gv::ui {
 
-// System-tray icon. Emits high-level intents; main () wires them to the
-// auth session / overlay daemon / update service. Right-click → menu.
-// The "Sign In / Sign Out" item is dynamic — call set_signed_in (bool)
-// when session state changes.
+// System-tray icon + branded popup menu. Right-click pops a TrayMenu
+// (frameless, palette-driven) instead of the OS menu. High-level intents
+// flow out as Qt signals; main () wires them to the auth session,
+// overlay daemon, and update service.
 class TrayIcon : public QSystemTrayIcon
 {
    Q_OBJECT
 
 public:
    explicit TrayIcon (QObject* parent = nullptr);
+   ~TrayIcon () override;
 
-   // Swap the Sign In / Sign Out item label and emitted signal.
+   // Toggles the auth label between "Sign In" and "Log Out", and recolors
+   // the header status dot green (signed in) / red (signed out).
    void set_signed_in (bool signed_in);
 
 signals:
-   void sign_in_requested  ();
-   void sign_out_requested ();
-   void open_dashboard_requested ();
-   void logs_requested    ();
-   void check_updates_requested ();
-   void quit_requested    ();
+   void sign_in_requested        ();
+   void sign_out_requested       ();
+   void settings_requested       ();
+   void logs_requested           ();
+   void check_updates_requested  ();
+   void quit_requested           ();
 
 private:
-   QAction* auth_action_ = nullptr;
-   bool     signed_in_   = false;
-
-   void update_auth_label ();
+   std::unique_ptr<TrayMenu> menu_;
 };
 
 } // namespace gv::ui

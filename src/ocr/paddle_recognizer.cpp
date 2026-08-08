@@ -1,7 +1,7 @@
 #include <gv/ocr/paddle_recognizer.h>
 #include <gv/core/logger.h>
 
-#include <onnxruntime_cxx_api.h>
+#include <opencv2/dnn.hpp>
 #include <opencv2/imgproc.hpp>
 
 #include <fstream>
@@ -13,6 +13,12 @@ namespace {
 
    // PaddleOCR v5 mobile_rec uses 48x320 CRNN input by default. The recognizer
    // is letterboxed to height 48 keeping aspect ratio, then padded to width 320.
+   //
+   // Inference runs on OpenCV DNN — the same stack as the tooltip detector.
+   // ONNX Runtime is deliberately NOT used: vcpkg's onnxruntime build ships a
+   // broken operator-schema registry in this dependency mix ("0 schema were
+   // exposed ... 741 were expected"), so every Ort::Session fails to load any
+   // model. One inference stack also means one set of DLLs to stage.
    constexpr int k_model_height = 48;
    constexpr int k_model_width  = 320;
 
@@ -20,12 +26,11 @@ namespace {
 
 struct PaddleRecognizer::Impl
 {
-   std::unique_ptr<Ort::Env>            env;
-   std::unique_ptr<Ort::SessionOptions> opts;
-   std::unique_ptr<Ort::Session>        session;
-   std::vector<std::string>             dict;
-   LanguageFamily                       family = LanguageFamily::Latin;
-   std::mutex                           lock;
+   cv::dnn::Net             net;
+   bool                     loaded = false;
+   std::vector<std::string> dict;
+   LanguageFamily           family = LanguageFamily::Latin;
+   std::mutex               lock;
 };
 
 PaddleRecognizer::PaddleRecognizer ()  : impl_ (std::make_unique<Impl> ()) {}
@@ -39,18 +44,10 @@ core::Result<void> PaddleRecognizer::initialize (
    const std::filesystem::path& dict_path
 ) {
    try {
-      impl_->env  = std::make_unique<Ort::Env> (ORT_LOGGING_LEVEL_WARNING, "PaddleRec");
-      impl_->opts = std::make_unique<Ort::SessionOptions> ();
-      impl_->opts->SetGraphOptimizationLevel (GraphOptimizationLevel::ORT_ENABLE_ALL);
-
-      // Provider: CPU only for dev builds. vcpkg's stock onnxruntime ships
-      // without DirectML or CUDA features. To re-enable GPU later, add
-      // those features in vcpkg.json and reinstate the matching
-      // OrtSessionOptionsAppendExecutionProvider_* call here.
-      core::Logger::info ("paddle_rec: using CPU provider");
-
-      std::wstring wpath { model_path.wstring () };
-      impl_->session = std::make_unique<Ort::Session> (*impl_->env, wpath.c_str (), *impl_->opts);
+      impl_->net = cv::dnn::readNetFromONNX (model_path.string ());
+      impl_->net.setPreferableBackend (cv::dnn::DNN_BACKEND_OPENCV);
+      impl_->net.setPreferableTarget  (cv::dnn::DNN_TARGET_CPU);
+      impl_->loaded = true;
 
       std::ifstream df { dict_path };
       if (!df) {
@@ -69,7 +66,8 @@ core::Result<void> PaddleRecognizer::initialize (
          model_path.filename ().string (), impl_->dict.size ());
 
       return {};
-   } catch (const Ort::Exception& e) {
+   } catch (const cv::Exception& e) {
+      impl_->loaded = false;
       return core::fail (core::Error::make (core::ErrorKind::Ocr,
          "paddle_rec: init failed: {}", e.what ()));
    }
@@ -77,6 +75,10 @@ core::Result<void> PaddleRecognizer::initialize (
 
 namespace {
 
+   // Letterbox to 48 high keeping aspect, pad right to 320 wide, then
+   // normalize per PaddleOCR rec convention: (x/255 - 0.5) / 0.5 → [-1, 1].
+   // blobFromImage expresses that as scale 1/127.5 with mean 127.5, and
+   // handles the BGR→RGB swap + HWC→NCHW transpose.
    cv::Mat preprocess (const cv::Mat& input)
    {
       cv::Mat bgr;
@@ -84,37 +86,39 @@ namespace {
       else if (input.channels () == 3) bgr = input;
       else                              cv::cvtColor (input, bgr, cv::COLOR_GRAY2BGR);
 
+      const double scale = static_cast<double> (k_model_height) / bgr.rows;
+      const int    w     = std::min (k_model_width,
+         std::max (1, static_cast<int> (std::lround (bgr.cols * scale))));
+
       cv::Mat resized;
-      cv::resize (bgr, resized, cv::Size (k_model_width, k_model_height), 0, 0, cv::INTER_CUBIC);
+      cv::resize (bgr, resized, cv::Size (w, k_model_height), 0, 0, cv::INTER_CUBIC);
 
-      cv::Mat rgb;
-      cv::cvtColor (resized, rgb, cv::COLOR_BGR2RGB);
-      rgb.convertTo (rgb, CV_32FC3, 1.0 / 255.0);
+      cv::Mat canvas = cv::Mat::zeros (k_model_height, k_model_width, resized.type ());
+      resized.copyTo (canvas (cv::Rect (0, 0, w, k_model_height)));
 
-      // HWC -> CHW
-      std::vector<cv::Mat> channels (3);
-      cv::split (rgb, channels);
-
-      cv::Mat chw (1, 3 * k_model_height * k_model_width, CV_32FC1);
-      float*  data = chw.ptr<float> ();
-      for (int c = 0; c < 3; ++c) {
-         std::memcpy (data + c * k_model_height * k_model_width,
-                      channels [c].data,
-                      k_model_height * k_model_width * sizeof (float));
-      }
-
-      return chw;
+      return cv::dnn::blobFromImage (
+         canvas,
+         1.0 / 127.5,
+         cv::Size (k_model_width, k_model_height),
+         cv::Scalar (127.5, 127.5, 127.5),
+         /*swapRB=*/ true,
+         /*crop=*/   false
+      );
    }
 
    // Greedy CTC decode: argmax per timestep, drop blank + consecutive dupes.
    std::pair<std::string, float> ctc_decode (
       const float*                    out,
-      const std::vector<int64_t>&     shape,
+      int                             timesteps,
+      int                             classes,
       const std::vector<std::string>& dict
    ) {
-      const int timesteps = static_cast<int> (shape [1]);
-      const int classes   = static_cast<int> (shape [2]);
-      const int blank     = classes - 1;
+
+      // PaddleOCR CTCLabelDecode convention (stock PP-OCR exports): class 0
+      // is the CTC blank, classes 1..N map to dict lines 0..N-1, and a head
+      // exported with use_space_char carries a literal space as the final
+      // class (classes == dict + 2).
+      constexpr int blank = 0;
 
       std::string result;
       int         last  = -1;
@@ -131,8 +135,14 @@ namespace {
          }
 
          if (best_i != blank && best_i != last) {
-            if (best_i >= 0 && best_i < static_cast<int> (dict.size ())) {
-               result += dict [best_i];
+            const int di = best_i - 1;
+
+            if (di >= 0 && di < static_cast<int> (dict.size ())) {
+               result += dict [di];
+               conf_sum += best_v;
+               ++conf_n;
+            } else if (best_i == classes - 1) {
+               result += ' ';
                conf_sum += best_v;
                ++conf_n;
             }
@@ -149,7 +159,7 @@ namespace {
 
 core::Result<RecognizerResult> PaddleRecognizer::read (const cv::Mat& line)
 {
-   if (!impl_->session) {
+   if (!impl_->loaded) {
       return core::fail (core::Error::make (core::ErrorKind::Ocr,
          "paddle_rec: not initialized"));
    }
@@ -157,32 +167,20 @@ core::Result<RecognizerResult> PaddleRecognizer::read (const cv::Mat& line)
    std::lock_guard lock { impl_->lock };
 
    try {
-      cv::Mat chw = preprocess (line);
+      impl_->net.setInput (preprocess (line));
+      cv::Mat out = impl_->net.forward ();
 
-      std::vector<int64_t> shape  { 1, 3, k_model_height, k_model_width };
-      std::vector<float>   buffer { chw.begin<float> (), chw.end<float> () };
+      // Output is [1, timesteps, classes].
+      if (out.dims != 3 || out.size [0] != 1) {
+         return core::fail (core::Error::make (core::ErrorKind::Ocr,
+            "paddle_rec: unexpected output rank {} from model", out.dims));
+      }
 
-      auto mem = Ort::MemoryInfo::CreateCpu (OrtArenaAllocator, OrtMemTypeDefault);
-      Ort::Value input = Ort::Value::CreateTensor<float> (
-         mem, buffer.data (), buffer.size (), shape.data (), shape.size ()
-      );
-
-      const char* in_names  [] = { "x" };
-      const char* out_names [] = { "fetch_name_0" };
-
-      auto outs = impl_->session->Run (
-         Ort::RunOptions { nullptr },
-         in_names,  &input, 1,
-         out_names, 1
-      );
-
-      auto*       out_data  = outs [0].GetTensorMutableData<float> ();
-      const auto  out_shape = outs [0].GetTensorTypeAndShapeInfo ().GetShape ();
-
-      auto [text, conf] = ctc_decode (out_data, out_shape, impl_->dict);
+      auto [text, conf] = ctc_decode (
+         out.ptr<float> (), out.size [1], out.size [2], impl_->dict);
 
       return RecognizerResult { .text = std::move (text), .confidence = conf };
-   } catch (const Ort::Exception& e) {
+   } catch (const cv::Exception& e) {
       return core::fail (core::Error::make (core::ErrorKind::Ocr,
          "paddle_rec: inference failed: {}", e.what ()));
    }

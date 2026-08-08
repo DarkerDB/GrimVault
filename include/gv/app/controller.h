@@ -4,6 +4,7 @@
 #include <gv/core/window_tracker.h>
 
 #include <QObject>
+#include <QRect>
 
 #include <atomic>
 #include <memory>
@@ -86,6 +87,14 @@ signals:
    void overlayPresented  ();
    void overlayCleared    ();
    void hotkeysChanged    ();
+
+   // Game window moved / resized / focus-flipped. `active` == visible AND
+   // focused; consumers (status badge) hide themselves when it drops.
+   void gameWindowChanged (QRect bounds, bool active);
+
+   // A tooltip made it through detection + OCR (whether or not the lookup
+   // then succeeded) — UI feedback that the pipeline is alive.
+   void scanActivity      ();
 
 private:
    struct Impl;

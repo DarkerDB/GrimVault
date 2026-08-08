@@ -75,7 +75,7 @@ if (-not $Tests) {
 
    $proc = Start-Process -FilePath "cmake" -ArgumentList $cfgArgs -WorkingDirectory $root `
       -NoNewWindow -PassThru -RedirectStandardOutput $configLog -RedirectStandardError "$configLog.err"
-   $proc.WaitForExit ()
+   $proc.WaitForExit()
 
    if ($proc.ExitCode -ne 0) {
       Write-Host "`n--- configure errors (last 40 lines) ---" -ForegroundColor Red
@@ -93,7 +93,7 @@ if (-not $Tests) {
    $buildLog = Join-Path $root "build\$Preset\build.log"
    $proc = Start-Process -FilePath "cmake" -ArgumentList @("--build", "--preset", $Preset) `
       -WorkingDirectory $root -NoNewWindow -PassThru -RedirectStandardOutput $buildLog -RedirectStandardError "$buildLog.err"
-   $proc.WaitForExit ()
+   $proc.WaitForExit()
 
    if ($proc.ExitCode -ne 0) {
       Write-Host "`n--- build errors (last 40 lines) ---" -ForegroundColor Red

@@ -6,22 +6,24 @@ namespace gv::ocr {
 
 // PaddleOCR ships per-language-family recognizer models. The detector model
 // (DB) is language-agnostic so we load it once.
+//
+// PP-OCRv5 has no separate japan/chinese_cht models: the base "ch" model
+// covers Simplified + Traditional Chinese and Japanese. Latin does not
+// cover Cyrillic; Russian needs the eslav (East Slavic) model.
 enum class LanguageFamily {
-   Latin,        // en, de, es, fr, pt-BR, ru
-   Japanese,     // ja
-   Korean,       // ko
-   ChineseSimp,  // zh-Hans
-   ChineseTrad,  // zh-Hant
+   Latin,    // de, en, es, fr, pt-BR
+   Eslav,    // ru
+   Korean,   // ko
+   Chinese,  // ja, zh-Hans, zh-Hant
 };
 
 constexpr std::string_view family_dir (LanguageFamily f) noexcept
 {
    switch (f) {
-      case LanguageFamily::Latin:        return "latin";
-      case LanguageFamily::Japanese:     return "japan";
-      case LanguageFamily::Korean:       return "korean";
-      case LanguageFamily::ChineseSimp:  return "ch";
-      case LanguageFamily::ChineseTrad:  return "chinese_cht";
+      case LanguageFamily::Latin:   return "latin";
+      case LanguageFamily::Eslav:   return "eslav";
+      case LanguageFamily::Korean:  return "korean";
+      case LanguageFamily::Chinese: return "ch";
    }
    return "latin";
 }
@@ -30,10 +32,11 @@ constexpr std::string_view family_dir (LanguageFamily f) noexcept
 // whose Paddle recognizer should be loaded.
 constexpr LanguageFamily family_of (std::string_view game_locale) noexcept
 {
-   if (game_locale == "ja")      return LanguageFamily::Japanese;
+   if (game_locale == "ru")      return LanguageFamily::Eslav;
    if (game_locale == "ko")      return LanguageFamily::Korean;
-   if (game_locale == "zh-Hans") return LanguageFamily::ChineseSimp;
-   if (game_locale == "zh-Hant") return LanguageFamily::ChineseTrad;
+   if (game_locale == "ja")      return LanguageFamily::Chinese;
+   if (game_locale == "zh-Hans") return LanguageFamily::Chinese;
+   if (game_locale == "zh-Hant") return LanguageFamily::Chinese;
    return LanguageFamily::Latin;
 }
 

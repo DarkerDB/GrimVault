@@ -31,10 +31,18 @@ class OauthClient
 {
 public:
    struct Config {
-      std::string client_id;     // e.g. "grimvault-desktop-dev"
+      std::string client_id;     // e.g. "grimvault"
       std::string api_base_url;  // e.g. "https://api.dev.darkerdb.com"
-      std::string spa_base_url;  // e.g. "https://dev.darkerdb.com"
-      std::string scope        = "grimvault.read grimvault.write";
+      std::string auth_base_url; // e.g. "https://auth.dev.darkerdb.com"
+      std::string spa_base_url;  // e.g. "https://dev.darkerdb.com" — the
+                                 // realm SPA hosts the branded
+                                 // /grimvault/callback page the loopback
+                                 // server redirects to after the OAuth
+                                 // callback fires. Optional; empty means
+                                 // serve the embedded close-tab HTML.
+      // Realm-prefixed per the server's ScopeRegistry — the bare
+      // "grimvault.read" form in older contract drafts is unregistered.
+      std::string scope        = "darkerdb.grimvault.read darkerdb.grimvault.write";
       std::chrono::seconds callback_timeout { 120 };
    };
 

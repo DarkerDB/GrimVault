@@ -208,7 +208,9 @@ core::Result<std::uint16_t> LoopbackServer::bind ()
 
 core::Result<CallbackResult> LoopbackServer::await_callback (
    std::string_view     expected_state,
-   std::chrono::seconds timeout
+   std::chrono::seconds timeout,
+   std::string_view     success_redirect,
+   std::string_view     error_redirect
 ) {
    if (impl_->listen_sock == k_invalid_sock) {
       return core::fail (core::Error::make (core::ErrorKind::Internal,
@@ -223,7 +225,7 @@ core::Result<CallbackResult> LoopbackServer::await_callback (
          deadline - std::chrono::steady_clock::now ());
       if (remaining.count () <= 0) {
          return core::fail (core::Error::make (core::ErrorKind::Io,
-            "loopback: timed out waiting for callback"));
+            "Sign-in timed out waiting for the browser callback."));
       }
 
       fd_set rfds;
@@ -262,36 +264,57 @@ core::Result<CallbackResult> LoopbackServer::await_callback (
       CallbackResult cb;
       parse_callback (query, cb);
 
-      // Decide response body + status before we shut down.
-      const std::string body = close_page_html ();
-      const std::string status_line =
-         (!cb.error.empty () || cb.state != std::string { expected_state })
-            ? "HTTP/1.1 400 Bad Request\r\n"
-            : "HTTP/1.1 200 OK\r\n";
+      const bool is_success =
+         cb.error.empty () && cb.state == std::string { expected_state } && !cb.code.empty ();
 
-      const std::string response =
-         status_line +
-         "Content-Type: text/html; charset=utf-8\r\n"
-         "Content-Length: " + std::to_string (body.size ()) + "\r\n"
-         "Connection: close\r\n"
-         "Cache-Control: no-store\r\n"
-         "\r\n" + body;
+      // Prefer a 302 redirect to the realm SPA so the success/failure
+      // page lives in the brand. Fall back to the embedded HTML when
+      // no redirect URL was provided (CLI/test contexts).
+      const std::string redirect_url = is_success
+         ? std::string { success_redirect }
+         : std::string { error_redirect };
+
+      std::string response;
+      if (!redirect_url.empty ()) {
+         response =
+            std::string { is_success ? "HTTP/1.1 302 Found\r\n" : "HTTP/1.1 302 Found\r\n" } +
+            "Location: " + redirect_url + "\r\n"
+            "Content-Length: 0\r\n"
+            "Connection: close\r\n"
+            "Cache-Control: no-store\r\n"
+            "\r\n";
+      } else {
+         const std::string body = close_page_html ();
+         const std::string status_line = is_success
+            ? "HTTP/1.1 200 OK\r\n"
+            : "HTTP/1.1 400 Bad Request\r\n";
+
+         response =
+            status_line +
+            "Content-Type: text/html; charset=utf-8\r\n"
+            "Content-Length: " + std::to_string (body.size ()) + "\r\n"
+            "Connection: close\r\n"
+            "Cache-Control: no-store\r\n"
+            "\r\n" + body;
+      }
 
       ::send (client, response.data (), static_cast<int> (response.size ()), 0);
       sock_close (client);
 
       if (!cb.error.empty ()) {
-         return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
-            "loopback: oauth error {}: {}", cb.error,
-            cb.error_description.empty () ? "(no description)" : cb.error_description));
+         const std::string msg = cb.error_description.empty ()
+            ? "Authorization error: " + cb.error
+            : "Authorization error: " + cb.error_description + " (" + cb.error + ")";
+         return core::fail (core::Error::make (
+            core::ErrorKind::ExternalApi, "{}", msg));
       }
       if (cb.state != std::string { expected_state }) {
          return core::fail (core::Error::make (core::ErrorKind::Permission,
-            "loopback: state mismatch"));
+            "Sign-in state mismatch (possible CSRF — try again)."));
       }
       if (cb.code.empty ()) {
          return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
-            "loopback: no code in callback"));
+            "Authorization callback didn't include a code."));
       }
       return cb;
    }

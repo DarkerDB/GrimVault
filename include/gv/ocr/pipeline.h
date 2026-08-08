@@ -41,12 +41,13 @@ public:
       double                      active_fps         = 15.0;
       double                      idle_fps           = 3.0;
       std::chrono::milliseconds   idle_window        { 2000 };
-      int                         stability_frames   = 3;
+      int                         stability_frames   = 2;
       float                       stability_iou      = 0.9f;
       LanguageFamily              language           = LanguageFamily::Latin;
    };
 
-   using TooltipCallback = std::function<void (const RecognizedTooltip&)>;
+   using TooltipCallback  = std::function<void (const RecognizedTooltip&)>;
+   using ActivityCallback = std::function<void ()>;
 
    Pipeline (
       capture::CaptureService& capture,
@@ -59,6 +60,11 @@ public:
 
    core::Result<void> start (TooltipCallback on_tooltip);
    void               stop  () noexcept;
+
+   // Fired from the vision thread the moment a tooltip box is detected —
+   // well before OCR + lookup finish — so the UI can signal "scanning" with
+   // no perceived lag. Set before start().
+   void on_activity (ActivityCallback cb);
 
    void set_active_window (void* hwnd);   // HWND or nullptr to capture monitor
 

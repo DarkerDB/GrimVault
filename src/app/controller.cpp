@@ -67,6 +67,10 @@ struct Controller::Impl
    std::mutex                                  hk_lock;
    std::unordered_map<std::string, std::string> accels;
 
+   // Game locale for OCR model selection and the lookup `language` param
+   // (`game:language` setting; read at startup, applied to the pipeline).
+   std::string game_language { "en" };
+
    explicit Impl (Controller& s, Dependencies d) : self (s), deps (std::move (d)) {}
 
    ~Impl ()
@@ -164,6 +168,21 @@ Controller::Controller (Dependencies deps, QObject* parent)
    : QObject (parent), impl_ (std::make_unique<Impl> (*this, std::move (deps)))
 {
    qRegisterMetaType<Mode> ("gv::app::Mode");
+
+   if (impl_->deps.settings_repo) {
+      if (auto v = impl_->deps.settings_repo->get ("game:language");
+          v.has_value () && v->has_value () && !(*v)->empty ()) {
+         impl_->game_language = **v;
+      }
+   }
+
+   if (impl_->deps.pipeline) {
+      impl_->deps.pipeline->set_language (ocr::family_of (impl_->game_language));
+   }
+   core::Logger::info ("controller: game language '{}' (ocr family '{}')",
+      impl_->game_language,
+      std::string { ocr::family_dir (ocr::family_of (impl_->game_language)) });
+
    impl_->start_mouse_watcher ();
 }
 
@@ -301,24 +320,36 @@ void Controller::action_clear_overlay ()
 
 void Controller::on_window_event (const core::WindowEvent& ev)
 {
+   core::WindowRect prev;
    {
       std::lock_guard lk { impl_->state_lock };
+      prev = impl_->last_event.bounds;
       impl_->last_event = ev;
    }
 
    const bool active = ev.visible && ev.focused;
+   const bool moved  = prev.x != ev.bounds.x || prev.y != ev.bounds.y
+                    || prev.w != ev.bounds.w || prev.h != ev.bounds.h;
 
    // Marshal to main thread; pipeline.set_active_window is safe to call here
    // (atomic), but overlay reposition / hide must be on the Qt thread.
    QPointer<Controller> self { this };
-   QMetaObject::invokeMethod (this, [self, ev, active] {
+   QMetaObject::invokeMethod (this, [self, ev, active, moved] {
       if (!self) return;
       if (self->impl_->deps.pipeline) {
          self->impl_->deps.pipeline->set_active_window (active ? ev.hwnd : nullptr);
       }
-      if (!active && self->impl_->deps.overlay && !self->impl_->debug_overlay.load ()) {
+
+      // Hide the tooltip when the game loses focus/visibility, and when the
+      // game window moves or resizes — the overlay's screen position is
+      // anchored to where the in-game tooltip was, which just shifted.
+      if ((!active || moved)
+          && self->impl_->deps.overlay && !self->impl_->debug_overlay.load ()) {
          self->impl_->deps.overlay->clear ();
       }
+
+      emit self->gameWindowChanged (
+         QRect { ev.bounds.x, ev.bounds.y, ev.bounds.w, ev.bounds.h }, active);
    }, Qt::QueuedConnection);
 }
 
@@ -329,11 +360,16 @@ void Controller::on_tooltip (const ocr::RecognizedTooltip& rt)
    // resulting present() over.
    if (!impl_->deps.api) return;
 
-   const std::string text { rt.text };
-   const int x = rt.rect.x;
-   const int y = rt.rect.y;
+   {
+      QPointer<Controller> self { this };
+      QMetaObject::invokeMethod (this, [self] {
+         if (self) emit self->scanActivity ();
+      }, Qt::QueuedConnection);
+   }
 
-   auto res = impl_->deps.api->lookup_tooltip (text, "en");
+   const std::string text { rt.text };
+
+   auto res = impl_->deps.api->lookup_tooltip (text, impl_->game_language);
    if (!res.has_value ()) {
       core::Logger::debug ("controller: lookup failed: {}", res.error ().message);
       return;
@@ -342,13 +378,31 @@ void Controller::on_tooltip (const ocr::RecognizedTooltip& rt)
    auto lookup = std::move (*res);
    impl_->persist_find (lookup);
 
+   // Position is resolved at present time, not lookup time: the game window
+   // state may have changed while the API call was in flight. If the game
+   // is no longer visible+focused, drop the present rather than draw over
+   // whatever now owns the screen.
    QPointer<Controller> self { this };
-   QMetaObject::invokeMethod (this, [self, lookup = std::move (lookup), x, y] () mutable {
-      if (!self) return;
-      if (self->impl_->deps.overlay) {
-         self->impl_->deps.overlay->present (lookup, x, y);
-         emit self->overlayPresented ();
+   QMetaObject::invokeMethod (this, [self, lookup = std::move (lookup), rect = rt.rect] () mutable {
+      if (!self || !self->impl_->deps.overlay) return;
+
+      core::WindowRect b;
+      bool             active;
+      {
+         std::lock_guard lk { self->impl_->state_lock };
+         b      = self->impl_->last_event.bounds;
+         active = self->impl_->last_event.visible && self->impl_->last_event.focused;
       }
+
+      if (!active) return;
+
+      // rect is capture-frame-relative (game window content, physical px);
+      // offset by the game window's screen origin.
+      const QRect game   { b.x, b.y, b.w, b.h };
+      const QRect anchor { b.x + rect.x, b.y + rect.y, rect.w, rect.h };
+
+      self->impl_->deps.overlay->present (lookup, game, anchor);
+      emit self->overlayPresented ();
    }, Qt::QueuedConnection);
 }
 

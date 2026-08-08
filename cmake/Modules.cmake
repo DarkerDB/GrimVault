@@ -91,6 +91,25 @@ function (grimvault_stage_qt_plugins target)
       VERBATIM
       COMMAND_EXPAND_LISTS
    )
+
+   # vcpkg's applocal deploy copies only the Qt DLLs the exe links directly.
+   # QML plugins pull in extra Qt libraries (e.g. QtQuick/Layouts/*.dll needs
+   # Qt6QuickLayouts.dll) that nothing links at build time, so the plugin
+   # fails to load at runtime with "module could not be found". Stage every
+   # Qt6Quick*.dll so any staged QML module finds its runtime.
+   file (GLOB qml_runtime_debug   "${vcpkg_root}/debug/bin/Qt6Quick*.dll")
+   file (GLOB qml_runtime_release "${vcpkg_root}/bin/Qt6Quick*.dll")
+
+   if (qml_runtime_debug OR qml_runtime_release)
+      add_custom_command (TARGET ${target} POST_BUILD
+         COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                 "$<IF:$<CONFIG:Debug>,${qml_runtime_debug},${qml_runtime_release}>"
+                 "$<TARGET_FILE_DIR:${target}>"
+         COMMENT "Staging Qt QML runtime DLLs for ${target}"
+         VERBATIM
+         COMMAND_EXPAND_LISTS
+      )
+   endif ()
 endfunction ()
 
 # Keep the old name as an alias for any callers still using it.

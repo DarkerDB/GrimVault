@@ -1,0 +1,90 @@
+<!doctype html>
+<!--
+   Augment host page, loaded by WebviewHost at https://grimvault.assets/augment.html
+   (virtual host -> this directory). Bridges native <-> ddb-tooltips:
+
+      native {type:'render', seq, entity, params}  ->  DDB.tooltips.render()
+      ResizeObserver                               ->  native {type:'size', seq, w, h}
+
+   Everything resolves locally (vendored dist under tooltips/); no network
+   at render time.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="preload" as="font" type="font/ttf" href="tooltips/assets/SaintKDG_Light.ttf" crossorigin>
+<link rel="preload" as="font" type="font/ttf" href="tooltips/assets/SaintKDG_Medium.ttf" crossorigin>
+<link rel="preload" as="font" type="font/ttf" href="tooltips/assets/Pelagiad.ttf" crossorigin>
+<style>
+   html, body {
+      margin: 0;
+      padding: 0;
+      background: transparent;
+      overflow: hidden;
+   }
+
+   #augment {
+      display: inline-block;
+      pointer-events: none;
+   }
+</style>
+<script src="tooltips/tooltip.min.js"></script>
+</head>
+<body>
+<div id="augment"></div>
+<script>
+   'use strict';
+
+   const target = document.getElementById ('augment');
+   const bridge = window.chrome && window.chrome.webview;
+
+   let seq = 0;
+
+   if (window.DDB && DDB.tooltips.configure) {
+      DDB.tooltips.configure ({ linkBase: null });
+   }
+
+   function postSize () {
+
+      if (!bridge || !seq) return;
+
+      const rect = target.getBoundingClientRect ();
+      if (rect.width < 1 || rect.height < 1) return;
+
+      bridge.postMessage ({
+         type: 'size',
+         seq:  seq,
+         w:    Math.ceil (rect.width),
+         h:    Math.ceil (rect.height),
+      });
+   }
+
+   // ResizeObserver alone misses same-size re-renders (no size change, no
+   // event) — the explicit post after each render covers those; the
+   // observer covers late shifts like font swap-in.
+   new ResizeObserver (postSize).observe (target);
+
+   if (bridge) bridge.addEventListener ('message', (event) => {
+
+      const msg = event.data || {};
+
+      if (msg.type === 'clear') {
+         seq = 0;
+         target.replaceChildren ();
+         return;
+      }
+
+      if (msg.type !== 'render') return;
+
+      seq = msg.seq || 0;
+
+      try {
+         DDB.tooltips.render (target, msg.entity, msg.params);
+         requestAnimationFrame (postSize);
+      } catch (err) {
+         bridge.postMessage ({ type: 'error', seq: seq, message: String (err) });
+      }
+   });
+</script>
+</body>
+</html>

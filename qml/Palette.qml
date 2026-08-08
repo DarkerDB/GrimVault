@@ -13,6 +13,15 @@ pragma Singleton
 import QtQuick
 
 QtObject {
+   // ---- Fonts ----
+   // Families as Qt registers them from the embedded TTFs (verified via the
+   // startup `fonts:` log line — both the typographic family and these full
+   // names are present; the full names keep Light/Medium distinct).
+
+   readonly property string fontLight:  "Solmoe KimDaeGeon Light"
+   readonly property string fontMedium: "Solmoe KimDaeGeon Medium"
+   readonly property string fontScript: "Pelagiad"
+
    // ---- Grouped tokens (preferred for new code) ----
 
    readonly property QtObject bg: QtObject {
@@ -60,15 +69,16 @@ QtObject {
    readonly property color white:      "#eeeeee"
    readonly property color red:        "#e60505"
 
-   // Rarity colors (used to tint item titles in Tooltip + Items page)
+   // Rarity colors — must match the web tooltip card (.ddb-rarity-* on
+   // darkerdb.com/tooltips) so overlay and site render identically.
    readonly property color poor:       "#888888"
    readonly property color common:     "#eeeeee"
-   readonly property color uncommon:   "#80d600"
-   readonly property color rare:       "#00aaee"
-   readonly property color epic:       "#d067ff"
-   readonly property color legendary:  "#ff9a00"
-   readonly property color unique:     "#ecd99a"
-   readonly property color artifact:   "#e60505"
+   readonly property color uncommon:   "#95fa00"
+   readonly property color rare:       "#13bbff"
+   readonly property color epic:       "#db8bff"
+   readonly property color legendary:  "#ffa824"
+   readonly property color unique:     "#e6cf95"
+   readonly property color artifact:   "#fa1515"
    readonly property color unknown:    "#eeeeee"
 
    readonly property color hover:      "#ecd99a"

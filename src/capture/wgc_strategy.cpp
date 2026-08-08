@@ -411,7 +411,11 @@ std::string_view WgcStrategy::name () const noexcept
 
 std::string_view WgcStrategy::reason () const noexcept
 {
-   return impl_ ? impl_->reason_text : "";
+   // No ternary with "" here — mixed std::string/const char* operands make
+   // the ternary yield a temporary std::string, and the returned view would
+   // dangle.
+   if (!impl_) return {};
+   return impl_->reason_text;
 }
 
 bool WgcStrategy::borderless () const noexcept
