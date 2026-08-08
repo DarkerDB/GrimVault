@@ -62,6 +62,7 @@ TEST (AugmentPayload, CompleteAnalysisRendersPremiumSections)
    lookup.canonical_name= "Ruby Silver Ring";
    lookup.display_name  = "Ruby Silver Ring";
    lookup.rarity        = "epic";
+   lookup.artifact_type = "minor";
    lookup.pricing.median      = 412;
    lookup.pricing.low         = 360;
    lookup.pricing.high        = 500;
@@ -190,6 +191,7 @@ TEST (AugmentPayload, CompleteAnalysisRendersPremiumSections)
    const auto& analysis = sections [0];
    EXPECT_EQ (analysis ["item_name"], "Ruby Silver Ring");
    EXPECT_EQ (analysis ["item_rarity"], "epic");
+   EXPECT_EQ (analysis ["item_artifact_type"], "minor");
    EXPECT_EQ (analysis ["pricing"]["median"], 412);
    EXPECT_EQ (analysis ["pricing"]["low"], 360);
    EXPECT_EQ (analysis ["pricing"]["high"], 500);

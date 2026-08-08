@@ -263,6 +263,7 @@ struct TooltipLookup {
    std::string                    canonical_name;
    std::string                    display_name;
    std::string                    rarity;
+   std::string                    artifact_type;
    double                         match_confidence = 0.0;
    std::int64_t                   quantity = 1;
    bool                           tradeable = true;

@@ -25,6 +25,11 @@ independent compatibility build and test gate.
 Manual runs can target `dev`, `qa`, or `prod`. Publishing is opt-in for a
 manual run. Published GitHub Releases target `prod`.
 
+Production binaries are environment-locked. They ignore `--env`,
+`GRIMVAULT_ENV`, and `APP_ENV`, so their API, authentication, data, credential,
+and update environments cannot drift after signing. Development and QA builds
+retain the supported `--env` and `GRIMVAULT_ENV` overrides.
+
 ## Required secrets
 
 The workflow fails closed when signing material is absent.

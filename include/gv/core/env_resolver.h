@@ -12,17 +12,17 @@ namespace gv::core {
 // empty or unrecognized. Pure.
 const EnvDef& env_for_name (std::string_view name);
 
-// Resolves the active env from (in priority order):
+// Resolves the active env for development and QA builds from (in priority order):
 //    1. `--env <name>` in argv (consumed; the flag is dropped from argv)
 //    2. GRIMVAULT_ENV environment variable
 //    3. k_env_default (the compile-time default)
 //
-// `argv` is mutated to strip `--env` and its value when present so
-// downstream CLI parsing doesn't see them as unknown args.
+// Production builds always return k_env_default. `argv` is mutated to strip
+// `--env` and its value when present so downstream parsing remains stable.
 const EnvDef& resolve_active_env (std::vector<std::string>& argv);
 
-// Read-only variant — pulls from GRIMVAULT_ENV / k_env_default only. Use
-// from the GUI loop where no CLI flag parsing is needed.
+// Read-only variant. Production builds always return k_env_default;
+// development and QA builds read GRIMVAULT_ENV before using the default.
 const EnvDef& resolve_active_env ();
 
 // Process-wide active env. Set once early in main () after resolution; read

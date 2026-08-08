@@ -26,6 +26,7 @@ the result as an analysis card over the game window.
 
 **Pricing and market intelligence**
 
+- Trade Chat is available for minor artifacts as well as uniques and major artifacts.
 - One authenticated analyze request returns the whole card atomically: canonical item, parsed roll vector, valuation, and context.
 - Similarity- and recency-weighted valuation from sold comparables, with quick-list guidance, active listings, trend, liquidity, median sale time, days of supply, roll-aware price stability, and confidence.
 - Per-roll quality, a market-relative percentile, and the strongest observed value driver measured against that roll's legal minimum.
@@ -56,6 +57,7 @@ the result as an analysis card over the game window.
 **Diagnostics and reliability**
 
 - Mandatory TLS verification outside an explicit local dev opt-out, redirects disabled for bearer requests, certificate revocation checks where Schannel supports them, and Windows-native certificate authorities trusted from the OpenSSL HTTP backend.
+- Signed production binaries ignore runtime environment overrides so API, authentication, credentials, local data, and updates remain pinned to production.
 - Strict response size caps and shape validation, bounded retries for 429, 502, 503, and 504, and cancellation of in-flight OAuth and API requests on sign-out and shutdown.
 - Repeated-hover analysis cached in memory for at most 30 seconds, partitioned by account and capped at 64 entries.
 - Per-request client metrics for DNS, connect, TLS, first byte, total time, API request id, and server phase timings.

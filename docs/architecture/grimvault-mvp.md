@@ -1127,8 +1127,9 @@ because of env separation).
 Per-env config in the desktop binary lives behind a single compile-time
 flag, `GRIMVAULT_ENV` (default `prod`). It selects the SPA host and API
 host from a baked-in table; `client_id` is a constant `grimvault` and
-does not vary. No runtime env var override in the shipped build; dev
-builds get a runtime `--env` flag for engineers.
+does not vary. Production builds ignore runtime environment overrides;
+development and QA builds accept `--env` and `GRIMVAULT_ENV` for engineers.
+`APP_ENV` is never part of the desktop configuration contract.
 
 Loopback redirect URI is the same shape in every env: `http://127.0.0.1:<port>/callback`.
 DevOps registers the `grimvault` client with each KATforge realm

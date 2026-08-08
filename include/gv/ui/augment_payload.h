@@ -234,6 +234,7 @@ inline nlohmann::json analysis_entity (const gv::api::TooltipLookup& lookup,
       { "item_name", lookup.display_name.empty ()
             ? lookup.canonical_name : lookup.display_name },
       { "item_rarity", lookup.rarity },
+      { "item_artifact_type", lookup.artifact_type },
       { "quantity", lookup.quantity },
       { "tradeable", lookup.tradeable },
       { "pricing", {
