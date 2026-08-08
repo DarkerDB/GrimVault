@@ -21,6 +21,8 @@
 [CmdletBinding ()]
 param (
    [string] $Preset = "windows-msvc-debug",
+   [ValidateSet ("dev", "qa", "prod")]
+   [string] $Env    = "dev",
    [switch] $Build,
    [switch] $NoRun
 )
@@ -155,7 +157,22 @@ $ninjaFile  = Join-Path $out "build.ninja"
 # previous configure failed midway. Treat the build dir as poisoned and
 # wipe + reconfigure from scratch.
 $cacheBroken = (Test-Path $cmakeCache) -and (-not (Test-Path $ninjaFile))
-$needConfigure = $Build -or (-not (Test-Path $cmakeCache)) -or $cacheBroken
+
+# Detect env change: if the cache was configured with a different
+# GRIMVAULT_ENV value, force reconfigure so the env.h regenerates.
+$envChanged = $false
+if (Test-Path $cmakeCache) {
+   $match = Select-String -Path $cmakeCache -Pattern '^GRIMVAULT_ENV:STRING=(.+)$' -ErrorAction SilentlyContinue
+   if ($match) {
+      $cachedEnv = $match.Matches[0].Groups[1].Value.Trim()
+      if ($cachedEnv -and $cachedEnv -ne $Env) {
+         Inf "cached GRIMVAULT_ENV=$cachedEnv differs from requested $Env - forcing reconfigure"
+         $envChanged = $true
+      }
+   }
+}
+
+$needConfigure = $Build -or (-not (Test-Path $cmakeCache)) -or $cacheBroken -or $envChanged
 
 if ($needConfigure) {
    Write-Host "`n==> Configure ($Preset)" -ForegroundColor Cyan
@@ -165,9 +182,13 @@ if ($needConfigure) {
    if (($Build -or $cacheBroken) -and (Test-Path $out)) { Remove-Item -Recurse -Force $out }
 
    Push-Location $root
-   try { & cmake --preset $Preset "-DVCPKG_INSTALLED_DIR=$VCPKG_INSTALLED" } finally { Pop-Location }
+   try {
+      & cmake --preset $Preset `
+         "-DVCPKG_INSTALLED_DIR=$VCPKG_INSTALLED" `
+         "-DGRIMVAULT_ENV=$Env"
+   } finally { Pop-Location }
    if ($LASTEXITCODE -ne 0) { Fail "cmake configure exit $LASTEXITCODE" }
-   Ok "configure"
+   Ok "configure (env: $Env)"
 } else {
    Inf "skipping configure (use -Build to force)"
 }
@@ -180,15 +201,24 @@ try { & cmake --build --preset $Preset } finally { Pop-Location }
 if ($LASTEXITCODE -ne 0) { Fail "build exit $LASTEXITCODE" }
 Ok "build"
 
+# ---- Install CLI shim ------------------------------------------------------
+
+$exe = Join-Path $out "grimvault.exe"
+if (-not (Test-Path $exe)) { Fail "binary not found: $exe" }
+
+# Refresh the C:\Users\<you>\.bin\grimvault.cmd shim to point at this build.
+# Runs after build regardless of -NoRun so the shim always tracks the latest
+# binary. -NoPrompt keeps dev-run non-interactive.
+Write-Host "`n==> Install CLI shim" -ForegroundColor Cyan
+& (Join-Path $PSScriptRoot "install-cli.ps1") -ExePath $exe -NoPrompt
+if ($LASTEXITCODE -ne 0) { Fail "install-cli.ps1 exit $LASTEXITCODE" }
+
 # ---- Run -------------------------------------------------------------------
 
 if ($NoRun) {
    Inf "skipping run (-NoRun)"
    exit 0
 }
-
-$exe = Join-Path $out "grimvault.exe"
-if (-not (Test-Path $exe)) { Fail "binary not found: $exe" }
 
 Write-Host "`n==> Run (dev mode)" -ForegroundColor Cyan
 Inf "GRIMVAULT_DEV_RESOURCES = $root           (models/i18n/assets resolve from repo)"

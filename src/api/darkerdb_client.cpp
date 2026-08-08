@@ -1,6 +1,7 @@
 #include <gv/api/darkerdb_client.h>
 
 #include <gv/auth/session.h>
+#include <gv/core/env_resolver.h>
 #include <gv/core/logger.h>
 #include <gv/core/version.h>
 #include <gv/db/database.h>
@@ -36,8 +37,18 @@ namespace {
 
    void apply_tls (CURL* curl, const std::string& ca_bundle)
    {
-      curl_easy_setopt (curl, CURLOPT_SSL_VERIFYPEER, 1L);
-      curl_easy_setopt (curl, CURLOPT_SSL_VERIFYHOST, 2L);
+      // Dev hits hosts that may serve self-signed / locally-issued certs
+      // (auth.dev.darkerdb.com, api.dev.darkerdb.com). Skip verification
+      // for env=dev only. qa/prod stay strict — cert problems there are
+      // real problems and should fail loudly.
+      const bool strict_tls = gv::core::active_env ().name != "dev";
+      curl_easy_setopt (curl, CURLOPT_SSL_VERIFYPEER, strict_tls ? 1L : 0L);
+      curl_easy_setopt (curl, CURLOPT_SSL_VERIFYHOST, strict_tls ? 2L : 0L);
+      // Schannel revocation check fails when the OCSP/CRL endpoint isn't
+      // reachable. No-op on OpenSSL builds.
+#ifdef _WIN32
+      curl_easy_setopt (curl, CURLOPT_SSL_OPTIONS,    CURLSSLOPT_NO_REVOKE);
+#endif
       if (!ca_bundle.empty ()) {
          curl_easy_setopt (curl, CURLOPT_CAINFO, ca_bundle.c_str ());
       }
@@ -123,6 +134,116 @@ namespace {
       return out;
    }
 
+   // Translate scalar JSON nodes into the string form that
+   // UserSettingsRepo stores. Bools → "true"/"false", numbers via dump
+   // (preserves int vs float), strings unwrap. Used by flatten ().
+   std::string scalar_to_string (const nlohmann::json& v)
+   {
+      if (v.is_string ()) return v.get<std::string> ();
+      if (v.is_boolean ()) return v.get<bool> () ? "true" : "false";
+      return v.dump ();
+   }
+
+   // Walk the parsed typed bundle and rebuild the flat colon-namespaced
+   // map. Keeps the wire schema (nested) and the storage schema (flat)
+   // in sync from a single source of truth.
+   void flatten_to_values (SettingsBundle& b)
+   {
+      auto put = [&] (std::string k, std::string v) {
+         b.values.emplace (std::move (k), std::move (v));
+      };
+
+      put ("overlay:mode",      b.overlay.mode);
+      put ("overlay:alignment", b.overlay.alignment);
+      put ("overlay:opacity",   std::to_string (b.overlay.opacity));
+      put ("overlay:scale",     std::to_string (b.overlay.scale));
+      put ("overlay:offset_x",  std::to_string (b.overlay.offset_x));
+      put ("overlay:offset_y",  std::to_string (b.overlay.offset_y));
+
+      put ("tooltip:sections:header",    b.tooltip.sections.header    ? "true" : "false");
+      put ("tooltip:sections:primary",   b.tooltip.sections.primary   ? "true" : "false");
+      put ("tooltip:sections:secondary", b.tooltip.sections.secondary ? "true" : "false");
+      put ("tooltip:sections:details",   b.tooltip.sections.details   ? "true" : "false");
+      put ("tooltip:sections:quests",    b.tooltip.sections.quests    ? "true" : "false");
+      put ("tooltip:sections:pricing",   b.tooltip.sections.pricing   ? "true" : "false");
+      put ("tooltip:is_price_history_sparkline_visible",
+         b.tooltip.is_price_history_sparkline_visible ? "true" : "false");
+
+      put ("pricing:currency_display", b.pricing.currency_display);
+      put ("pricing:source",           b.pricing.source);
+      put ("pricing:window_days",      std::to_string (b.pricing.window_days));
+
+      put ("behavior:is_telemetry_enabled",
+         b.behavior.is_telemetry_enabled ? "true" : "false");
+      put ("behavior:is_auto_update_enabled",
+         b.behavior.is_auto_update_enabled ? "true" : "false");
+      put ("behavior:is_launch_on_startup_enabled",
+         b.behavior.is_launch_on_startup_enabled ? "true" : "false");
+
+      put ("hotkeys:toggle_overlay", b.hotkeys.toggle_overlay);
+      put ("hotkeys:force_refresh",  b.hotkeys.force_refresh);
+   }
+
+   // Populate the typed SettingsBundle fields from the nested JSON
+   // response. Unknown groups / unknown keys are ignored (older client
+   // staying compatible with a newer server). Missing fields keep
+   // their struct-default values, so a partial server response still
+   // yields a fully-populated bundle.
+   void parse_settings (const nlohmann::json& body, SettingsBundle& out)
+   {
+      if (!body.is_object ()) {
+         flatten_to_values (out);
+         return;
+      }
+
+      out.updated_at = body.value ("updated_at", "");
+
+      if (auto o = body.find ("overlay"); o != body.end () && o->is_object ()) {
+         out.overlay.mode      = o->value ("mode",      out.overlay.mode);
+         out.overlay.alignment = o->value ("alignment", out.overlay.alignment);
+         out.overlay.opacity   = o->value ("opacity",   out.overlay.opacity);
+         out.overlay.scale     = o->value ("scale",     out.overlay.scale);
+         out.overlay.offset_x  = o->value ("offset_x",  out.overlay.offset_x);
+         out.overlay.offset_y  = o->value ("offset_y",  out.overlay.offset_y);
+      }
+
+      if (auto t = body.find ("tooltip"); t != body.end () && t->is_object ()) {
+         if (auto s = t->find ("sections"); s != t->end () && s->is_object ()) {
+            out.tooltip.sections.header    = s->value ("header",    out.tooltip.sections.header);
+            out.tooltip.sections.primary   = s->value ("primary",   out.tooltip.sections.primary);
+            out.tooltip.sections.secondary = s->value ("secondary", out.tooltip.sections.secondary);
+            out.tooltip.sections.details   = s->value ("details",   out.tooltip.sections.details);
+            out.tooltip.sections.quests    = s->value ("quests",    out.tooltip.sections.quests);
+            out.tooltip.sections.pricing   = s->value ("pricing",   out.tooltip.sections.pricing);
+         }
+         out.tooltip.is_price_history_sparkline_visible = t->value (
+            "is_price_history_sparkline_visible",
+            out.tooltip.is_price_history_sparkline_visible);
+      }
+
+      if (auto p = body.find ("pricing"); p != body.end () && p->is_object ()) {
+         out.pricing.currency_display = p->value ("currency_display", out.pricing.currency_display);
+         out.pricing.source           = p->value ("source",           out.pricing.source);
+         out.pricing.window_days      = p->value ("window_days",      out.pricing.window_days);
+      }
+
+      if (auto b = body.find ("behavior"); b != body.end () && b->is_object ()) {
+         out.behavior.is_telemetry_enabled = b->value (
+            "is_telemetry_enabled", out.behavior.is_telemetry_enabled);
+         out.behavior.is_auto_update_enabled = b->value (
+            "is_auto_update_enabled", out.behavior.is_auto_update_enabled);
+         out.behavior.is_launch_on_startup_enabled = b->value (
+            "is_launch_on_startup_enabled", out.behavior.is_launch_on_startup_enabled);
+      }
+
+      if (auto h = body.find ("hotkeys"); h != body.end () && h->is_object ()) {
+         out.hotkeys.toggle_overlay = h->value ("toggle_overlay", out.hotkeys.toggle_overlay);
+         out.hotkeys.force_refresh  = h->value ("force_refresh",  out.hotkeys.force_refresh);
+      }
+
+      flatten_to_values (out);
+   }
+
 } // namespace
 
 void DarkerDbClient::global_init    () { curl_global_init    (CURL_GLOBAL_DEFAULT); }
@@ -170,6 +291,8 @@ struct DarkerDbClient::Impl
       }
 
       Res res;
+      char err_buf [CURL_ERROR_SIZE] { 0 };
+      curl_easy_setopt (curl, CURLOPT_ERRORBUFFER,       err_buf);
       curl_easy_setopt (curl, CURLOPT_URL,               req.url.c_str ());
       curl_easy_setopt (curl, CURLOPT_HTTPHEADER,        headers);
       curl_easy_setopt (curl, CURLOPT_WRITEFUNCTION,     &write_cb);
@@ -196,13 +319,15 @@ struct DarkerDbClient::Impl
       curl_easy_cleanup   (curl);
 
       if (rc != CURLE_OK) {
+         const std::string detail = err_buf [0] ? err_buf : curl_easy_strerror (rc);
          core::log::api.event ("http.error", {
             { "method",   std::string { req.method } },
             { "url",      req.url },
             { "curl_err", curl_easy_strerror (rc) },
+            { "detail",   detail },
          });
          return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
-            "darkerdb: curl failed: {}", curl_easy_strerror (rc)));
+            "darkerdb: curl failed (code {}): {}", static_cast<int> (rc), detail));
       }
       core::log::api.event ("http.request", {
          { "method", std::string { req.method } },
@@ -481,6 +606,39 @@ core::Result<PingResult> DarkerDbClient::ping ()
          "darkerdb: ping invalid JSON"));
    }
    return parse_ping (std::move (json));
+}
+
+core::Result<SettingsBundle> DarkerDbClient::get_settings ()
+{
+   Impl::Req req {
+      .method = "GET",
+      .url    = impl_->cfg.base_url + "/v2/grimvault/settings",
+   };
+
+   auto res = impl_->http (req);
+   if (!res.has_value ()) return core::fail (res.error ());
+
+   if (res->status == 401 || res->status == 403) {
+      return core::fail (core::Error::make (core::ErrorKind::Permission,
+         "darkerdb: settings auth failed HTTP {}: {}", res->status,
+         res->body.substr (0, 200)));
+   }
+   if (res->status < 200 || res->status >= 300) {
+      return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
+         "darkerdb: settings HTTP {}: {}", res->status, res->body.substr (0, 200)));
+   }
+
+   auto json = nlohmann::json::parse (res->body, nullptr, false);
+   if (json.is_discarded ()) {
+      return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
+         "darkerdb: settings invalid JSON"));
+   }
+
+   SettingsBundle out;
+   out.raw = json;
+   const auto& body = body_of (json);
+   parse_settings (body, out);
+   return out;
 }
 
 } // namespace gv::api

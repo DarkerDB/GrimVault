@@ -5,6 +5,7 @@
 #include <gv/auth/pkce.h>
 #include <gv/core/logger.h>
 
+#include <QCoreApplication>
 #include <QDesktopServices>
 #include <QString>
 #include <QUrl>
@@ -60,8 +61,20 @@ namespace {
       return out;
    }
 
-   TokenSet parse_token_response (const nlohmann::json& j)
+   TokenSet parse_token_response (const nlohmann::json& json)
    {
+      // The KATforge envelope wraps the RFC 6749 payload under "body";
+      // tolerate both shapes so a raw RFC response still parses.
+      const nlohmann::json* src = &json;
+
+      if (json.is_object ()) {
+         if (auto it = json.find ("body"); it != json.end () && it->is_object ()) {
+            src = &*it;
+         }
+      }
+
+      const nlohmann::json& j = *src;
+
       TokenSet t;
       t.access_token  = j.value ("access_token",  "");
       t.refresh_token = j.value ("refresh_token", "");
@@ -108,7 +121,7 @@ core::Result<TokenResponse> OauthClient::authorize ()
       "http://127.0.0.1:" + std::to_string (*port) + "/callback";
 
    std::ostringstream url;
-   url << impl_->cfg.spa_base_url << "/oauth/authorize"
+   url << impl_->cfg.auth_base_url << "/oauth/authorize"
        << "?response_type=code"
        << "&client_id="             << url_escape (impl_->cfg.client_id)
        << "&redirect_uri="          << url_escape (redirect_uri)
@@ -126,11 +139,20 @@ core::Result<TokenResponse> OauthClient::authorize ()
    }
    if (launch_browser) {
       const QString qurl = QString::fromStdString (authorize_url);
-      bool opened = QDesktopServices::openUrl (QUrl (qurl));
+
+      // QDesktopServices::openUrl prints a noisy warning and refuses to
+      // run under a bare QCoreApplication (CLI mode), so check for a
+      // QGuiApplication before invoking it. CLI mode falls straight
+      // through to the ShellExecuteW path on Windows.
+      const auto* qapp = QCoreApplication::instance ();
+      const bool is_gui_app = qapp && qapp->inherits ("QGuiApplication");
+
+      bool opened = false;
+      if (is_gui_app) {
+         opened = QDesktopServices::openUrl (QUrl (qurl));
+      }
 #ifdef _WIN32
       if (!opened) {
-         // QDesktopServices needs QGuiApplication; CLI login runs under
-         // QCoreApplication. Fall back to ShellExecuteW.
          const auto wurl = qurl.toStdWString ();
          const auto rc = reinterpret_cast<INT_PTR> (
             ::ShellExecuteW (nullptr, L"open", wurl.c_str (),
@@ -143,7 +165,18 @@ core::Result<TokenResponse> OauthClient::authorize ()
       }
    }
 
-   auto cb = server.await_callback (state, impl_->cfg.callback_timeout);
+   // Branded post-callback pages on the realm SPA. The loopback server
+   // emits a 302 here instead of its own static HTML when the URL is
+   // non-empty.
+   std::string success_redirect;
+   std::string error_redirect;
+   if (!impl_->cfg.spa_base_url.empty ()) {
+      success_redirect = impl_->cfg.spa_base_url + "/grimvault/callback?status=ok";
+      error_redirect   = impl_->cfg.spa_base_url + "/grimvault/callback?status=error";
+   }
+
+   auto cb = server.await_callback (state, impl_->cfg.callback_timeout,
+                                    success_redirect, error_redirect);
    if (!cb.has_value ()) return core::fail (cb.error ());
 
    // Exchange the code at /oauth/token.
@@ -164,17 +197,24 @@ core::Result<TokenResponse> OauthClient::authorize ()
 
    if (res->status < 200 || res->status >= 300) {
       return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
-         "oauth: token exchange failed HTTP {}: {}", res->status,
+         "Token exchange failed (HTTP {}): {}", res->status,
          res->body.substr (0, 300)));
    }
 
    auto json = nlohmann::json::parse (res->body, nullptr, false);
    if (json.is_discarded ()) {
       return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
-         "oauth: token response not JSON"));
+         "Token response from the server wasn't valid JSON."));
    }
 
-   return TokenResponse { parse_token_response (json) };
+   auto tokens = parse_token_response (json);
+   if (tokens.access_token.empty () || tokens.refresh_token.empty ()) {
+      return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
+         "Token response parsed but {} missing — body: {}",
+         tokens.access_token.empty () ? "access_token" : "refresh_token",
+         res->body.substr (0, 300)));
+   }
+   return TokenResponse { std::move (tokens) };
 }
 
 core::Result<TokenResponse> OauthClient::refresh (std::string_view refresh_token)

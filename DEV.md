@@ -6,8 +6,9 @@ One-shot from a **Developer PowerShell for VS 2022**:
 pwsh tools/dev-run.ps1
 ```
 
-That's it. The script configures with `windows-msvc-debug`, builds, and runs
-the binary with two env vars set so it stays local:
+That's it. The script configures with `windows-msvc-debug`, builds, installs
+the `grimvault` CLI shim on your user PATH, and runs the binary with two env
+vars set so it stays local:
 
 ```
 GRIMVAULT_DEV_RESOURCES = <repo root>   # models/, i18n/, assets/ resolve from sources
@@ -35,7 +36,15 @@ configures are cached.
 ## What you'll see
 
 ```
-- Main window opens. Six pages in the left rail.
+- Tray icon appears. If you're not already signed in, a tray toast says
+  "Opening your browser to sign in…" and your browser pops up on
+  https://dev.darkerdb.com/oauth/authorize. After you grant consent the
+  callback fires, tokens land in Windows Credential Manager, and a
+  "Signed in" toast confirms.
+- Settings sync starts: every 60s GrimVault polls /v2/grimvault/settings
+  and mirrors the response into the local UserSettingsRepo. Any change
+  is logged ("settings updated: key = value").
+- Main window opens (if you click the tray). Six pages in the left rail.
 - Dashboard / Items / Pricing / Settings / Diagnostics / Logs.
 - Ctrl+Shift+P opens the command palette.
 - Pricing lookups hit https://api.darkerdb.com (network needed).
@@ -45,6 +54,64 @@ configures are cached.
 - Tray icon (SSL.com 'K' for now until we get a proper icon) — single-click
   toggles the window.
 ```
+
+Pass `--no-auto-login` to skip the on-launch OAuth prompt (the tray's
+"Sign In" menu item still works on demand):
+
+```powershell
+grimvault --no-auto-login
+```
+
+## CLI on PATH
+
+`tools/dev-run.ps1` writes `C:\Users\<you>\.bin\grimvault.cmd` pointing at
+the just-built `build\windows-msvc-debug\grimvault.exe`. From then on:
+
+```powershell
+grimvault --help
+grimvault status        # env, signed-in user, expiry, /v2/grimvault/ping result
+grimvault whoami        # alias of status
+grimvault login         # interactive OAuth (browser opens)
+grimvault settings      # dump locally synced settings (the addon's view)
+grimvault settings get  # one-shot read of /v2/grimvault/settings (the server's view)
+grimvault doctor        # end-to-end diagnostics (tokens, JWKS, ping)
+
+grimvault               # GUI foreground: logs stream to this terminal
+grimvault --detached    # GUI in the background, returns immediately
+grimvault --debug       # GUI foreground + verbose logs, OCR stage dumps
+                        # (%TEMP%\grimvault-ocr), debug overlay on
+```
+
+### Switching env at runtime
+
+Each binary bakes a *default* env at compile time (set via
+`-DGRIMVAULT_ENV=dev|qa|prod`; `dev-run.ps1` defaults to `dev`). Override at
+runtime either way:
+
+```powershell
+grimvault --env qa status
+$env:GRIMVAULT_ENV = "qa"; grimvault status
+```
+
+Host map:
+
+| env | API | Auth | SPA |
+|---|---|---|---|
+| dev | api.dev.darkerdb.com | auth.dev.darkerdb.com | dev.darkerdb.com |
+| qa  | api.qa.darkerdb.com  | auth.qa.darkerdb.com  | qa.darkerdb.com  |
+| prod| api.darkerdb.com     | auth.darkerdb.com     | darkerdb.com     |
+
+First-time setup — if `C:\Users\<you>\.bin` isn't on your user PATH yet,
+run the installer interactively once and let it add the dir:
+
+```powershell
+pwsh tools\install-cli.ps1 -AddToPath
+# then open a fresh shell so the new PATH is visible
+```
+
+The shim is a 2-line `.cmd` that forwards `%*` to the real exe — the exe
+stays put so Qt's adjacent-DLL discovery keeps working. Each `dev-run.ps1`
+rewrites the shim, so you're always invoking the latest build.
 
 ## What's missing in dev mode
 
@@ -79,12 +146,20 @@ Remove-Item -Recurse -Force $env:APPDATA\GrimVault
 models/             <repo>/models/        ← you need to populate this
 i18n/<lang>/        <repo>/i18n/<lang>/   ← already in repo
 assets/             <repo>/assets/        ← already in repo
+web/                <repo>/web/           ← augment.html + vendored ddb-tooltips
+                                            (refresh: tools/build/sync-tooltips.sh)
 db/migrations/      <repo>/db/migrations/ ← embedded at compile time, also on disk
 
 grimvault.db        %APPDATA%\GrimVault\grimvault.db
 logs/               %APPDATA%\GrimVault\logs\
 settings.ini        %APPDATA%\GrimVault\settings.ini  (auto-migrated to DB, renamed .migrated)
+webview2/           %APPDATA%\GrimVault\webview2      (WebView2 user data)
 ```
+
+The Augment (overlay card) renders through WebView2 + the vendored
+ddb-tooltips library. Machines without the Evergreen runtime, or a dead
+browser process, fall back to the legacy QML card automatically; force it
+with the `overlay:renderer` setting (`webview` | `qml`).
 
 ## Working on Windows + WSL
 

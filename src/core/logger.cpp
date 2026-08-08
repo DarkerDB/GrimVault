@@ -26,7 +26,7 @@ namespace {
       stdout_sink->set_pattern ("[%H:%M:%S.%e] [%^%l%$] %v");
 
       auto file_sink = std::make_shared<spdlog::sinks::daily_file_sink_mt> (
-         (log_dir / "grimvault.log").string (),
+         (log_dir / "grimvault.txt").string (),
          0, 0,
          false,
          7
@@ -52,6 +52,12 @@ namespace {
       logger->flush_on (spdlog::level::warn);
 
       spdlog::set_default_logger (logger);
+
+      // Background flush so info-level lines reach the file promptly. With
+      // only flush_on(warn), a healthy session (no warnings) can sit on
+      // minutes of buffered startup lines — tailing the log then looks like
+      // a hang at whatever the last warning was.
+      spdlog::flush_every (std::chrono::seconds (2));
    }
 
 } // namespace

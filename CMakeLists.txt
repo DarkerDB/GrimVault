@@ -68,7 +68,6 @@ find_package (fmt        CONFIG REQUIRED)
 find_package (nlohmann_json CONFIG REQUIRED)
 
 find_package (OpenCV     CONFIG REQUIRED)
-find_package (onnxruntime CONFIG REQUIRED)
 
 # WinSparkle is installed by vcpkg without a CMake config file. Hand-wire
 # it: include path + import library. The DLL is staged into the install
@@ -154,8 +153,9 @@ target_link_libraries (gv_ocr PUBLIC
    gv::capture
    gv::vision
    opencv_core
+   opencv_dnn
+   opencv_imgcodecs
    opencv_imgproc
-   onnxruntime::onnxruntime
 )
 
 grimvault_add_module (update)
@@ -204,6 +204,7 @@ target_link_libraries (gv_cli
       gv::core
       gv::auth
       gv::api
+      gv::db
       Qt6::Core
    PRIVATE
       nlohmann_json::nlohmann_json
@@ -233,12 +234,26 @@ target_sources (gv_ui PRIVATE
 target_link_libraries (gv_ui PUBLIC
    gv::core
    gv::api
+   nlohmann_json::nlohmann_json
    Qt6::Core
    Qt6::Gui
    Qt6::Widgets
    Qt6::Quick
    Qt6::Qml
 )
+if (WIN32)
+   # gv/ui/screen.cpp: GetDpiForMonitor (Shcore), SetWindowPos (User32).
+   # gv/ui/webview_host.cpp: WebView2 loader + DirectComposition (dcomp).
+   find_package (unofficial-webview2 CONFIG REQUIRED)
+   find_package (wil                 CONFIG REQUIRED)
+   target_link_libraries (gv_ui PRIVATE
+      unofficial::webview2::webview2
+      WIL::WIL
+      dcomp
+      Shcore
+      User32
+   )
+endif ()
 
 # ---- Application entry ----
 
@@ -254,6 +269,19 @@ qt_add_executable (grimvault WIN32
 # on top of the linker defaults.
 if (MSVC)
    target_sources (grimvault PRIVATE "${CMAKE_SOURCE_DIR}/app.manifest")
+endif ()
+
+# Exe shell icon + VERSIONINFO (Explorer, taskbar, Task Manager). The .ico
+# is committed; regenerate from Icon-324x356.png via tools/build/png_to_ico.py
+# if the art changes.
+if (WIN32)
+   set (GRIMVAULT_ICON_ICO "${CMAKE_SOURCE_DIR}/assets/images/Icon-324x356.ico")
+   configure_file (
+      "${CMAKE_SOURCE_DIR}/grimvault.rc.in"
+      "${CMAKE_BINARY_DIR}/generated/grimvault.rc"
+      @ONLY
+   )
+   target_sources (grimvault PRIVATE "${CMAKE_BINARY_DIR}/generated/grimvault.rc")
 endif ()
 
 target_include_directories (grimvault PRIVATE
@@ -317,6 +345,28 @@ set_target_properties (grimvault PROPERTIES
 # (platforms/, imageformats/, etc.). Without the platforms plugin Qt fails
 # to start. Copy them ourselves from vcpkg's installed Qt6/plugins tree.
 grimvault_stage_qt_plugins (grimvault)
+
+# Models (tooltip.onnx, paddle/) resolve from the exe dir unless
+# GRIMVAULT_DEV_RESOURCES overrides, so stage them next to the binary the
+# same way the installed layout does. Without this, running the build
+# outside dev-run.ps1 starts with a dead tooltip detector.
+add_custom_command (TARGET grimvault POST_BUILD
+   COMMAND "${CMAKE_COMMAND}" -E copy_directory_if_different
+           "${CMAKE_SOURCE_DIR}/models"
+           "$<TARGET_FILE_DIR:grimvault>/models"
+   COMMENT "Staging models for grimvault"
+   VERBATIM
+)
+
+# Augment page + vendored ddb-tooltips dist, served to WebView2 via the
+# grimvault.assets virtual host. Same dev/install duality as models/.
+add_custom_command (TARGET grimvault POST_BUILD
+   COMMAND "${CMAKE_COMMAND}" -E copy_directory_if_different
+           "${CMAKE_SOURCE_DIR}/web"
+           "$<TARGET_FILE_DIR:grimvault>/web"
+   COMMENT "Staging web assets for grimvault"
+   VERBATIM
+)
 
 # ---- Tests ----
 

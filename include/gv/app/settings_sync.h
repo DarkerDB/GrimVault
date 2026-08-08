@@ -1,0 +1,69 @@
+#pragma once
+
+#include <QObject>
+#include <QString>
+
+#include <chrono>
+#include <memory>
+
+namespace gv::api  { class DarkerDbClient; }
+namespace gv::auth { class Session;        }
+namespace gv::db   { class UserSettingsRepo; }
+
+namespace gv::app {
+
+// Background poller that mirrors dashboard-controlled settings from
+// /v2/grimvault/settings into the local UserSettingsRepo. The dashboard is
+// the source of truth — local writes for these keys will be overwritten on
+// the next poll.
+//
+// Driven by a single-shot QTimer on the Qt main thread; each tick spawns a
+// short-lived worker thread to do the blocking HTTP call. On success the
+// next tick fires after `interval`. On transient failure the next tick
+// uses exponential backoff up to `backoff_cap`.
+//
+// Lifecycle: construct in the GUI process, call start () once the user is
+// signed in, stop () before app exit. Safe to start/stop repeatedly across
+// sign-in / sign-out transitions.
+class SettingsSync : public QObject
+{
+   Q_OBJECT
+
+public:
+   struct Config {
+      // Cadence between successful polls.
+      std::chrono::seconds interval { 60 };
+
+      // Backoff floor (first failure) and cap (every failure after that
+      // doubles up to the cap).
+      std::chrono::seconds backoff_floor { 60 };
+      std::chrono::seconds backoff_cap   { 300 };
+   };
+
+   SettingsSync (gv::api::DarkerDbClient* api,
+                 gv::auth::Session*       session,
+                 gv::db::UserSettingsRepo* repo,
+                 Config                   cfg    = {},
+                 QObject*                 parent = nullptr);
+   ~SettingsSync () override;
+
+   // Idempotent. Kicks an immediate poll, then schedules the next.
+   void start ();
+
+   // Stops the timer + ignores any in-flight worker result.
+   void stop  ();
+
+   // Fire one cycle now, independent of the schedule. No-op when stopped.
+   void poll_now ();
+
+signals:
+   void settings_changed (QString key, QString value);
+   void poll_succeeded   (int num_changed);
+   void poll_failed      (QString message);
+
+private:
+   struct Impl;
+   std::unique_ptr<Impl> impl_;
+};
+
+} // namespace gv::app
