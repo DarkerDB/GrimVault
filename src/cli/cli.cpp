@@ -1,12 +1,12 @@
 #include <gv/cli/cli.h>
 
 #include <gv/api/darkerdb_client.h>
-#include <gv/auth/http.h>
 #include <gv/auth/oauth_client.h>
 #include <gv/auth/session.h>
 #include <gv/auth/token_store.h>
 #include <gv/core/env.h>
 #include <gv/core/env_resolver.h>
+#include <gv/core/http.h>
 #include <gv/core/logger.h>
 #include <gv/core/version.h>
 #include <gv/db/database.h>
@@ -37,7 +37,13 @@ namespace {
 
    std::filesystem::path app_data_dir ()
    {
-      auto qpath = QStandardPaths::writableLocation (QStandardPaths::AppDataLocation);
+      auto qpath = QStandardPaths::writableLocation (QStandardPaths::GenericDataLocation)
+         + QStringLiteral ("/GrimVault");
+      const auto env = core::active_env ().name;
+      if (env != "prod") {
+         qpath += QStringLiteral ("/")
+            + QString::fromUtf8 (env.data (), static_cast<qsizetype> (env.size ()));
+      }
       return std::filesystem::path { qpath.toStdWString () };
    }
 
@@ -155,10 +161,10 @@ namespace {
       std::cout << "scope:         " << snap->scope << "\n";
 
       // Try a live ping to confirm the token actually works.
-      gv::api::DarkerDbClient::Config api_cfg;
+      gv::api::DDBClient::Config api_cfg;
       api_cfg.base_url  = std::string { e.api_base_url };
       api_cfg.client_id = std::string { e.client_id };
-      gv::api::DarkerDbClient api { api_cfg, &session };
+      gv::api::DDBClient api { api_cfg, &session };
       auto p = api.ping ();
       if (!p.has_value ()) {
          std::cout << "ping:          FAILED (" << p.error ().message << ")\n";
@@ -182,10 +188,10 @@ namespace {
          return k_error_auth;
       }
 
-      gv::api::DarkerDbClient::Config api_cfg;
+      gv::api::DDBClient::Config api_cfg;
       api_cfg.base_url  = std::string { e.api_base_url };
       api_cfg.client_id = std::string { e.client_id };
-      gv::api::DarkerDbClient api { api_cfg, &session };
+      gv::api::DDBClient api { api_cfg, &session };
 
       auto p = api.ping ();
       if (!p.has_value ()) {
@@ -199,10 +205,18 @@ namespace {
    void print_kv_table (const std::map<std::string, std::string>& sorted)
    {
       // Group by colon-namespace prefix (overlay:opacity → "overlay"), print
-      // each group with a header so a 17-row dump reads as five sections,
-      // not a wall of keys.
-      std::cout << "key" << std::string (38, ' ') << "value\n";
-      std::cout << std::string (70, '-') << "\n";
+      // each group with a header so the dump reads as five sections, not a
+      // wall of keys.
+      //
+      // Column width is measured, not fixed: the server owns the keyspace
+      // (tooltip:analysis:* grows with grimvault-widgets.yaml), so any
+      // constant is one widget away from running the key into its value.
+      std::size_t width = 3;
+      for (const auto& [k, v] : sorted) width = std::max (width, k.size ());
+      width += 3;
+
+      std::cout << "key" << std::string (width - 3, ' ') << "value\n";
+      std::cout << std::string (width + 12, '-') << "\n";
 
       std::string current_group;
       for (const auto& [k, v] : sorted) {
@@ -217,7 +231,7 @@ namespace {
          }
 
          std::string key = k;
-         if (key.size () < 40) key.append (40 - key.size (), ' ');
+         if (key.size () < width) key.append (width - key.size (), ' ');
          std::cout << key << v << "\n";
       }
    }
@@ -227,7 +241,7 @@ namespace {
    // overlay actually reads at runtime (the server's view is one poll
    // away; this is the post-poll state).
    //
-   // The DB lives in %APPDATA%\GrimVault\grimvault.db. If it doesn't
+   // The DB lives under %LOCALAPPDATA%\GrimVault. If it doesn't
    // exist, the GUI has never run on this machine and there's nothing
    // to print — say so rather than silently creating an empty DB.
    int cmd_settings_local (const std::vector<std::string>& /*args*/)
@@ -248,6 +262,20 @@ namespace {
       }
 
       gv::db::UserSettingsRepo repo { **db };
+      auth::Session session { make_oauth () };
+      const auto principal = session.principal ();
+      if (!principal.has_value ()) {
+         std::cerr << "settings: not signed in\n";
+         return k_error_auth;
+      }
+
+      const auto owner = repo.get ("auth:subject");
+      if (!owner.has_value () || !owner->has_value () || **owner != *principal) {
+         std::cerr << "settings: local settings are not scoped to this account\n";
+         std::cerr << "          start GrimVault once to sync them safely.\n";
+         return k_error_auth;
+      }
+
       auto all = repo.all ();
       if (!all.has_value ()) {
          std::cerr << "settings: read failed: " << all.error ().message << "\n";
@@ -260,7 +288,8 @@ namespace {
       }
 
       // Sort for deterministic, grouped output.
-      const std::map<std::string, std::string> sorted (all->begin (), all->end ());
+      std::map<std::string, std::string> sorted (all->begin (), all->end ());
+      sorted.erase ("auth:subject");
       print_kv_table (sorted);
       std::cout << "\n(" << sorted.size () << " keys, from " << db_path.string () << ")\n";
       return k_ok;
@@ -280,10 +309,10 @@ namespace {
          return k_error_auth;
       }
 
-      gv::api::DarkerDbClient::Config api_cfg;
+      gv::api::DDBClient::Config api_cfg;
       api_cfg.base_url  = std::string { e.api_base_url };
       api_cfg.client_id = std::string { e.client_id };
-      gv::api::DarkerDbClient api { api_cfg, &session };
+      gv::api::DDBClient api { api_cfg, &session };
 
       auto bundle = api.get_settings ();
       if (!bundle.has_value ()) {
@@ -304,9 +333,22 @@ namespace {
 
    int cmd_logs (const std::vector<std::string>& /*args*/)
    {
-      // MVP: print the log file path. tail/--follow deferred per scope brief.
-      const auto path = cli_log_dir () / "grimvault.txt";
-      std::cout << path.string () << "\n";
+      const auto dir = cli_log_dir ();
+      std::filesystem::path newest;
+      std::filesystem::file_time_type newest_time {};
+      std::error_code ec;
+      for (std::filesystem::directory_iterator it { dir, ec }, end;
+           !ec && it != end; it.increment (ec)) {
+         const auto name = it->path ().filename ().string ();
+         if (!it->is_regular_file () || !name.starts_with ("grimvault")
+             || it->path ().extension () != ".txt") continue;
+         const auto time = it->last_write_time (ec);
+         if (!ec && (newest.empty () || time > newest_time)) {
+            newest = it->path ();
+            newest_time = time;
+         }
+      }
+      std::cout << (newest.empty () ? dir : newest).string () << "\n";
       return k_ok;
    }
 
@@ -335,10 +377,10 @@ namespace {
 
       // 2. JWKS endpoint reachable (TLS + HTTP both verified by one request)
       {
-         auth::http::Request req;
+         core::http::Request req;
          req.method = "GET";
          req.url    = std::string { e.api_base_url } + "/.well-known/jwks.json";
-         auto res = auth::http::perform (req);
+         auto res = core::http::perform (req);
          const bool ok = res.has_value () && res->status == 200;
          std::string detail;
          if (!res.has_value ()) {
@@ -355,10 +397,10 @@ namespace {
       if (tokens_loaded) {
          auto oauth = make_oauth ();
          auth::Session session { oauth };
-         gv::api::DarkerDbClient::Config api_cfg;
+         gv::api::DDBClient::Config api_cfg;
          api_cfg.base_url  = std::string { e.api_base_url };
          api_cfg.client_id = std::string { e.client_id };
-         gv::api::DarkerDbClient api { api_cfg, &session };
+         gv::api::DDBClient api { api_cfg, &session };
 
          auto p = api.ping ();
          const bool ok = p.has_value () && p->ok && !p->player_id.empty ();
@@ -392,7 +434,7 @@ namespace {
          "Usage: grimvault [--env <dev|qa|prod>] <command> [flags]\n"
          "\n"
          "Commands:\n"
-         "  login             Sign in to DarkerDB via the browser.\n"
+         "  login             Sign in to DDB via the browser.\n"
          "  logout            Revoke the refresh token and clear local credentials.\n"
          "  status            Print env, signed-in user, and access-token expiry.\n"
          "  whoami            Alias of status.\n"

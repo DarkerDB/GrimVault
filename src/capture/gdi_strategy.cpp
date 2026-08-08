@@ -32,6 +32,7 @@ void GdiBitBltStrategy::shutdown () noexcept
 namespace {
 
    core::Result<Frame> capture_dc (HDC src_dc, int width, int height,
+                                   int origin_x, int origin_y,
                                    std::uint64_t monitor_id, std::uint64_t window_id)
    {
       if (width <= 0 || height <= 0) {
@@ -62,7 +63,7 @@ namespace {
 
       HGDIOBJ old = ::SelectObject (mem_dc, dib);
 
-      if (!::BitBlt (mem_dc, 0, 0, width, height, src_dc, 0, 0, SRCCOPY)) {
+      if (!::BitBlt (mem_dc, 0, 0, width, height, src_dc, 0, 0, SRCCOPY | CAPTUREBLT)) {
          ::SelectObject (mem_dc, old);
          ::DeleteObject (dib);
          ::DeleteDC     (mem_dc);
@@ -85,10 +86,13 @@ namespace {
          .width      = width,
          .height     = height,
          .stride     = stride,
+         .origin_x   = origin_x,
+         .origin_y   = origin_y,
          .dpi_scale  = 1.0,
          .monitor_id = monitor_id,
          .window_id  = window_id,
          .timestamp  = std::chrono::steady_clock::now (),
+         .cursor     = cursor_now (),
       };
    }
 
@@ -111,7 +115,15 @@ core::Result<Frame> GdiBitBltStrategy::capture_window (void* window)
       return core::fail (core::Error::make (core::ErrorKind::Capture, "gdi: GetDC failed"));
    }
 
-   auto frame = capture_dc (dc, r.right - r.left, r.bottom - r.top, 0,
+   POINT origin {};
+   if (!::ClientToScreen (hwnd, &origin)) {
+      ::ReleaseDC (hwnd, dc);
+      return core::fail (core::Error::make (core::ErrorKind::Capture,
+         "gdi: ClientToScreen failed"));
+   }
+
+   auto frame = capture_dc (dc, r.right - r.left, r.bottom - r.top,
+                            origin.x, origin.y, 0,
                             reinterpret_cast<std::uintptr_t> (hwnd));
    ::ReleaseDC (hwnd, dc);
    return frame;
@@ -134,6 +146,7 @@ core::Result<Frame> GdiBitBltStrategy::capture_monitor (void* monitor)
 
    auto frame = capture_dc (dc, mi.rcMonitor.right - mi.rcMonitor.left,
                                 mi.rcMonitor.bottom - mi.rcMonitor.top,
+                                mi.rcMonitor.left, mi.rcMonitor.top,
                                 reinterpret_cast<std::uintptr_t> (hmon), 0);
    ::DeleteDC (dc);
    return frame;

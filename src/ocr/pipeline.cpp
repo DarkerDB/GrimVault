@@ -1,144 +1,136 @@
 #include <gv/ocr/pipeline.h>
+#include <gv/ocr/preprocessor.h>
+#include <gv/core/environment.h>
 #include <gv/core/logger.h>
+#include <gv/vision/gem_detector.h>
+#include <gv/vision/tooltip_tracker.h>
 #include <gv/core/spsc_queue.h>
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
+#include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <atomic>
-#include <cstdlib>
+#include <bit>
+#include <cctype>
 #include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <sstream>
 #include <thread>
 
 namespace gv::ocr {
 
 namespace {
 
-   // Segment a tooltip crop into horizontal text-line bands via row-ink
-   // profile. The recognizer is a single-line CRNN (48x320) — feeding it
-   // the whole multi-line card squashes every row into one 48px band and
-   // yields garbage. The lookup contract (§4.2) wants the whole tooltip
-   // newline-separated, so each band is recognized separately and rejoined.
-   // Threshold stays low (80) because artifact-red text has ~90 luma.
-   std::vector<cv::Range> line_bands (const cv::Mat& crop)
-   {
-      cv::Mat gray;
-      cv::cvtColor (crop, gray, crop.channels () == 4 ? cv::COLOR_BGRA2GRAY : cv::COLOR_BGR2GRAY);
+void replace_all (std::string& text, std::string_view from, std::string_view to)
+{
+   for (std::size_t pos = 0; (pos = text.find (from, pos)) != std::string::npos;) {
+      text.replace (pos, from.size (), to);
+      pos += to.size ();
+   }
+}
 
-      cv::Mat bright;
-      cv::threshold (gray, bright, 80, 255, cv::THRESH_BINARY);
+// The game's serif face draws dotted Latin glyphs with an accent-like stroke,
+// and the multilingual Paddle model often chooses the accented codepoint with
+// high confidence. Item lookup wants semantic ASCII, not a faithful encoding
+// of that font quirk. Keep this intentionally conservative and Latin-only.
+void canonicalize_latin (std::string& text)
+{
+   constexpr std::pair<std::string_view, std::string_view> replacements[] = {
+      { "á", "a" }, { "à", "a" }, { "â", "a" }, { "ä", "a" },
+      { "é", "e" }, { "è", "e" }, { "ê", "e" }, { "ë", "e" },
+      { "í", "i" }, { "ì", "i" }, { "î", "i" }, { "ï", "i" },
+      { "ó", "o" }, { "ò", "o" }, { "ô", "o" }, { "ö", "o" },
+      { "ú", "u" }, { "ù", "u" }, { "û", "u" }, { "ü", "u" },
+      { "−", "-" }, { "–", "-" }, { "’", "'" },
+   };
+   for (const auto& [from, to] : replacements) replace_all (text, from, to);
+}
 
-      // Profile only interior columns — the tooltip frame's vertical border
-      // lines run the full height, register ink on every row, and weld all
-      // text lines into one giant band (which then OCRs as garbage).
-      const int margin   = std::max (2, bright.cols / 25);
-      cv::Mat   interior = bright (cv::Range::all (), cv::Range (margin, bright.cols - margin));
-
-      cv::Mat rowsum;
-      cv::reduce (interior, rowsum, 1, cv::REDUCE_SUM, CV_32S);
-
-      const int min_ink = interior.cols * 255 / 50;   // >2% of the row lit
-
-      std::vector<cv::Range> bands;
-      int top = -1, end = -1, gap = 0;
-
-      auto flush = [&] {
-         if (top >= 0 && end - top >= 6) {
-            bands.emplace_back (std::max (0, top - 2), std::min (crop.rows, end + 3));
-         }
-         top = -1; end = -1; gap = 0;
-      };
-
-      for (int y = 0; y < rowsum.rows; ++y) {
-         if (rowsum.at<int> (y) > min_ink) {
-            if (top < 0) top = y;
-            end = y;
-            gap = 0;
-         } else if (top >= 0 && ++gap > 3) {
-            flush ();
-         }
+std::string pixel_hash (const cv::Mat& image)
+{
+   // Stable FNV-1a over dimensions, type, and visible pixel bytes. This is an
+   // exact-capture dedupe key, not a security primitive.
+   std::uint64_t hash = 14695981039346656037ull;
+   const auto mix = [&hash] (const void* data, std::size_t size) {
+      const auto* bytes = static_cast<const unsigned char*> (data);
+      for (std::size_t i = 0; i < size; ++i) {
+         hash ^= bytes [i];
+         hash *= 1099511628211ull;
       }
-      flush ();
+   };
+   const int header[] { image.rows, image.cols, image.type () };
+   mix (header, sizeof (header));
+   for (int row = 0; row < image.rows; ++row)
+      mix (image.ptr (row), static_cast<std::size_t> (image.cols) * image.elemSize ());
+   std::ostringstream out;
+   out << std::hex << std::setfill ('0') << std::setw (16) << hash;
+   return out.str ();
+}
 
-      return bands;
-   }
+struct SampleLine {
+   cv::Mat      image;
+   std::size_t  source_band = 0;
+   bool         title = false;
+   std::string  prediction;
+   float        confidence = 0.0f;
+};
 
-   // Trim a line band to its horizontal ink extent. Tooltip text is mostly
-   // centered, so a band spanning the full crop carries wide empty margins;
-   // the recognizer clamps width to its 320px input and the actual glyphs
-   // get squashed into misreads ("Frock" → "Froc").
-   cv::Mat trim_cols (const cv::Mat& line)
-   {
-      cv::Mat gray, bright, colsum;
-      cv::cvtColor (line, gray, line.channels () == 4 ? cv::COLOR_BGRA2GRAY : cv::COLOR_BGR2GRAY);
-      cv::threshold (gray, bright, 80, 255, cv::THRESH_BINARY);
-      cv::reduce (bright, colsum, 0, cv::REDUCE_SUM, CV_32S);
+void persist_sample (const std::filesystem::path& inbox,
+                     std::uint64_t generation, LanguageFamily family,
+                     const capture::Rect& rect, const cv::Mat& tooltip,
+                     std::vector<SampleLine> lines, std::string prediction,
+                     float confidence)
+{
+   if (inbox.empty () || tooltip.empty ()) return;
+   cv::Mat owned = tooltip.clone ();
+   const auto stamp = std::chrono::duration_cast<std::chrono::milliseconds> (
+      std::chrono::system_clock::now ().time_since_epoch ()).count ();
+   std::thread { [inbox, generation, family, rect, stamp, tooltip = std::move (owned),
+                  lines = std::move (lines), prediction = std::move (prediction),
+                  confidence] () mutable {
+      try {
+         std::error_code ec;
+         std::filesystem::create_directories (inbox, ec);
+         static std::atomic<std::uint64_t> sequence { 0 };
+         const auto id = std::to_string (stamp) + "-g" + std::to_string (generation)
+            + "-s" + std::to_string (sequence.fetch_add (1));
+         const auto dir = inbox / id;
+         if (!std::filesystem::create_directory (dir, ec)) return;
 
-      int x0 = -1, x1 = -1;
-      for (int x = 0; x < colsum.cols; ++x) {
-         if (colsum.at<int> (x) > 0) {
-            if (x0 < 0) x0 = x;
-            x1 = x;
+         cv::imwrite ((dir / "tooltip.png").string (), tooltip);
+         nlohmann::json line_json = nlohmann::json::array ();
+         for (std::size_t i = 0; i < lines.size (); ++i) {
+            const auto filename = "line-" + (i < 10 ? std::string { "0" } : std::string {})
+               + std::to_string (i) + ".png";
+            cv::imwrite ((dir / filename).string (), lines [i].image);
+            line_json.push_back ({
+               { "index", i }, { "source_band", lines [i].source_band },
+               { "title", lines [i].title }, { "prediction", lines [i].prediction },
+               { "confidence", lines [i].confidence }, { "file", filename },
+               { "width", lines [i].image.cols }, { "height", lines [i].image.rows },
+               { "pixel_hash", pixel_hash (lines [i].image) },
+            });
          }
+         nlohmann::json metadata {
+            { "schema", 1 }, { "id", id }, { "captured_unix_ms", stamp },
+            { "generation", generation }, { "language", std::string { family_dir (family) } },
+            { "prediction", prediction }, { "confidence", confidence },
+            { "verified", false }, { "tooltip_file", "tooltip.png" },
+            { "tooltip_pixel_hash", pixel_hash (tooltip) },
+            { "rect", { { "x", rect.x }, { "y", rect.y },
+                          { "width", rect.w }, { "height", rect.h } } },
+            { "lines", std::move (line_json) },
+         };
+         std::ofstream output { dir / "metadata.json", std::ios::binary };
+         output << metadata.dump (2) << '\n';
+      } catch (const std::exception& e) {
+         core::Logger::warn ("OCR sample persistence failed: {}", e.what ());
       }
-
-      if (x0 < 0) return line;
-      x0 = std::max (0, x0 - 4);
-      x1 = std::min (line.cols, x1 + 5);
-      return line (cv::Range::all (), cv::Range (x0, x1));
-   }
-
-   // Split a trimmed line into chunks the recognizer can read at natural
-   // aspect (≤ ~6:1 for the 48x320 input), cutting at whitespace valleys so
-   // words stay intact. Long rows ("Required Class: Wizard, Cleric, …")
-   // otherwise get compressed past legibility.
-   std::vector<cv::Range> col_chunks (const cv::Mat& line)
-   {
-      const int max_w = line.rows * 6;
-      if (line.cols <= max_w) return { cv::Range (0, line.cols) };
-
-      cv::Mat gray, bright, colsum;
-      cv::cvtColor (line, gray, line.channels () == 4 ? cv::COLOR_BGRA2GRAY : cv::COLOR_BGR2GRAY);
-      cv::threshold (gray, bright, 80, 255, cv::THRESH_BINARY);
-      cv::reduce (bright, colsum, 0, cv::REDUCE_SUM, CV_32S);
-
-      std::vector<cv::Range> chunks;
-      int start = 0, gap_run = 0, last_cut = -1;
-
-      for (int x = 0; x < line.cols; ++x) {
-         if (colsum.at<int> (x) == 0) {
-            if (++gap_run >= 3) last_cut = x - gap_run / 2;
-         } else {
-            gap_run = 0;
-         }
-
-         if (x - start >= max_w) {
-            const int cut = (last_cut > start + line.rows) ? last_cut : x;
-            chunks.emplace_back (start, cut);
-            start    = cut;
-            last_cut = -1;
-         }
-      }
-
-      if (start < line.cols) chunks.emplace_back (start, line.cols);
-      return chunks;
-   }
-
-   float iou (const capture::Rect& a, const capture::Rect& b) noexcept
-   {
-      const int ix1 = std::max (a.x, b.x);
-      const int iy1 = std::max (a.y, b.y);
-      const int ix2 = std::min (a.x + a.w, b.x + b.w);
-      const int iy2 = std::min (a.y + a.h, b.y + b.h);
-
-      const int iw = std::max (0, ix2 - ix1);
-      const int ih = std::max (0, iy2 - iy1);
-
-      const int  inter = iw * ih;
-      const int  ua    = a.w * a.h + b.w * b.h - inter;
-
-      return ua > 0 ? static_cast<float> (inter) / ua : 0.0f;
-   }
+   } }.detach ();
+}
 
 } // namespace
 
@@ -154,6 +146,13 @@ struct Pipeline::Impl
    Config                    config;
 
    std::atomic<bool>         running   { false };
+   std::atomic<bool>         enabled   { true };
+   std::atomic<bool>         automatic { true };
+   std::atomic<bool>         detect_only { false };
+   std::atomic<bool>         anchored { false };
+   std::atomic<bool>         reacquiring { false };
+   std::atomic<bool>         reset_requested { false };
+   std::atomic<std::uint64_t> generation { 0 };
    std::atomic<void*>        window    { nullptr };
    std::atomic<LanguageFamily> language { LanguageFamily::Latin };
 
@@ -165,11 +164,14 @@ struct Pipeline::Impl
    struct VisionOut {
       capture::Frame                     frame;
       std::vector<vision::TooltipBox>    boxes;
+      std::uint64_t                      generation = 0;
    };
    core::SpscQueue<VisionOut>  vision_q  { 4 };
 
    TooltipCallback           callback;
    ActivityCallback          activity;
+   AnchorCallback            anchor_cb;
+   AnchorLostCallback        anchor_lost_cb;
 
    std::atomic<long long>    last_detect_ms { 0 };
 
@@ -183,6 +185,7 @@ struct Pipeline::Impl
    // at the game's render rate and the detector burns a core.
    std::atomic<std::chrono::steady_clock::rep> last_activity {
       std::chrono::steady_clock::now ().time_since_epoch ().count () };
+   std::atomic<std::chrono::steady_clock::rep> burst_until { 0 };
 
    void mark_activity ()
    {
@@ -196,7 +199,16 @@ struct Pipeline::Impl
       const auto last = std::chrono::steady_clock::time_point {
          std::chrono::steady_clock::duration { last_activity.load (std::memory_order_relaxed) } };
       const bool idle = (std::chrono::steady_clock::now () - last) > config.idle_window;
-      const double fps = idle ? config.idle_fps : config.active_fps;
+      // Keep expensive acquisition at active_fps, then raise only the cheap
+      // anchored presence/identity checks to game-like cadence.
+      const bool tracking = anchored.load (std::memory_order_relaxed)
+         || reacquiring.load (std::memory_order_relaxed);
+      const bool bursting = tracking
+         && std::chrono::steady_clock::now ().time_since_epoch ().count ()
+            < burst_until.load (std::memory_order_relaxed);
+      const double fps = std::max (1.0, tracking
+         ? (bursting ? config.anchored_burst_fps : config.anchored_fps)
+         : (idle ? config.idle_fps : config.active_fps));
 
       return std::chrono::duration_cast<std::chrono::milliseconds> (
          std::chrono::duration<double> (1.0 / fps));
@@ -204,22 +216,32 @@ struct Pipeline::Impl
 
    void capture_loop ()
    {
-      const bool can_continuous = capture.current ().supports_continuous ();
-
       void* current_target  = nullptr;
       bool  session_active  = false;
       bool  continuous_ok   = true;   // flips false after a failed (re)start
+      int   continuous_errors = 0;
 
       while (running.load (std::memory_order_relaxed)) {
          void* now_target = window.load ();
+         const bool forced = force_scan.load (std::memory_order_relaxed);
+
+         if (!enabled.load (std::memory_order_relaxed)
+             || (!automatic.load (std::memory_order_relaxed) && !forced)) {
+            if (session_active) {
+               capture.stop_continuous ();
+               session_active = false;
+            }
+            std::this_thread::sleep_for (std::chrono::milliseconds (100));
+            continue;
+         }
 
          // No game window: the pipeline sleeps outright instead of running
          // detection against monitor frames — that's pure CPU burn with
          // nothing to find. A forced scan (F5) still grabs one monitor
          // frame so desktop testing works without the game.
-         if (now_target == nullptr && !force_scan.load (std::memory_order_relaxed)) {
+         if (now_target == nullptr && !forced) {
             if (session_active) {
-               capture.current ().stop_continuous ();
+               capture.stop_continuous ();
                session_active = false;
             }
             std::this_thread::sleep_for (std::chrono::milliseconds (250));
@@ -228,35 +250,53 @@ struct Pipeline::Impl
 
          // (Re)start the continuous session when the target changed or the
          // session was torn down during a no-window pause.
+         const bool target_changed = now_target != current_target;
+         if (target_changed) {
+            continuous_ok = true;
+            continuous_errors = 0;
+         }
+         const bool can_continuous = capture.supports_continuous ();
          if (can_continuous && continuous_ok
-               && (!session_active || now_target != current_target)) {
-            if (session_active) capture.current ().stop_continuous ();
-            current_target = now_target;
-            auto r = capture.current ().start_continuous (
-               current_target, /*is_window=*/ current_target != nullptr);
+               && (!session_active || target_changed)) {
+            if (session_active) capture.stop_continuous ();
+            auto r = capture.start_continuous (
+               now_target, /*is_window=*/ now_target != nullptr);
             session_active = r.has_value ();
             if (!session_active) {
                core::Logger::warn ("pipeline: continuous start failed: {}; falling back to per-call",
                   r.error ().message);
                continuous_ok = false;
+            } else {
+               continuous_errors = 0;
             }
          }
+         current_target = now_target;
 
          core::Result<capture::Frame> frame_res = core::fail (core::Error {
             core::ErrorKind::Capture, "init" });
 
          if (session_active) {
-            frame_res = capture.current ().latest_frame (std::chrono::milliseconds (200));
+            frame_res = capture.latest_frame (std::chrono::milliseconds (200));
+            if (!frame_res.has_value ()) {
+               ++continuous_errors;
+               if (continuous_errors >= 3) {
+                  core::Logger::warn (
+                     "pipeline: continuous capture failed repeatedly; falling back to per-call");
+                  capture.stop_continuous ();
+                  session_active = false;
+                  continuous_ok = false;
+               }
+            } else {
+               continuous_errors = 0;
+            }
          } else {
             frame_res = now_target
-               ? capture.current ().capture_window  (now_target)
-               : capture.current ().capture_monitor (nullptr);
+               ? capture.capture_window  (now_target)
+               : capture.capture_monitor (nullptr);
          }
 
          if (frame_res.has_value () && !frame_res->empty ()) {
-            while (running.load () && !capture_q.try_push (std::move (*frame_res))) {
-               std::this_thread::sleep_for (std::chrono::milliseconds (1));
-            }
+            (void) capture_q.try_push (std::move (*frame_res));
          }
 
          // Pace BOTH paths. The continuous path returns the latest frame as
@@ -266,23 +306,169 @@ struct Pipeline::Impl
       }
 
       if (session_active) {
-         capture.current ().stop_continuous ();
+         capture.stop_continuous ();
       }
    }
 
    void vision_loop ()
    {
-      // Stability gate state — owned exclusively by this loop.
-      std::vector<vision::TooltipBox> last_boxes;
-      int                              stable_count = 0;
+      // Anchoring state machine (docs/architecture/anchoring.md §2):
+      //
+      //    IDLE ──detector hit──> SETTLING ──2 agreeing refines──> ANCHORED
+      //     ^                        │                                │
+      //     └────────hit lost────────┴────presence / identity change──┘
+      //
+      // Owned exclusively by this loop; the UI hears about it via queued
+      // anchor / anchor-lost events.
+      enum class Track { Idle, Settling, Anchored };
+      Track track = Track::Idle;
 
-      // Refractory state: the last box dispatched to OCR and when, plus the
-      // last UI pulse. Release-speed detection revisits the same stable
-      // tooltip several times per second — without these, every frame
-      // re-fires OCR + API lookup and restarts the badge animation.
-      capture::Rect                          last_sent {};
-      std::chrono::steady_clock::time_point  last_sent_at {};
-      std::chrono::steady_clock::time_point  last_pulse {};
+      capture::Rect     prev_box {};        // SETTLING: previous refined box
+      capture::CursorPos prev_cursor {};
+      bool              have_prev = false;
+      int               stable_frames = 0;
+
+      vision::Anchor    anchor;
+      std::uint64_t     anchor_generation = 0;
+      capture::Rect     last_box {};        // ANCHORED: freshest known box
+      capture::Rect     observed_box {};    // vision-only; never drives presentation
+      std::chrono::steady_clock::time_point reacquire_started {};
+
+      struct Metrics {
+         int frames = 0;
+         long long age_us = 0;
+         long long locate_us = 0;
+         int max_hash_bits = 0;
+         int max_detail_pixels = 0;
+      } metrics;
+
+      std::chrono::steady_clock::time_point last_pulse {};
+
+      const auto emit_anchor = [this, &anchor_generation] (const vision::Anchor& a) {
+         if (anchor_cb) {
+            anchor_cb (AnchorEvent {
+               .generation = anchor_generation,
+               .offset_x = a.offset_x, .offset_y = a.offset_y,
+               .locked_x = a.locked_x, .locked_y = a.locked_y,
+               .pinned_x = a.axis_x != vision::AxisPin::Free,
+               .pinned_y = a.axis_y != vision::AxisPin::Free,
+               .pin_x = a.pin_x, .pin_y = a.pin_y,
+               .w = a.w, .h = a.h });
+         }
+      };
+
+      // Reset baseline: cursor at the frame that anchored. A jump past
+      // cursor_reset_px from here means the hover moved off the item, so drop
+      // the anchor and hard-hide (no grace) before the fingerprint drifts.
+      capture::CursorPos anchored_cursor {};
+
+      const auto lose = [&] (const char* why, bool immediate = true) {
+         if (track == Track::Anchored) {
+            core::Logger::debug ("anchoring: {} ({})", immediate ? "reset" : "lost", why);
+            core::log::vision.event ("anchor_lost", {
+               { "reason", why },
+               { "immediate", immediate ? "1" : "0" },
+            });
+            if (anchor_lost_cb) anchor_lost_cb (immediate);
+         }
+         track           = Track::Idle;
+         anchored.store (false, std::memory_order_relaxed);
+         reacquiring.store (false, std::memory_order_relaxed);
+         generation.fetch_add (1, std::memory_order_relaxed);
+         have_prev       = false;
+         stable_frames   = 0;
+         anchored_cursor = {};
+      };
+
+      // Cursor->tooltip offset per axis, locking only when the box is not
+      // pinned against a clamp edge on that axis (§3, estimator).
+      const auto measure = [] (vision::Anchor& a, const capture::Rect& box,
+                               const capture::CursorPos& c, int fw, int fh) {
+         if (!c.valid) return;
+         if (!a.locked_x && box.x > 2 && box.x + box.w < fw - 2) {
+            a.offset_x = box.x - c.x;
+            a.locked_x = true;
+         }
+         if (!a.locked_y && box.y > 2 && box.y + box.h < fh - 2) {
+            a.offset_y = box.y - c.y;
+            a.locked_y = true;
+         }
+      };
+
+      const auto classify_pins = [this] (vision::Anchor& a,
+                                     const capture::Rect& box, int fw, int fh) {
+         const auto x = box.x <= config.pin_near_edge_px
+            ? vision::AxisPin::Low
+            : (fw - (box.x + box.w) <= config.pin_right_edge_px
+               ? vision::AxisPin::High : vision::AxisPin::Free);
+         const auto y = box.y <= config.pin_near_edge_px
+            ? vision::AxisPin::Low
+            : (fh - (box.y + box.h) <= config.pin_near_edge_px
+               ? vision::AxisPin::High : vision::AxisPin::Free);
+         if (x != vision::AxisPin::Free && a.axis_x == vision::AxisPin::Free)
+            a.pin_x = box.x;
+         if (y != vision::AxisPin::Free && a.axis_y == vision::AxisPin::Free)
+            a.pin_y = box.y;
+         a.axis_x = x;
+         a.axis_y = y;
+      };
+
+      const auto nearest_to_cursor = [] (
+         const std::vector<vision::TooltipBox>& boxes,
+         const capture::CursorPos& cursor) -> const vision::TooltipBox* {
+         const auto* pick = &boxes.front ();
+         if (!cursor.valid || boxes.size () == 1) return pick;
+         long best = -1;
+         for (const auto& candidate : boxes) {
+            const long dx = candidate.rect.x + candidate.rect.w / 2 - cursor.x;
+            const long dy = candidate.rect.y + candidate.rect.h / 2 - cursor.y;
+            const long distance = dx * dx + dy * dy;
+            if (best < 0 || distance < best) {
+               best = distance;
+               pick = &candidate;
+            }
+         }
+         return pick;
+      };
+
+      const std::filesystem::path diagnostic_dir = [] {
+         return std::filesystem::path {
+            core::environment::get ("GRIMVAULT_ANCHOR_DIAGNOSTICS")
+         };
+      } ();
+      const auto dump_diagnostic = [&diagnostic_dir] (
+         std::string event, const cv::Mat& image) {
+         if (diagnostic_dir.empty () || image.empty ()) return;
+         cv::Mat owned = image.clone ();
+         const auto stamp = std::chrono::duration_cast<std::chrono::milliseconds> (
+            std::chrono::system_clock::now ().time_since_epoch ()).count ();
+         std::thread { [dir = diagnostic_dir, event = std::move (event),
+                        stamp, image = std::move (owned)] () mutable {
+            try {
+               std::error_code ec;
+               std::filesystem::create_directories (dir, ec);
+               cv::imwrite ((dir / (std::to_string (stamp) + "_" + event + ".png")).string (),
+                            image);
+
+               std::vector<std::filesystem::directory_entry> files;
+               for (std::filesystem::directory_iterator it { dir, ec }, end;
+                    !ec && it != end; it.increment (ec)) {
+                  if (it->is_regular_file () && it->path ().extension () == ".png")
+                     files.push_back (*it);
+               }
+               constexpr std::size_t keep = 40;
+               if (files.size () > keep) {
+                  std::sort (files.begin (), files.end (), [] (const auto& a, const auto& b) {
+                     return a.last_write_time () < b.last_write_time ();
+                  });
+                  for (std::size_t i = 0; i < files.size () - keep; ++i)
+                     std::filesystem::remove (files [i].path (), ec);
+               }
+            } catch (...) {
+               // Diagnostics must never affect tracking or process lifetime.
+            }
+         } }.detach ();
+      };
 
       while (running.load (std::memory_order_relaxed)) {
          auto* head = capture_q.front ();
@@ -294,79 +480,291 @@ struct Pipeline::Impl
          capture::Frame frame = std::move (*head);
          capture_q.pop ();
 
+         // Capture strategies retain the cursor in desktop coordinates so a
+         // frame is self-describing across monitors. Vision and anchoring are
+         // frame-relative, so normalize exactly once at the stage boundary.
+         frame.cursor = frame.local_cursor ();
+
+         if (reset_requested.exchange (false, std::memory_order_relaxed)) {
+            lose ("runtime policy changed");
+            if (!enabled.load (std::memory_order_relaxed)) continue;
+         }
+
          // Consume the force flag up front — leaving it latched on a fruitless
          // scan would hold the capture loop out of its no-window sleep.
          const bool forced = force_scan.exchange (false);
 
-         const auto t0 = std::chrono::steady_clock::now ();
-         auto boxes_res = detector.detect (frame);
-         last_detect_ms.store (std::chrono::duration_cast<std::chrono::milliseconds> (
-            std::chrono::steady_clock::now () - t0).count ());
+         cv::Mat bgra { frame.height, frame.width, CV_8UC4,
+                        frame.data.get (),
+                        static_cast<std::size_t> (frame.stride) };
 
-         if (!boxes_res.has_value () || boxes_res->empty ()) {
-            stable_count = 0;
-            last_boxes.clear ();
-            continue;
-         }
+         const auto build_anchor = [&] (const capture::Rect& box) {
+            vision::Anchor fresh;
+            fresh.w = box.w;
+            fresh.h = box.h;
+            fresh.fingerprint = vision::TooltipTracker::fingerprint (
+               bgra, box, fresh.fp_dx, fresh.fp_dy);
+            fresh.content_hash = vision::TooltipTracker::content_hash (bgra, box);
+            fresh.detail_thumbnail = vision::TooltipTracker::detail_thumbnail (bgra, box);
+            measure (fresh, box, frame.cursor, frame.width, frame.height);
+            classify_pins (fresh, box, frame.width, frame.height);
+            return fresh;
+         };
 
-         mark_activity ();
+         bool dispatch = false;   // OCR this frame's last_box at loop tail
 
-         const auto now = std::chrono::steady_clock::now ();
+         if (track == Track::Anchored) {
+            mark_activity ();
 
-         if (activity && now - last_pulse >= std::chrono::milliseconds (700)) {
-            last_pulse = now;
-            activity ();
-         }
+            const auto process_now = std::chrono::steady_clock::now ();
+            const auto age_us = std::chrono::duration_cast<std::chrono::microseconds> (
+               process_now - frame.timestamp).count ();
+            ++metrics.frames;
+            metrics.age_us += std::max<long long> (0, age_us);
 
-         // Stability: only forward to OCR if the same box persists.
-         bool stable = false;
-         if (!last_boxes.empty ()) {
-            for (const auto& nb : *boxes_res) {
-               for (const auto& ob : last_boxes) {
-                  if (iou (nb.rect, ob.rect) >= config.stability_iou) {
-                     stable = true;
-                     break;
-                  }
+            // Substantial cursor travel since the last frame (a flick, not
+            // slow drift within a large item) = the hover is leaving; reset
+            // immediately and re-acquire fresh. Baseline slides per frame.
+            if (frame.cursor.valid && anchored_cursor.valid) {
+               const long dx = frame.cursor.x - anchored_cursor.x;
+               const long dy = frame.cursor.y - anchored_cursor.y;
+               if (dx != 0 || dy != 0) {
+                  burst_until.store (
+                     (std::chrono::steady_clock::now () + config.anchored_burst)
+                        .time_since_epoch ().count (),
+                     std::memory_order_relaxed);
                }
-               if (stable) break;
+               if (dx * dx + dy * dy
+                   > static_cast<long> (config.cursor_reset_px) * config.cursor_reset_px) {
+                  lose ("cursor jump", /*immediate=*/ true);
+                  continue;
+               }
             }
-         }
+            if (frame.cursor.valid) anchored_cursor = frame.cursor;
 
-         if (stable) {
-            ++stable_count;
+            if ((!anchor.locked_x && anchor.axis_x == vision::AxisPin::Free)
+                || (!anchor.locked_y && anchor.axis_y == vision::AxisPin::Free)) {
+               // Acquired while pinned: keep refining around the last box
+               // until the cursor moves inward and the offset can lock.
+               auto refined = vision::TooltipTracker::refine (bgra, last_box);
+               if (!refined.has_value ()) {
+                  lose ("refine failed while unlocked");
+                  continue;
+               }
+               last_box = *refined;
+               classify_pins (anchor, last_box, frame.width, frame.height);
+               measure (anchor, last_box, frame.cursor, frame.width, frame.height);
+               emit_anchor (anchor);
+            } else {
+               const int max_x = std::max (0, frame.width  - anchor.w);
+               const int max_y = std::max (0, frame.height - anchor.h);
+               const bool pinned_x = anchor.axis_x != vision::AxisPin::Free;
+               const bool pinned_y = anchor.axis_y != vision::AxisPin::Free;
+               const int px = pinned_x ? anchor.pin_x : frame.cursor.valid
+                  ? std::clamp (frame.cursor.x + anchor.offset_x, 0, max_x) : last_box.x;
+               const int py = pinned_y ? anchor.pin_y : frame.cursor.valid
+                  ? std::clamp (frame.cursor.y + anchor.offset_y, 0, max_y) : last_box.y;
+
+               {
+                  // Observe the actual frame within a small translation
+                  // radius solely to sample identity. Presentation continues
+                  // to use px/py from cursor math (or the fixed pin).
+                  const int vision_x = pinned_x ? observed_box.x : px;
+                  const int vision_y = pinned_y ? observed_box.y : py;
+                  const auto locate_started = std::chrono::steady_clock::now ();
+                  const auto observed = vision::TooltipTracker::locate (
+                     bgra, anchor, vision_x, vision_y,
+                     pinned_x ? config.search_pinned_px : config.search_free_px,
+                     pinned_y ? config.search_pinned_px : config.search_free_px);
+                  metrics.locate_us += std::chrono::duration_cast<std::chrono::microseconds> (
+                     std::chrono::steady_clock::now () - locate_started).count ();
+                  const int hash_bits = observed.has_value ()
+                     ? std::popcount (vision::TooltipTracker::content_hash (bgra, *observed)
+                        ^ anchor.content_hash)
+                     : 64;
+                  int detail_pixels = 1024;
+                  if (observed.has_value () && !anchor.detail_thumbnail.empty ()) {
+                     const auto detail = vision::TooltipTracker::detail_thumbnail (
+                        bgra, *observed);
+                     if (!detail.empty ()) {
+                        cv::Mat delta, changed;
+                        cv::absdiff (detail, anchor.detail_thumbnail, delta);
+                        cv::threshold (delta, changed, 8, 255, cv::THRESH_BINARY);
+                        detail_pixels = cv::countNonZero (changed);
+                     }
+                  }
+                  metrics.max_hash_bits = std::max (metrics.max_hash_bits, hash_bits);
+                  metrics.max_detail_pixels = std::max (
+                     metrics.max_detail_pixels, detail_pixels);
+                  const bool region_changed = hash_bits >= config.identity_bits
+                     || detail_pixels >= config.identity_detail_px;
+                  if (region_changed) {
+                     core::log::vision.event ("replacement_candidate", {
+                        { "hash_bits", std::to_string (hash_bits) },
+                        { "detail_px", std::to_string (detail_pixels) },
+                        { "located", observed.has_value () ? "1" : "0" },
+                        { "frame_age_us", std::to_string (std::max<long long> (0, age_us)) },
+                     });
+                     dump_diagnostic ("replacement_candidate", bgra);
+                     core::Logger::debug (
+                        "anchoring: replacement candidate; entering settle gate");
+                     if (anchor_lost_cb) anchor_lost_cb (true);
+                     track = Track::Settling;
+                     anchored.store (false, std::memory_order_relaxed);
+                     reacquiring.store (true, std::memory_order_relaxed);
+                     generation.fetch_add (1, std::memory_order_relaxed);
+                     reacquire_started = std::chrono::steady_clock::now ();
+                     burst_until.store (
+                        (std::chrono::steady_clock::now () + config.anchored_burst)
+                           .time_since_epoch ().count (),
+                        std::memory_order_relaxed);
+                     have_prev = false;
+                     stable_frames = 0;
+                     anchored_cursor = {};
+                     continue;
+                  }
+                  observed_box = *observed;
+               }
+
+               last_box = { px, py, anchor.w, anchor.h };
+            }
+
+            if (metrics.frames >= 120) {
+               core::log::vision.event ("anchor_metrics", {
+                  { "frames", std::to_string (metrics.frames) },
+                  { "avg_frame_age_us", std::to_string (metrics.age_us / metrics.frames) },
+                  { "avg_locate_us", std::to_string (metrics.locate_us / metrics.frames) },
+                  { "max_hash_bits", std::to_string (metrics.max_hash_bits) },
+                  { "max_detail_px", std::to_string (metrics.max_detail_pixels) },
+               });
+               metrics = {};
+            }
+
+            if (forced) dispatch = true;
          } else {
-            stable_count = 1;
+            const auto t0 = std::chrono::steady_clock::now ();
+            auto boxes_res = detector.detect (frame);
+            last_detect_ms.store (std::chrono::duration_cast<std::chrono::milliseconds> (
+               std::chrono::steady_clock::now () - t0).count ());
+
+            if (!boxes_res.has_value () || boxes_res->empty ()) {
+               if (reacquiring.load (std::memory_order_relaxed)) {
+                  core::log::vision.event ("replacement_rejected", {
+                     { "reason", "no_detection" },
+                     { "elapsed_ms", std::to_string (
+                        std::chrono::duration_cast<std::chrono::milliseconds> (
+                           std::chrono::steady_clock::now () - reacquire_started).count ()) },
+                  });
+               }
+               track     = Track::Idle;
+               reacquiring.store (false, std::memory_order_relaxed);
+               have_prev = false;
+               stable_frames = 0;
+               continue;
+            }
+
+            mark_activity ();
+
+            const auto now = std::chrono::steady_clock::now ();
+            if (activity && now - last_pulse >= std::chrono::milliseconds (700)) {
+               last_pulse = now;
+               activity ();
+            }
+
+            // Multiple hits (item-compare side tooltips): anchor the box
+            // nearest the cursor.
+            const auto& c = frame.cursor;
+            const auto* pick = nearest_to_cursor (*boxes_res, c);
+
+            auto refined = vision::TooltipTracker::refine (bgra, pick->rect);
+            if (!refined.has_value ()) {
+               // Mid fade-in or a ghost: stay/enter SETTLING and try the
+               // next frame.
+               track     = Track::Settling;
+               have_prev = false;
+               stable_frames = 0;
+               continue;
+            }
+
+            const capture::Rect relative {
+               refined->x - (c.valid ? c.x : 0),
+               refined->y - (c.valid ? c.y : 0),
+               refined->w,
+               refined->h,
+            };
+            const capture::Rect previous_relative {
+               prev_box.x - (prev_cursor.valid ? prev_cursor.x : 0),
+               prev_box.y - (prev_cursor.valid ? prev_cursor.y : 0),
+               prev_box.w,
+               prev_box.h,
+            };
+            const bool agrees = have_prev
+               && capture::intersection_over_union (relative, previous_relative)
+                  >= std::clamp (config.stability_iou, 0.0f, 1.0f);
+            stable_frames = agrees ? stable_frames + 1 : 1;
+            const bool settled = forced
+               || stable_frames >= std::max (1, config.stability_frames);
+
+            if (!settled) {
+               track       = Track::Settling;
+               prev_box    = *refined;
+               prev_cursor = c;
+               have_prev   = true;
+               continue;
+            }
+
+            anchor = build_anchor (*refined);
+            anchor_generation = generation.fetch_add (1, std::memory_order_relaxed) + 1;
+
+            last_box        = *refined;
+            observed_box    = *refined;
+            track           = Track::Anchored;
+            const bool was_reacquiring = reacquiring.load (std::memory_order_relaxed);
+            const auto reacquire_ms = was_reacquiring
+               ? std::chrono::duration_cast<std::chrono::milliseconds> (
+                    std::chrono::steady_clock::now () - reacquire_started).count ()
+               : 0;
+            anchored.store (true, std::memory_order_relaxed);
+            reacquiring.store (false, std::memory_order_relaxed);
+            metrics = {};
+            have_prev       = false;
+            stable_frames   = 0;
+            anchored_cursor = c;
+            core::Logger::debug (
+               "anchoring: anchored {},{} {}x{} offset {},{} locked {}/{}",
+               refined->x, refined->y, refined->w, refined->h,
+               anchor.offset_x, anchor.offset_y, anchor.locked_x, anchor.locked_y);
+            core::log::vision.event ("anchor_acquired", {
+               { "x", std::to_string (refined->x) },
+               { "y", std::to_string (refined->y) },
+               { "w", std::to_string (refined->w) },
+               { "h", std::to_string (refined->h) },
+               { "pin_x", anchor.axis_x == vision::AxisPin::Free ? "free"
+                  : (anchor.axis_x == vision::AxisPin::Low ? "low" : "high") },
+               { "pin_y", anchor.axis_y == vision::AxisPin::Free ? "free"
+                  : (anchor.axis_y == vision::AxisPin::Low ? "low" : "high") },
+               { "reacquire_ms", std::to_string (reacquire_ms) },
+            });
+            if (was_reacquiring) dump_diagnostic ("replacement_settled", bgra);
+
+            emit_anchor (anchor);
+            dispatch = true;
          }
 
-         last_boxes = *boxes_res;
+         if (!dispatch || detect_only.load (std::memory_order_relaxed)) continue;
 
-         if (!forced && stable_count < config.stability_frames) continue;
-
-         // Refractory: a stable box that hasn't moved was already OCR'd and
-         // looked up — re-dispatching identical work every frame spams the
-         // API. Re-send only when the box moves or the result ages out.
-         const bool unchanged =
-            iou (boxes_res->front ().rect, last_sent) >= config.stability_iou
-            && now - last_sent_at < std::chrono::milliseconds (1500);
-
-         if (!forced && unchanged) continue;
-
-         last_sent    = boxes_res->front ().rect;
-         last_sent_at = now;
-
-         // Construct ONCE outside the retry loop. Building the VisionOut as
-         // the try_push argument re-moved `frame` on every retry, so a full
-         // queue pushed a hollowed-out frame whose null data blew an OpenCV
-         // assert (and abort) in the OCR thread's cv::Mat constructor.
-         VisionOut out { std::move (frame), *boxes_res };
-         while (running.load () && !vision_q.try_push (std::move (out))) {
-            std::this_thread::sleep_for (std::chrono::milliseconds (1));
-         }
+         // OCR fires once per anchor (plus manual re-scans), on the settled
+         // refined box — the crop is exact, not the detector's coarse guess.
+         VisionOut out { std::move (frame),
+                         { vision::TooltipBox { .rect = last_box } },
+                         anchor_generation };
+         (void) vision_q.try_push (std::move (out));
       }
    }
 
    void ocr_loop ()
    {
+      std::uint64_t last_completed_generation = 0;
       while (running.load (std::memory_order_relaxed)) {
          auto* head = vision_q.front ();
          if (!head) {
@@ -376,6 +774,9 @@ struct Pipeline::Impl
 
          VisionOut item = std::move (*head);
          vision_q.pop ();
+
+         if (item.generation != generation.load (std::memory_order_relaxed)
+             || item.generation == last_completed_generation) continue;
 
          if (!item.frame.data || item.frame.empty ()) {
             core::Logger::warn ("pipeline: dropping frame with no pixel data");
@@ -407,66 +808,205 @@ struct Pipeline::Impl
             }
 
             const auto t0    = std::chrono::steady_clock::now ();
-            const auto bands = line_bands (crop);
+            const auto bands = preprocess::line_bands (crop);
+            const auto segmented_at = std::chrono::steady_clock::now ();
 
             // GRIMVAULT_OCR_DEBUG=1 → dump crop + bands to %TEMP%\grimvault-ocr
             // for offline segmentation tuning.
             static const bool dump_bands = [] {
-               const char* e = std::getenv ("GRIMVAULT_OCR_DEBUG");
-               return e && *e && std::string_view { e } != "0";
+               const auto value = core::environment::get ("GRIMVAULT_OCR_DEBUG");
+               return !value.empty () && value != "0";
             } ();
 
+            int dump_index = -1;
+            std::filesystem::path dump_dir;
             if (dump_bands) {
                static std::atomic<int> seq { 0 };
-               const int  i   = seq++;
-               const auto dir = std::filesystem::temp_directory_path () / "grimvault-ocr";
+               dump_index = seq++;
+               dump_dir = std::filesystem::temp_directory_path () / "grimvault-ocr";
                std::error_code ec;
-               std::filesystem::create_directories (dir, ec);
-               cv::imwrite ((dir / (std::to_string (i) + "_crop.png")).string (), crop);
+               std::filesystem::create_directories (dump_dir, ec);
+               cv::imwrite ((dump_dir / (std::to_string (dump_index) + "_crop.png")).string (), crop);
                int b = 0;
                for (const auto& band : bands) {
-                  cv::imwrite ((dir / (std::to_string (i) + "_band" + std::to_string (b++) + ".png")).string (),
-                     trim_cols (crop (band, cv::Range::all ())));
+                  cv::imwrite ((dump_dir / (std::to_string (dump_index) + "_band" + std::to_string (b++) + ".png")).string (),
+                     preprocess::trim_cols (crop (band, cv::Range::all ())));
                }
             }
 
             std::string text;
+            std::unordered_map<std::string, std::string> gems;
             float       conf_sum = 0.0f;
             int         conf_n   = 0;
+            bool        preliminary_sent = false;
+            std::vector<SampleLine> sample_lines;
 
+            std::size_t band_index = 0;
+            std::size_t source_band_index = 0;
             for (const auto& band : bands) {
-               const cv::Mat line = trim_cols (crop (band, cv::Range::all ()));
-
-               std::string line_text;
-               for (const auto& chunk : col_chunks (line)) {
-                  auto res = (*rec)->read (line (cv::Range::all (), chunk));
-                  if (!res.has_value () || res->text.empty ()) continue;
-
-                  if (!line_text.empty ()) line_text.push_back (' ');
-                  line_text += res->text;
-                  conf_sum  += res->confidence;
-                  ++conf_n;
+               const auto source_index = source_band_index++;
+               if (item.generation != generation.load (std::memory_order_relaxed)) break;
+               // Rule classification must see the original tooltip-wide
+               // band. Once tightly column-trimmed, an ordinary title can
+               // occupy >50% of its row and masquerade as a separator.
+               cv::Mat raw_line = crop (band, cv::Range::all ());
+               const bool is_rule = preprocess::is_horizontal_rule (raw_line);
+               // Artifact tooltips can expose the decorated panel's top edge
+               // as a tiny standalone band before the actual title. In
+               // contrast, a title merged with its lower separator is tall.
+               // Skip only the thin standalone form without consuming the
+               // title slot.
+               if (band_index == 0 && is_rule && raw_line.rows <= 20) continue;
+               const bool is_title = band_index == 0;
+               // The title and its lower ornament can be merged into one
+               // geometric band. Never reject the first band as a rule
+               // before removing that ornament, or the first stat is
+               // promoted to the title. Later bands are safe to classify at
+               // tooltip width, before column trimming.
+               if (!is_title && is_rule) continue;
+               // A failed title recognition must not cause the first stat to
+               // become the title on the next iteration. Band identity is
+               // geometric, not conditional on OCR success.
+               ++band_index;
+               if (is_title) raw_line = preprocess::trim_title_rule (raw_line);
+               cv::Mat line = preprocess::trim_cols (raw_line);
+               if (dump_index >= 0) {
+                  cv::imwrite ((dump_dir / (std::to_string (dump_index) + "_input"
+                     + std::to_string (source_index) + ".png")).string (), line);
                }
 
+               std::string line_text;
+               float line_confidence = 0.0f;
+               int line_confidence_n = 0;
+               const std::vector<cv::Range> whole_line {
+                  cv::Range { 0, line.cols }
+               };
+               if (language.load () == LanguageFamily::English && is_title) {
+                  // The font-trained model learns spaces and punctuation as
+                  // CTC classes. Feed the complete title once; geometric word
+                  // splitting created false boundaries inside serif names.
+                  auto full = (*rec)->read (line, /*title=*/ true);
+                  if (full.has_value ()) {
+                     line_text = full->text;
+                     line_confidence = full->confidence;
+                     line_confidence_n = 1;
+                     conf_sum += full->confidence;
+                     ++conf_n;
+                  }
+               } else {
+                  const auto chunks = language.load () == LanguageFamily::English
+                     ? whole_line : preprocess::col_chunks (line);
+                  for (const auto& chunk : chunks) {
+                     if (item.generation != generation.load (std::memory_order_relaxed)) break;
+                     auto res = (*rec)->read (line (cv::Range::all (), chunk));
+                     if (!res.has_value () || res->text.empty ()) continue;
+
+                     if (!line_text.empty ()) line_text.push_back (' ');
+                     line_text += res->text;
+                     conf_sum  += res->confidence;
+                     ++conf_n;
+                     line_confidence += res->confidence;
+                     ++line_confidence_n;
+                  }
+               }
+
+               if (line_confidence_n > 1) line_confidence /= line_confidence_n;
+               if (language.load () == LanguageFamily::Latin)
+                  canonicalize_latin (line_text);
+               if (!config.sample_inbox.empty ()) {
+                  sample_lines.push_back (SampleLine {
+                     .image = line.clone (), .source_band = source_index,
+                     .title = is_title, .prediction = line_text,
+                     .confidence = line_confidence,
+                  });
+               }
                if (line_text.empty ()) continue;
+               if (!is_title && std::any_of (
+                     line_text.begin (), line_text.end (), [] (char ch) {
+                        return std::isdigit (static_cast<unsigned char> (ch)) != 0;
+                     })) {
+                  if (auto family = vision::detect_gem_family (raw_line); family.has_value ()) {
+                     gems [line_text] = *family;
+                  }
+               }
                if (!text.empty ()) text.push_back ('\n');
                text += line_text;
+
+               if (!preliminary_sent && is_title
+                   && language.load () == LanguageFamily::English
+                   && line_text.size () >= 2 && line_confidence >= 0.65f
+                   && item.generation == generation.load (std::memory_order_relaxed)
+                   && callback) {
+                  preliminary_sent = true;
+                  core::log::ocr.event ("title_ready", {
+                     { "generation", std::to_string (item.generation) },
+                     { "confidence", fmt::format ("{:.3f}", line_confidence) },
+                     { "text", line_text },
+                  });
+                  try {
+                     callback (RecognizedTooltip {
+                        .generation  = item.generation,
+                        .rect        = box.rect,
+                        .text        = line_text,
+                        .confidence  = line_confidence,
+                        .backend     = item.frame.backend,
+                        .preliminary = true,
+                        .captured_at = item.frame.timestamp,
+                     });
+                  } catch (const std::exception& e) {
+                     core::Logger::error ("pipeline: preliminary callback threw: {}", e.what ());
+                  }
+               }
             }
 
             const auto ms = std::chrono::duration_cast<std::chrono::milliseconds> (
                std::chrono::steady_clock::now () - t0).count ();
+            const auto segment_us = std::chrono::duration_cast<std::chrono::microseconds> (
+               segmented_at - t0).count ();
 
             core::Logger::info ("pipeline: timings detect={}ms ocr={}ms lines={}/{}",
                last_detect_ms.load (), ms, conf_n, bands.size ());
+            core::log::ocr.event ("recognition", {
+               { "generation", std::to_string (item.generation) },
+               { "family", std::string { family_dir (language.load ()) } },
+               { "segment_us", std::to_string (segment_us) },
+               { "total_ms", std::to_string (ms) },
+               { "lines", std::to_string (conf_n) },
+               { "bands", std::to_string (bands.size ()) },
+               { "confidence", fmt::format ("{:.3f}",
+                  conf_n ? conf_sum / conf_n : 0.0f) },
+            });
 
+            if (item.generation != generation.load (std::memory_order_relaxed)) continue;
+            if (!config.sample_inbox.empty ()) {
+               persist_sample (config.sample_inbox, item.generation, language.load (),
+                  box.rect, crop, std::move (sample_lines), text,
+                  conf_n ? conf_sum / conf_n : 0.0f);
+            }
             if (text.empty ()) continue;
+            last_completed_generation = item.generation;
+
+            std::string printable = text;
+            std::size_t newline = 0;
+            while ((newline = printable.find ('\n', newline)) != std::string::npos) {
+               printable.replace (newline, 1, "\\n");
+               newline += 2;
+            }
+            core::Logger::info (
+               "OCR result generation={} family={} confidence={:.3f} text=\"{}\"",
+               item.generation, family_dir (language.load ()),
+               conf_n ? conf_sum / conf_n : 0.0f, printable);
 
             if (callback) {
                try {
                   callback (RecognizedTooltip {
+                     .generation  = item.generation,
                      .rect        = box.rect,
                      .text        = std::move (text),
+                     .gems        = std::move (gems),
                      .confidence  = conf_n ? conf_sum / conf_n : 0.0f,
+                     .backend     = item.frame.backend,
+                     .preliminary = false,
                      .captured_at = item.frame.timestamp,
                   });
                } catch (const std::exception& e) {
@@ -491,11 +1031,39 @@ Pipeline::Pipeline (
 Pipeline::~Pipeline () { stop (); }
 
 void Pipeline::on_activity (ActivityCallback cb) { impl_->activity = std::move (cb); }
+void Pipeline::on_anchor (AnchorCallback cb) { impl_->anchor_cb = std::move (cb); }
+void Pipeline::on_anchor_lost (AnchorLostCallback cb) { impl_->anchor_lost_cb = std::move (cb); }
 
-void Pipeline::set_active_window (void* hwnd) { impl_->window.store (hwnd); }
+void Pipeline::set_active_window (void* hwnd)
+{
+   if (impl_->window.exchange (hwnd) != hwnd) {
+      impl_->reset_requested.store (true, std::memory_order_relaxed);
+   }
+}
+void Pipeline::set_enabled (bool on)
+{
+   if (impl_->enabled.exchange (on) == on) return;
+   impl_->force_scan.store (false, std::memory_order_relaxed);
+   impl_->generation.fetch_add (1, std::memory_order_relaxed);
+   impl_->reset_requested.store (true, std::memory_order_relaxed);
+}
+void Pipeline::set_automatic (bool on)
+{
+   if (impl_->automatic.exchange (on) == on) return;
+   impl_->force_scan.store (false, std::memory_order_relaxed);
+   impl_->generation.fetch_add (1, std::memory_order_relaxed);
+   impl_->reset_requested.store (true, std::memory_order_relaxed);
+}
 void Pipeline::set_language (LanguageFamily f) { impl_->language.store (f); }
+
+bool Pipeline::is_current (std::uint64_t value) const noexcept
+{
+   return impl_->generation.load (std::memory_order_relaxed) == value;
+}
+void Pipeline::set_detect_only (bool on) { impl_->detect_only.store (on); }
 void Pipeline::request_immediate_scan ()
 {
+   if (!impl_->enabled.load (std::memory_order_relaxed)) return;
    // Wake from idle pacing too, or a forced scan waits up to 1/idle_fps.
    impl_->mark_activity ();
    impl_->force_scan.store (true);
@@ -508,11 +1076,28 @@ core::Result<void> Pipeline::start (TooltipCallback on_tooltip)
    }
 
    impl_->callback       = std::move (on_tooltip);
+
+   const auto warm_started = std::chrono::steady_clock::now ();
+   const auto warm_family = impl_->language.load (std::memory_order_relaxed);
+   auto warm = impl_->registry.acquire (warm_family);
+   const auto warm_ms = std::chrono::duration_cast<std::chrono::milliseconds> (
+      std::chrono::steady_clock::now () - warm_started).count ();
+   core::log::ocr.event ("model_prewarm", {
+      { "family", std::string { family_dir (warm_family) } },
+      { "elapsed_ms", std::to_string (warm_ms) },
+      { "ok", warm.has_value () ? "1" : "0" },
+   });
+   if (!warm.has_value ()) {
+      core::Logger::warn ("pipeline: OCR prewarm failed: {}", warm.error ().message);
+   }
    impl_->capture_thread = std::thread { [this] { impl_->capture_loop (); } };
    impl_->vision_thread  = std::thread { [this] { impl_->vision_loop ();  } };
    impl_->ocr_thread     = std::thread { [this] { impl_->ocr_loop ();     } };
 
-   core::Logger::info ("pipeline: started (active_fps={:.1f})", impl_->config.active_fps);
+   core::Logger::info (
+      "pipeline: started (active_fps={:.1f}, anchored_fps={:.1f}, burst_fps={:.1f})",
+      impl_->config.active_fps, impl_->config.anchored_fps,
+      impl_->config.anchored_burst_fps);
    return {};
 }
 
@@ -520,6 +1105,7 @@ void Pipeline::stop () noexcept
 {
    if (!impl_) return;
    if (!impl_->running.exchange (false)) return;
+   impl_->anchored.store (false, std::memory_order_relaxed);
 
    if (impl_->capture_thread.joinable ()) impl_->capture_thread.join ();
    if (impl_->vision_thread.joinable  ()) impl_->vision_thread.join  ();

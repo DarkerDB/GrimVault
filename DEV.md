@@ -1,9 +1,31 @@
 # Running GrimVault locally (dev mode)
 
-One-shot from a **Developer PowerShell for VS 2022**:
+Source of truth lives in WSL at `~/.katforge/realms/grimvault`. Windows
+tooling reaches it through a **drive mapping** (one-time setup):
+
+```
+net use W: \\wsl.localhost\Ubuntu /persistent:yes
+```
+
+The raw `\\wsl.localhost` UNC path is not enough — Qt's build tooling
+(cmd-wrapped qmlimportscanner) needs a drive-lettered source directory.
+The **build tree stays on a local Windows drive** at
+`%LOCALAPPDATA%\GrimVault\build\<preset>`: MSVC and Qt tooling spawn
+cmd.exe (no UNC/network cwd for link steps), and object/PDB writes over
+the 9P bridge are slow. CI is unaffected (its checkout is on a drive;
+presets keep the default in-tree `build/` layout).
+
+One-shot from any Windows PowerShell:
 
 ```powershell
-pwsh tools/dev-run.ps1
+pwsh W:\home\ethan\.katforge\realms\grimvault\tools\run-dev.ps1
+```
+
+or from a WSL shell:
+
+```bash
+cmd.exe /c "W:\\home\\ethan\\.katforge\\realms\\grimvault\\tools\\build\\wsl-build.bat"   # configure + build
+cmd.exe /c "W:\\home\\ethan\\.katforge\\realms\\grimvault\\tools\\build\\wsl-test.bat"    # + unit tests
 ```
 
 That's it. The script configures with `windows-msvc-debug`, builds, installs
@@ -15,7 +37,8 @@ GRIMVAULT_DEV_RESOURCES = <repo root>   # models/, i18n/, assets/ resolve from s
 GRIMVAULT_DISABLE_UPDATES = 1           # WinSparkle never inits, no network calls
 ```
 
-Per-user data (SQLite DB, logs) still goes to `%APPDATA%\GrimVault\`.
+Production data stays in `%LOCALAPPDATA%\GrimVault\`. Dev and QA use
+`%LOCALAPPDATA%\GrimVault\<env>\` so clients cannot share state.
 
 ## Prereqs (first time only)
 
@@ -39,21 +62,49 @@ configures are cached.
 - Tray icon appears. If you're not already signed in, a tray toast says
   "Opening your browser to sign in…" and your browser pops up on
   https://dev.darkerdb.com/oauth/authorize. After you grant consent the
-  callback fires, tokens land in Windows Credential Manager, and a
-  "Signed in" toast confirms.
-- Settings sync starts: every 60s GrimVault polls /v2/grimvault/settings
-  and mirrors the response into the local UserSettingsRepo. Any change
-  is logged ("settings updated: key = value").
+  callback fires and tokens land in Windows Credential Manager.
+- Settings sync starts: GrimVault polls /v2/grimvault/settings (every 5s
+  on dev, 30s elsewhere), mirrors the response into the local
+  UserSettingsRepo, and applies each changed key live — no restart. Each
+  one logs "settings applied: key = value".
+- The tray header reports the whole onboarding state: **Signed out**,
+  **Syncing settings**, **Ready**, or **Using local defaults; retrying**.
+  First launch is ready only after settings arrive. A network failure keeps
+  safe defaults active and retries. An expired or revoked token signs out and
+  starts OAuth again unless `--no-auto-login` was supplied.
 - Main window opens (if you click the tray). Six pages in the left rail.
 - Dashboard / Items / Pricing / Settings / Diagnostics / Logs.
 - Ctrl+Shift+P opens the command palette.
 - Pricing lookups hit https://api.darkerdb.com (network needed).
-- Capture probe picks WGC/DXGI/GDI depending on Windows build; logged on Diagnostics.
+- Capture probes WGC/DXGI/GDI at startup, then advances through the same ladder after three consecutive runtime failures.
 - WGC will fail if no foreground game window — that's expected without
   Dark and Darker running. The pipeline reports the failure and stays idle.
-- Tray icon (SSL.com 'K' for now until we get a proper icon) — single-click
-  toggles the window.
+- The GrimVault tray icon single-click toggles the window.
 ```
+
+### Settings, live
+
+Everything on https://dev.darkerdb.com/dashboard/grimvault applies to the
+running app within one poll. Move a slider, watch the next hover.
+
+```
+overlay mode           automatic / manual / disabled
+overlay alignment      attached, or a fixed game-window corner
+overlay opacity        multiplied into the card's fade-in; repaints at once
+overlay scale          on top of the monitor's DPI scale
+overlay offset x/y     corner alignments only (attached is fixed by the anchor)
+augment sections       the tooltip:analysis:* widget toggles
+currency display       absolute / compact
+launch on startup      rewrites the HKCU\...\Run entry
+auto-update            starts / stops the checker (GRIMVAULT_DISABLE_UPDATES wins)
+hotkeys                toggle_overlay + force_refresh rebind live
+```
+
+Two of the five hotkey actions are dashboard-bindable — `force_refresh`
+drives `scan_now` and `toggle_overlay` shows/hides the card. `toggle_mode`
+(F6), `debug_toggle` (F7) and `clear_overlay` (F8) keep their local
+defaults. A widget the plan doesn't grant is forced off in the payload
+regardless of the toggle, because the API already stripped its data.
 
 Pass `--no-auto-login` to skip the on-launch OAuth prompt (the tray's
 "Sign In" menu item still works on demand):
@@ -76,11 +127,66 @@ grimvault settings      # dump locally synced settings (the addon's view)
 grimvault settings get  # one-shot read of /v2/grimvault/settings (the server's view)
 grimvault doctor        # end-to-end diagnostics (tokens, JWKS, ping)
 
-grimvault               # GUI foreground: logs stream to this terminal
-grimvault --detached    # GUI in the background, returns immediately
-grimvault --debug       # GUI foreground + verbose logs, OCR stage dumps
-                        # (%TEMP%\grimvault-ocr), debug overlay on
+grimvault                 # GUI foreground: logs stream to this terminal, Ctrl+C quits
+grimvault --detached      # GUI in the background, returns immediately
+grimvault --debug         # + verbose logs and OCR stage dumps (%TEMP%\grimvault-ocr)
+grimvault --debug=highlight:objects
+                          # + red borders around detected tooltip boxes
+grimvault --debug=highlight:game
+                          # + red border around the game/capture region
+grimvault --debug=highlight:objects,highlight:game
+                          # enable both borders (F7 toggles configured borders)
+grimvault --detect-only   # stop after detection: hover -> box, no OCR/lookup/augment
+grimvault --fcr 10        # active frame capture rate, 1-60 fps (default 15;
+                          # idle drops to 3 until something is detected)
 ```
+
+### Anchoring diagnostics
+
+Anchoring emits structured `[vision]` events at info level, so ordinary runs
+record acquisition, confirmed loss, replacement candidates/rejections, frame
+age, locator cost, and hash-distance summaries in:
+
+```text
+%LOCALAPPDATA%\GrimVault\<env>\logs\
+```
+
+From WSL/Codex the same directory is directly readable at
+`/mnt/c/Users/Ethan/AppData/Local/GrimVault/<env>/logs`; no log copy/paste is
+needed. Production omits the `<env>` directory. Summarize the newest session with:
+
+```bash
+tools/anchor-log-summary.sh
+```
+
+or from PowerShell:
+
+```powershell
+tools\anchor-log-summary.ps1
+```
+
+`--debug` additionally saves frames for replacement candidates and settled
+replacements under `%LOCALAPPDATA%\GrimVault\<env>\logs\anchoring\`. PNG writes occur on
+detached workers after the immediate UI event, and retention is capped at the
+newest 40 frames.
+
+API calls log DNS, connect, TLS, first-byte, total, request id, and server
+phase timings. Repeated identical hovers use a short account-scoped memory
+cache, so the common second hover avoids another network round trip.
+
+Tooltip tracking is the anchoring system (docs/architecture/anchoring.md):
+detect once, refine to ~1px at full resolution, then draw from
+clamp(cursor + offset) at 120 Hz with per-frame presence and identity checks
+for immediate disappearance and settled replacement.
+
+The next OCR work is specified in `docs/architecture/ocr.md`: generation-safe
+cancellation, recognizer leases, prewarmed language families, name-first
+lookup, multilingual fixtures, and explicit latency budgets.
+
+`run-dev.ps1` (and its original `dev-run.ps1` target) launches the full
+pipeline with `--debug` by default, with no red highlight borders (`-NoDebug`
+disables debug logging; `-DetectOnly` skips OCR, lookup, and augment) and builds
+RelWithDebInfo — the Debug preset's debug OpenCV makes detection ~10x slower.
 
 ### Switching env at runtime
 
@@ -113,17 +219,11 @@ The shim is a 2-line `.cmd` that forwards `%*` to the real exe — the exe
 stays put so Qt's adjacent-DLL discovery keeps working. Each `dev-run.ps1`
 rewrites the shim, so you're always invoking the latest build.
 
-## What's missing in dev mode
+## Bundled test data
 
-```
-- ONNX models: models/tooltip.onnx and models/paddle/<family>/{rec.onnx,dict.txt}
-  These are NOT in the repo. Either copy them from the existing Electron build
-  (src/native/.build/models/) or download from DarkerDB releases. Without them
-  the tooltip detector + OCR pipeline log init failures but the main UI still
-  works.
-
-- E2E fixtures: tests/fixtures/  (run `pip install Pillow && python tools/gen-fixtures/main.py --out tests/fixtures`).
-```
+All tooltip and language ONNX models are committed under `models/`.
+Labelled OCR crops under `tools/ocr-train/real-crops/` drive compatibility
+tests across common Windows display scales.
 
 ## Useful one-offs
 
@@ -137,44 +237,62 @@ $env:GRIMVAULT_DISABLE_UPDATES = "1"
 build\windows-msvc-debug\grimvault.exe
 
 # Wipe the user data (DB + logs + migrated INI)
-Remove-Item -Recurse -Force $env:APPDATA\GrimVault
+Remove-Item -Recurse -Force $env:LOCALAPPDATA\GrimVault
 ```
 
 ## Where things live at runtime (with dev env vars set)
 
 ```
-models/             <repo>/models/        ← you need to populate this
+models/             <repo>/models/        ← bundled
 i18n/<lang>/        <repo>/i18n/<lang>/   ← already in repo
 assets/             <repo>/assets/        ← already in repo
 web/                <repo>/web/           ← augment.html + vendored ddb-tooltips
                                             (refresh: tools/build/sync-tooltips.sh)
 db/migrations/      <repo>/db/migrations/ ← embedded at compile time, also on disk
 
-grimvault.db        %APPDATA%\GrimVault\grimvault.db
-logs/               %APPDATA%\GrimVault\logs\
-settings.ini        %APPDATA%\GrimVault\settings.ini  (auto-migrated to DB, renamed .migrated)
-webview2/           %APPDATA%\GrimVault\webview2      (WebView2 user data)
+grimvault.db        %LOCALAPPDATA%\GrimVault\<env>\grimvault.db
+logs/               %LOCALAPPDATA%\GrimVault\<env>\logs\
+settings.ini        %LOCALAPPDATA%\GrimVault\<env>\settings.ini
+webview2/           %LOCALAPPDATA%\GrimVault\<env>\webview2
 ```
 
-The Augment (overlay card) renders through WebView2 + the vendored
-ddb-tooltips library. Machines without the Evergreen runtime, or a dead
-browser process, fall back to the legacy QML card automatically; force it
-with the `overlay:renderer` setting (`webview` | `qml`).
+The Augment is rendered by the vendored DDB tooltip SDK in a permanently
+hidden WebView2, captured as a transparent PNG, and displayed through a
+disabled native Qt window. No browser HWND is placed over the game. The QML
+port remains available as fallback with `overlay:renderer=qml`.
+
+The card's enter animation is CSS in `web/augment.html`, played on the
+`.ddb-tooltip` element the library recreates on each render (a fresh
+element with a CSS `animation` plays from frame 0; the transparent window
+stays shown, so no native show/move can drop the frames). Dismissal is
+instant, matching the game (its tooltip vanishes the moment the hover
+ends), including on a substantial cursor jump off the item. Tunables are
+the `--aug-enter-*` custom properties at the top of that file (duration,
+easing, rise, shift, scale, origin), plus `--aug-pad` (transparent headroom
+so the transform never clips the window edge; keep it larger than the
+biggest rise/shift and any scale overshoot). Editing `web/augment.html`
+alone needs no rebuild: it is staged next to the exe, so copy it into
+`build/<preset>/web/` (or rerun dev-run) to pick up changes.
+
+Note: DirectComposition visual opacity/transform do NOT reach WebView2
+content, so the animation cannot be done natively; CSS on the recreated
+element is the only path.
 
 ## Working on Windows + WSL
 
-If you have this repo checked out on a Windows path (e.g. `C:\Users\…\Projects\grimvault-cpp`) and also touch it from a WSL shell over the `/mnt/c/` mount, run this once per clone:
+The repo lives on WSL ext4, so git runs in WSL and POSIX modes are real.
+This clone still carries `core.fileMode false` from its NTFS days; that's
+harmless here (it only means git ignores exec-bit flips). A clone checked
+out on an NTFS path needs it set — the `/mnt/c/` mount reports every file
+as mode 755 and pollutes diffs otherwise.
 
-```bash
-git config core.fileMode false
-```
-
-The WSL `/mnt/c/` mount reports every file as executable (mode 755), but the underlying NTFS volume has no concept of POSIX exec bits. Without this setting, every tracked asset (fonts, PNGs, settings.ini, etc.) will show up as modified in `git status` with a `mode 100644 → 100755` flip, polluting diffs and PRs. Setting `core.fileMode false` tells git to ignore mode changes for this clone; the setting is per-clone (not committed), so each contributor sets it locally.
-
-If you do an `ls` inside WSL and see Windows `Game.json:Zone.Identifier` files in `i18n/<lang>/`, those are NTFS Alternate Data Stream metadata files (Mark-of-the-Web tags) leaking through to the WSL view. They're gitignored, so they won't get committed, but you can safely `rm` them.
+If you see `Game.json:Zone.Identifier` files in `i18n/<lang>/`, those are
+NTFS Alternate Data Stream remnants (Mark-of-the-Web tags) from the old
+NTFS checkout. They're gitignored; `rm` them freely.
 
 ## When something breaks
 
 The script filters CMake/MSVC output for the first useful error and tails
-`build/<preset>/configure.log` or `build.log`. If it's a vcpkg port issue,
-check `%VCPKG_ROOT%\buildtrees\<port>\install-x64-windows-rel-err.log`.
+`%LOCALAPPDATA%\GrimVault\build\<preset>\configure.log` or `build.log`.
+If it's a vcpkg port issue, check
+`%VCPKG_ROOT%\buildtrees\<port>\install-x64-windows-rel-err.log`.

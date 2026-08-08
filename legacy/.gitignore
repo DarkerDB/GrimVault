@@ -1,0 +1,8 @@
+/dist
+/debug
+/node_modules
+/obsolete
+/src/native/.build
+/ui/overlay/dist/
+/vcpkg_installed
+/vendor

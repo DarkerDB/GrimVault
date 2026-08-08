@@ -23,6 +23,7 @@ public:
    // Toggles the auth label between "Sign In" and "Log Out", and recolors
    // the header status dot green (signed in) / red (signed out).
    void set_signed_in (bool signed_in);
+   void set_connection_state (ConnectionState state);
 
 signals:
    void sign_in_requested        ();

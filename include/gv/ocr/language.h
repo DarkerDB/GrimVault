@@ -11,7 +11,8 @@ namespace gv::ocr {
 // covers Simplified + Traditional Chinese and Japanese. Latin does not
 // cover Cyrillic; Russian needs the eslav (East Slavic) model.
 enum class LanguageFamily {
-   Latin,    // de, en, es, fr, pt-BR
+   English,  // en (narrow alphabet; higher English accuracy)
+   Latin,    // de, es, fr, pt-BR
    Eslav,    // ru
    Korean,   // ko
    Chinese,  // ja, zh-Hans, zh-Hant
@@ -20,6 +21,7 @@ enum class LanguageFamily {
 constexpr std::string_view family_dir (LanguageFamily f) noexcept
 {
    switch (f) {
+      case LanguageFamily::English: return "en";
       case LanguageFamily::Latin:   return "latin";
       case LanguageFamily::Eslav:   return "eslav";
       case LanguageFamily::Korean:  return "korean";
@@ -32,6 +34,7 @@ constexpr std::string_view family_dir (LanguageFamily f) noexcept
 // whose Paddle recognizer should be loaded.
 constexpr LanguageFamily family_of (std::string_view game_locale) noexcept
 {
+   if (game_locale == "en")      return LanguageFamily::English;
    if (game_locale == "ru")      return LanguageFamily::Eslav;
    if (game_locale == "ko")      return LanguageFamily::Korean;
    if (game_locale == "ja")      return LanguageFamily::Chinese;

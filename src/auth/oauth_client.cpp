@@ -1,8 +1,8 @@
 #include <gv/auth/oauth_client.h>
 
-#include <gv/auth/http.h>
 #include <gv/auth/loopback_server.h>
 #include <gv/auth/pkce.h>
+#include <gv/core/http.h>
 #include <gv/core/logger.h>
 
 #include <QCoreApplication>
@@ -18,7 +18,10 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <chrono>
+#include <cstdint>
+#include <mutex>
 #include <sstream>
 #include <string>
 
@@ -79,11 +82,13 @@ namespace {
       t.access_token  = j.value ("access_token",  "");
       t.refresh_token = j.value ("refresh_token", "");
       t.scope         = j.value ("scope",         "");
-      const auto expires_in = j.value ("expires_in", 0);
-      const auto skew = std::chrono::seconds { 60 };
+      std::int64_t expires_in = 0;
+      if (auto expiry = j.find ("expires_in");
+          expiry != j.end () && expiry->is_number_integer ()) {
+         expires_in = std::max<std::int64_t> (0, expiry->get<std::int64_t> ());
+      }
       t.expires_at = std::chrono::system_clock::now ()
-                   + std::chrono::seconds { expires_in }
-                   - skew;
+                   + std::chrono::seconds { expires_in };
       return t;
    }
 
@@ -93,6 +98,8 @@ struct OauthClient::Impl
 {
    Config       cfg;
    BrowserHook  browser_hook;
+   std::mutex   authorize_lock;
+   LoopbackServer* active_server = nullptr;
 };
 
 OauthClient::OauthClient (Config cfg)
@@ -101,7 +108,7 @@ OauthClient::OauthClient (Config cfg)
    impl_->cfg = std::move (cfg);
 }
 
-OauthClient::~OauthClient () = default;
+OauthClient::~OauthClient () { cancel_authorize (); }
 
 void OauthClient::set_browser_hook (BrowserHook hook)
 {
@@ -111,6 +118,24 @@ void OauthClient::set_browser_hook (BrowserHook hook)
 core::Result<TokenResponse> OauthClient::authorize ()
 {
    LoopbackServer server;
+   {
+      std::lock_guard lk { impl_->authorize_lock };
+      if (impl_->active_server) {
+         return core::fail (core::Error::make (core::ErrorKind::InvalidArgument,
+            "oauth: authorization is already in progress"));
+      }
+      impl_->active_server = &server;
+   }
+   struct ClearActive {
+      Impl& impl;
+      LoopbackServer* server;
+      ~ClearActive ()
+      {
+         std::lock_guard lk { impl.authorize_lock };
+         if (impl.active_server == server) impl.active_server = nullptr;
+      }
+   } clear_active { *impl_, &server };
+
    auto port = server.bind ();
    if (!port.has_value ()) return core::fail (port.error ());
 
@@ -162,6 +187,8 @@ core::Result<TokenResponse> OauthClient::authorize ()
 #endif
       if (!opened) {
          core::log::api.warn ("oauth: browser launch failed (url={})", authorize_url);
+         return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
+            "Could not open the sign-in page in your browser."));
       }
    }
 
@@ -180,7 +207,7 @@ core::Result<TokenResponse> OauthClient::authorize ()
    if (!cb.has_value ()) return core::fail (cb.error ());
 
    // Exchange the code at /oauth/token.
-   http::Request req;
+   core::http::Request req;
    req.method       = "POST";
    req.url          = impl_->cfg.api_base_url + "/oauth/token";
    req.body         = form_encode ({
@@ -192,7 +219,7 @@ core::Result<TokenResponse> OauthClient::authorize ()
    });
    req.content_type = "application/x-www-form-urlencoded";
 
-   auto res = http::perform (req);
+   auto res = core::http::perform (req);
    if (!res.has_value ()) return core::fail (res.error ());
 
    if (res->status < 200 || res->status >= 300) {
@@ -217,9 +244,15 @@ core::Result<TokenResponse> OauthClient::authorize ()
    return TokenResponse { std::move (tokens) };
 }
 
+void OauthClient::cancel_authorize () noexcept
+{
+   std::lock_guard lk { impl_->authorize_lock };
+   if (impl_->active_server) impl_->active_server->close ();
+}
+
 core::Result<TokenResponse> OauthClient::refresh (std::string_view refresh_token)
 {
-   http::Request req;
+   core::http::Request req;
    req.method       = "POST";
    req.url          = impl_->cfg.api_base_url + "/oauth/token";
    req.body         = form_encode ({
@@ -229,7 +262,7 @@ core::Result<TokenResponse> OauthClient::refresh (std::string_view refresh_token
    });
    req.content_type = "application/x-www-form-urlencoded";
 
-   auto res = http::perform (req);
+   auto res = core::http::perform (req);
    if (!res.has_value ()) return core::fail (res.error ());
 
    if (res->status == 400 || res->status == 401) {
@@ -251,18 +284,19 @@ core::Result<TokenResponse> OauthClient::refresh (std::string_view refresh_token
    }
 
    auto t = parse_token_response (json);
-   if (t.refresh_token.empty ()) {
+   if (t.access_token.empty () || t.refresh_token.empty ()) {
       // Contract §3.3: rotation is required. Surface as hard failure so the
       // operator sees that KATforge regressed on this guarantee.
       return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
-         "oauth: refresh response missing rotated refresh_token"));
+         "oauth: refresh response missing {}",
+         t.access_token.empty () ? "access_token" : "rotated refresh_token"));
    }
    return TokenResponse { std::move (t) };
 }
 
 core::Result<void> OauthClient::revoke (std::string_view refresh_token)
 {
-   http::Request req;
+   core::http::Request req;
    req.method       = "POST";
    req.url          = impl_->cfg.api_base_url + "/oauth/revoke";
    req.body         = form_encode ({
@@ -272,7 +306,7 @@ core::Result<void> OauthClient::revoke (std::string_view refresh_token)
    });
    req.content_type = "application/x-www-form-urlencoded";
 
-   auto res = http::perform (req);
+   auto res = core::http::perform (req);
    if (!res.has_value ()) return core::fail (res.error ());
 
    if (res->status < 200 || res->status >= 300) {

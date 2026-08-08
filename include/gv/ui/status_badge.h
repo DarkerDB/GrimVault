@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QPoint>
 #include <QQuickView>
 #include <QRect>
 
@@ -21,6 +22,14 @@ public slots:
    void set_signed_in (bool signed_in);
    void set_game      (const QRect& bounds, bool active);
    void pulse         ();
+
+protected:
+   // Qt sets its ex-styles on expose, after show(); re-apply the
+   // non-activating click-through flags here so they stick.
+   void exposeEvent (QExposeEvent* event) override;
+
+private:
+   QPoint applied_;
 };
 
 } // namespace gv::ui

@@ -2,7 +2,7 @@ cmake_minimum_required (VERSION 3.28)
 
 # Versioning: derive from git describe when available, fall back to 0.0.0.
 include (cmake/Version.cmake)
-grimvault_detect_version (GRIMVAULT_VERSION)
+grimvault_detect_version (GRIMVAULT_VERSION GRIMVAULT_DISPLAY_VERSION)
 
 project (grimvault
    VERSION     ${GRIMVAULT_VERSION}
@@ -21,7 +21,6 @@ set (CMAKE_CXX_EXTENSIONS         OFF)
 list (APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
 include (Modules)
-include (Signing)
 include (EmbedSql)
 include (Env)
 include (AppcastUrl)
@@ -34,6 +33,8 @@ add_compile_definitions (
    WINRT_LEAN_AND_MEAN
    UNICODE
    _UNICODE
+   WINVER=0x0A00
+   _WIN32_WINNT=0x0A00
 )
 
 if (MSVC)
@@ -70,13 +71,22 @@ find_package (nlohmann_json CONFIG REQUIRED)
 find_package (OpenCV     CONFIG REQUIRED)
 
 # WinSparkle is installed by vcpkg without a CMake config file. Hand-wire
-# it: include path + import library. The DLL is staged into the install
-# layout by windeployqt's runtime-deps step (TARGET_RUNTIME_DLLS).
+# its import library and runtime DLL so TARGET_RUNTIME_DLLS can stage both
+# release and debug packages correctly.
 find_path    (WINSPARKLE_INCLUDE_DIR winsparkle/winsparkle.h REQUIRED)
 find_library (WINSPARKLE_LIBRARY     NAMES WinSparkle         REQUIRED)
-add_library  (winsparkle::winsparkle UNKNOWN IMPORTED)
+get_filename_component (WINSPARKLE_LIBRARY_DIR "${WINSPARKLE_LIBRARY}" DIRECTORY)
+get_filename_component (WINSPARKLE_PREFIX      "${WINSPARKLE_LIBRARY_DIR}" DIRECTORY)
+find_file (WINSPARKLE_RUNTIME
+   NAMES WinSparkle.dll
+   HINTS "${WINSPARKLE_PREFIX}/bin"
+   NO_DEFAULT_PATH
+   REQUIRED
+)
+add_library  (winsparkle::winsparkle SHARED IMPORTED)
 set_target_properties (winsparkle::winsparkle PROPERTIES
-   IMPORTED_LOCATION             "${WINSPARKLE_LIBRARY}"
+   IMPORTED_IMPLIB               "${WINSPARKLE_LIBRARY}"
+   IMPORTED_LOCATION             "${WINSPARKLE_RUNTIME}"
    INTERFACE_INCLUDE_DIRECTORIES "${WINSPARKLE_INCLUDE_DIR}"
 )
 
@@ -88,6 +98,7 @@ find_package (OpenSSL           REQUIRED)
 grimvault_write_version_header (
    "${CMAKE_BINARY_DIR}/generated/gv/core/version.h"
    "${GRIMVAULT_VERSION}"
+   "${GRIMVAULT_DISPLAY_VERSION}"
 )
 
 grimvault_write_appcast_header (
@@ -102,6 +113,7 @@ grimvault_write_env_header (
 
 grimvault_add_module (core)
 target_link_libraries (gv_core PUBLIC
+   CURL::libcurl
    fmt::fmt
    spdlog::spdlog
 )
@@ -110,7 +122,7 @@ grimvault_add_module (db)
 target_link_libraries (gv_db PUBLIC
    gv::core
    SQLiteCpp
-   SQLite::SQLite3
+   SQLite3::SQLite3
    nlohmann_json::nlohmann_json
 )
 grimvault_embed_sql (gv_db
@@ -156,6 +168,7 @@ target_link_libraries (gv_ocr PUBLIC
    opencv_dnn
    opencv_imgcodecs
    opencv_imgproc
+   nlohmann_json::nlohmann_json
 )
 
 grimvault_add_module (update)
@@ -179,7 +192,6 @@ target_link_libraries (gv_auth
       nlohmann_json::nlohmann_json
       Qt6::Core
    PRIVATE
-      CURL::libcurl
       OpenSSL::Crypto
       Qt6::Gui
 )
@@ -272,8 +284,8 @@ if (MSVC)
 endif ()
 
 # Exe shell icon + VERSIONINFO (Explorer, taskbar, Task Manager). The .ico
-# is committed; regenerate from Icon-324x356.png via tools/build/png_to_ico.py
-# if the art changes.
+# is committed; regenerate from Icon-450x450-Padded.png via
+# tools/build/png_to_ico.py if the art changes.
 if (WIN32)
    set (GRIMVAULT_ICON_ICO "${CMAKE_SOURCE_DIR}/assets/images/Icon-324x356.ico")
    configure_file (
@@ -359,14 +371,21 @@ add_custom_command (TARGET grimvault POST_BUILD
 )
 
 # Augment page + vendored ddb-tooltips dist, served to WebView2 via the
-# grimvault.assets virtual host. Same dev/install duality as models/.
-add_custom_command (TARGET grimvault POST_BUILD
+# grimvault.assets virtual host. Track the source files independently of the
+# executable: a CSS/JS-only SDK update must restage on an incremental build
+# even when no C++ object needs relinking.
+file (GLOB_RECURSE GRIMVAULT_WEB_ASSETS CONFIGURE_DEPENDS
+   "${CMAKE_SOURCE_DIR}/web/*"
+)
+add_custom_target (grimvault_stage_web ALL
    COMMAND "${CMAKE_COMMAND}" -E copy_directory_if_different
            "${CMAKE_SOURCE_DIR}/web"
            "$<TARGET_FILE_DIR:grimvault>/web"
+   DEPENDS ${GRIMVAULT_WEB_ASSETS}
    COMMENT "Staging web assets for grimvault"
    VERBATIM
 )
+add_dependencies (grimvault grimvault_stage_web)
 
 # ---- Tests ----
 

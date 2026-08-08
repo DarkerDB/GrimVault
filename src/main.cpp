@@ -1,5 +1,6 @@
 #include <gv/api/darkerdb_client.h>
 #include <gv/app/controller.h>
+#include <gv/app/settings_bridge.h>
 #include <gv/app/settings_sync.h>
 #include <gv/auth/oauth_client.h>
 #include <gv/auth/session.h>
@@ -9,10 +10,10 @@
 #include <gv/core/env.h>
 #include <gv/core/env_resolver.h>
 #include <gv/core/hotkey_manager.h>
+#include <gv/core/http.h>
 #include <gv/core/ini_migrator.h>
 #include <gv/core/logger.h>
 #include <gv/core/single_instance.h>
-#include <gv/core/startup_link.h>
 #include <gv/core/version.h>
 #include <gv/core/window_tracker.h>
 #include <gv/db/database.h>
@@ -20,6 +21,7 @@
 #include <gv/db/repos/user_settings_repo.h>
 #include <gv/ocr/language_registry.h>
 #include <gv/ocr/pipeline.h>
+#include <gv/ui/debug_overlay.h>
 #include <gv/ui/overlay_window.h>
 #include <gv/ui/status_badge.h>
 #include <gv/ui/tray_icon.h>
@@ -32,6 +34,7 @@
 #include <QDesktopServices>
 #include <QDir>
 #include <QFontDatabase>
+#include <QPointer>
 #include <QStandardPaths>
 #include <QStringList>
 #include <QSystemTrayIcon>
@@ -51,18 +54,24 @@
 
 #include <algorithm>
 #include <cstdio>
-#include <cstdlib>
 #include <filesystem>
-#include <fstream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace {
 
    constexpr const char* k_single_instance_mutex = "GrimVault.SingleInstance.v1";
    constexpr const char* k_surface_message       = "GrimVault.Surface.v1";
+
+   bool env_enabled (const char* name)
+   {
+      const auto value = qEnvironmentVariable (name);
+      return !value.isEmpty () && value != "0";
+   }
 
    // ---- console attach for CLI on Windows ----
    //
@@ -159,15 +168,67 @@ namespace {
 
    std::filesystem::path app_data_dir ()
    {
-      auto qpath = QStandardPaths::writableLocation (QStandardPaths::AppDataLocation);
+      auto qpath = QStandardPaths::writableLocation (QStandardPaths::GenericDataLocation)
+         + QStringLiteral ("/GrimVault");
+      const auto env = gv::core::active_env ().name;
+      if (env != "prod") {
+         qpath += QStringLiteral ("/")
+            + QString::fromUtf8 (env.data (), static_cast<qsizetype> (env.size ()));
+      }
       QDir ().mkpath (qpath);
       return std::filesystem::path { qpath.toStdWString () };
    }
 
+   gv::core::Result<bool> scope_settings (
+      gv::db::UserSettingsRepo& repo,
+      const std::optional<std::string>& principal)
+   {
+      constexpr std::string_view marker = "auth:subject";
+      auto stored = repo.get (marker);
+      if (!stored.has_value ()) return gv::core::fail (stored.error ());
+
+      const bool has_marker = stored.has_value () && stored->has_value ();
+      const std::string next = principal.value_or ("");
+      const std::string current = has_marker ? **stored : "";
+
+      // First V2 launch adopts existing V1 settings for the current account.
+      if (!has_marker && !next.empty ()) {
+         auto saved = repo.set (std::string { marker }, next);
+         if (!saved.has_value ()) return gv::core::fail (saved.error ());
+         return false;
+      }
+      if (has_marker && current == next) return false;
+
+      auto all = repo.all ();
+      if (!all.has_value ()) return gv::core::fail (all.error ());
+
+      constexpr std::string_view prefixes [] = {
+         "behavior:", "hotkeys:", "overlay:", "pricing:", "tooltip:"
+      };
+      for (const auto& [key, value] : *all) {
+         (void) value;
+         if (key == "overlay:renderer") continue;
+         const bool managed = std::any_of (
+            std::begin (prefixes), std::end (prefixes),
+            [&key] (std::string_view prefix) { return key.starts_with (prefix); });
+         if (!managed) continue;
+
+         auto erased = repo.erase (key);
+         if (!erased.has_value ()) return gv::core::fail (erased.error ());
+      }
+
+      auto marked = next.empty ()
+         ? repo.erase (std::string { marker })
+         : repo.set (std::string { marker }, next);
+      if (!marked.has_value ()) return gv::core::fail (marked.error ());
+      return true;
+   }
+
    std::filesystem::path resolve_install_dir ()
    {
-      if (const char* env = std::getenv ("GRIMVAULT_DEV_RESOURCES"); env && *env) {
-         return std::filesystem::path { env };
+      const auto resources = qEnvironmentVariable ("GRIMVAULT_DEV_RESOURCES");
+      if (!resources.isEmpty ()) {
+         return std::filesystem::path { resources.toStdWString () };
       }
       return std::filesystem::path { QCoreApplication::applicationDirPath ().toStdWString () };
    }
@@ -222,9 +283,67 @@ namespace {
    // ---- GUI run loop ----
 
    struct GuiOptions {
-      bool no_auto_login = false;
-      bool debug         = false;
+      bool   no_auto_login = false;
+      bool   debug         = false;
+      bool   highlight_objects = false;
+      bool   highlight_game    = false;
+      bool   detect_only   = false;
+      double fcr           = 0.0;   // frames/s while active; 0 = default
    };
+
+   void apply_debug_option (GuiOptions& opts, std::string_view arg)
+   {
+      opts.debug = true;
+      if (arg == "--debug") return;
+
+      constexpr std::string_view prefix = "--debug=";
+      if (!arg.starts_with (prefix)) return;
+
+      std::string_view selectors = arg.substr (prefix.size ());
+      while (!selectors.empty ()) {
+         const auto comma = selectors.find (',');
+         const auto item  = selectors.substr (0, comma);
+
+         if (item == "highlight:objects") opts.highlight_objects = true;
+         else if (item == "highlight:game") opts.highlight_game = true;
+         else if (!item.empty ()) {
+            std::fprintf (stderr, "unknown --debug selector: %.*s\n",
+               static_cast<int> (item.size ()), item.data ());
+         }
+
+         if (comma == std::string_view::npos) break;
+         selectors.remove_prefix (comma + 1);
+      }
+   }
+
+   // Consume `--fcr <n>` / `--fcr=<n>` from args; returns 0 when absent.
+   // Clamped to [1, 60] — below 1 the overlay feels dead, above 60 the
+   // detector can't keep up anyway and the capture thread just spins.
+   double consume_fcr (std::vector<std::string>& args)
+   {
+      double fcr = 0.0;
+
+      for (std::size_t i = 0; i < args.size (); ++i) {
+         std::string value;
+
+         if (args [i] == "--fcr" && i + 1 < args.size ()) {
+            value = args [i + 1];
+            args.erase (args.begin () + static_cast<std::ptrdiff_t> (i),
+                        args.begin () + static_cast<std::ptrdiff_t> (i) + 2);
+         } else if (args [i].rfind ("--fcr=", 0) == 0) {
+            value = args [i].substr (6);
+            args.erase (args.begin () + static_cast<std::ptrdiff_t> (i));
+         } else {
+            continue;
+         }
+
+         try { fcr = std::stod (value); } catch (...) { fcr = 0.0; }
+         break;
+      }
+
+      if (fcr <= 0.0) return 0.0;
+      return std::clamp (fcr, 1.0, 60.0);
+   }
 
 #ifdef _WIN32
    // `grimvault --detached`: relaunch without the flag, detached from this
@@ -276,11 +395,19 @@ namespace {
          return 0;
       }
 
-      gv::api::DarkerDbClient::global_init ();
+      gv::core::http::Global http;
+      if (!http) return 1;
+
+      // Qt Quick's threaded render loop can deadlock main in polishAndSync
+      // when small always-on-top windows (status badge, debug overlay) get
+      // exposed/re-stacked in bursts as the game window appears. The QML
+      // surfaces here are tiny; the single-threaded loop costs nothing and
+      // removes that whole hazard class.
+      qputenv ("QSG_RENDER_LOOP", "basic");
 
       QApplication app (argc, argv);
       app.setApplicationName    (QStringLiteral ("GrimVault"));
-      app.setOrganizationName   (QStringLiteral ("DarkerDB"));
+      app.setOrganizationName   (QStringLiteral ("DDB"));
       app.setOrganizationDomain (QStringLiteral ("darkerdb.com"));
       app.setApplicationVersion (QString::fromLatin1 (gv::core::version::string));
       app.setQuitOnLastWindowClosed (false);
@@ -299,8 +426,12 @@ namespace {
 #ifdef _WIN32
          // Pipeline reads this at first scan; dumps land in %TEMP%\grimvault-ocr.
          ::_putenv_s ("GRIMVAULT_OCR_DEBUG", "1");
+         ::_putenv_s ("GRIMVAULT_ANCHOR_DIAGNOSTICS",
+            (data_dir / "logs" / "anchoring").string ().c_str ());
 #endif
          gv::core::Logger::info ("debug mode: verbose logs + OCR stage dumps enabled");
+         gv::core::Logger::info ("debug highlights: objects={}, game={}",
+            opts.highlight_objects, opts.highlight_game);
       }
 
       const auto& active_env = gv::core::active_env ();
@@ -309,9 +440,9 @@ namespace {
          std::string { active_env.name },
          std::string { active_env.api_base_url },
          std::string { active_env.auth_base_url });
-      if (active_env.name == "dev") {
+      if (active_env.name == "dev" && env_enabled ("GRIMVAULT_INSECURE_DEV_TLS")) {
          gv::core::Logger::warn (
-            "TLS verification disabled for env=dev (self-signed certs allowed)");
+            "TLS verification explicitly disabled for env=dev");
       }
 
       gv::core::CrashHandler::install (data_dir / "logs");
@@ -345,21 +476,39 @@ namespace {
       auto oauth = std::make_shared<gv::auth::OauthClient> (std::move (oauth_cfg));
 
       gv::auth::Session session { oauth };
+      if (auto scoped = scope_settings (settings_repo, session.principal ());
+          !scoped.has_value ()) {
+         gv::core::Logger::error ("Settings account scope failed: {}", scoped.error ().message);
+         return 1;
+      }
 
       // ---- Overlay + capture pipeline ----
+      //
+      // WebView2's virtual-host mapping wants a local drive: in dev the
+      // resources root is a network mapping (W: -> WSL), which Chromium
+      // treats differently. The post-build step stages web/ next to the
+      // exe, so prefer that copy when present.
+      auto web_dir = install_dir / "web";
+      if (const auto staged = std::filesystem::path {
+             QCoreApplication::applicationDirPath ().toStdWString () } / "web";
+          std::filesystem::exists (staged / "augment.html")) {
+         web_dir = staged;
+      }
+
       gv::ui::OverlayWindow::Config overlay_cfg {
-         .web_dir       = install_dir / "web",
+         .web_dir       = std::move (web_dir),
          .user_data_dir = data_dir / "webview2",
       };
       if (auto v = settings_repo.get ("overlay:renderer"); v.has_value () && v->has_value ()) {
          overlay_cfg.renderer = **v;
       }
       gv::ui::OverlayWindow overlay { std::move (overlay_cfg) };
+      gv::ui::DebugOverlay  debug_overlay;
 
-      gv::api::DarkerDbClient::Config api_cfg;
+      gv::api::DDBClient::Config api_cfg;
       api_cfg.base_url  = std::string { active_env.api_base_url };
       api_cfg.client_id = std::string { active_env.client_id };
-      gv::api::DarkerDbClient api_client { api_cfg, &session, db->get () };
+      gv::api::DDBClient api_client { api_cfg, &session, db->get () };
 
       gv::vision::TooltipDetector detector;
       if (auto r = detector.initialize (install_dir / "models" / "tooltip.onnx"); !r.has_value ()) {
@@ -378,8 +527,24 @@ namespace {
 
       std::unique_ptr<gv::ocr::Pipeline> pipeline;
       if (capture) {
+         gv::ocr::Pipeline::Config pipe_cfg;
+         if (opts.fcr > 0.0) {
+            pipe_cfg.active_fps = opts.fcr;
+            gv::core::Logger::info ("pipeline: frame capture rate {} fps (--fcr)", opts.fcr);
+         }
+         if (opts.debug) {
+            pipe_cfg.sample_inbox = data_dir / "ocr-samples" / "inbox";
+            gv::core::Logger::info ("OCR sample inbox: {}",
+               pipe_cfg.sample_inbox.string ());
+         }
+
          pipeline = std::make_unique<gv::ocr::Pipeline> (
-            *capture, detector, langs, gv::ocr::Pipeline::Config {});
+            *capture, detector, langs, pipe_cfg);
+
+         if (opts.detect_only) {
+            pipeline->set_detect_only (true);
+            gv::core::Logger::info ("pipeline: detect-only mode (OCR / lookup / augment disabled)");
+         }
       }
 
       std::unique_ptr<gv::core::HotkeyManager> hotkeys;
@@ -399,9 +564,13 @@ namespace {
          .pipeline      = pipeline.get (),
          .hotkeys       = hotkeys.get (),
          .overlay       = &overlay,
+         .debug         = &debug_overlay,
+         .highlight_game = opts.highlight_game,
+         .highlight_objects = opts.highlight_objects,
       };
       gv::app::Controller controller { deps };
-      if (opts.debug) controller.action_debug_toggle ();
+      controller.set_authenticated (
+         session.signed_in (), session.principal ().value_or (""));
 
       std::unique_ptr<gv::core::WindowTracker> tracker;
       if (auto t = gv::core::WindowTracker::create (
@@ -432,19 +601,29 @@ namespace {
          }
       }
 
+      controller.set_browse_base (std::string { active_env.spa_base_url });
+
       const int bound = controller.bind_hotkeys_from_repo ();
       gv::core::Logger::info ("hotkeys: {} bindings active", bound);
 
-      // Apply login-on-startup setting (HKCU\...\Run).
-      if (auto v = settings_repo.get ("general:launch_on_startup"); v.has_value () && v->has_value ()) {
-         const bool want = (**v == "true" || **v == "1");
-         if (want) {
-            gv::core::StartupLink::enable ("GrimVault",
-               app.applicationFilePath ().toStdString (), "--hidden");
-         } else {
-            gv::core::StartupLink::disable ("GrimVault");
-         }
-      }
+      // Env flag wins over the dashboard toggle so dev/CI can suppress
+      // updates unconditionally. Resolved before the bridge so its first
+      // reload () already knows updates are locked off.
+      const bool disabled_by_env = env_enabled ("GRIMVAULT_DISABLE_UPDATES");
+
+      // ---- Settings application ----
+      // The half of settings that makes them do something: folds the stored
+      // keys into live overlay layout, card options, overlay mode, hotkey
+      // bindings and the launch-on-startup entry. Seeded from the repo here
+      // so a signed-in relaunch is already correct before the first poll.
+      gv::app::SettingsBridge settings_bridge {{
+         .repo               = &settings_repo,
+         .overlay            = &overlay,
+         .controller         = &controller,
+         .exe_path           = app.applicationFilePath ().toStdString (),
+         .updates_locked_off = disabled_by_env,
+      }};
+      settings_bridge.reload ();
 
       // ---- Tray icon ----
       if (!QSystemTrayIcon::isSystemTrayAvailable ()) {
@@ -453,7 +632,9 @@ namespace {
       }
 
       gv::ui::TrayIcon tray;
-      tray.set_signed_in (session.signed_in ());
+      tray.set_connection_state (session.signed_in ()
+         ? gv::ui::ConnectionState::Syncing
+         : gv::ui::ConnectionState::SignedOut);
 
       // In-game corner badge: pinned bottom-right of the game window, shows
       // sign-in dot + scan mode, pulses on pipeline activity.
@@ -471,47 +652,45 @@ namespace {
       // ---- Settings sync ----
       // Dashboard-controlled settings polled from /v2/grimvault/settings and
       // mirrored into UserSettingsRepo. Starts on sign-in, stops on sign-out.
-      gv::app::SettingsSync settings_sync { &api_client, &session, &settings_repo };
-      QObject::connect (&settings_sync, &gv::app::SettingsSync::settings_changed,
-         &app, [] (const QString& key, const QString& value) {
-            gv::core::log::app.info ("settings updated: {} = {}",
-               key.toStdString (), value.toStdString ());
-         });
-
-      // Per contract §7.2: presence of settings.toml IS the first-run flag.
-      // We drop a header-only stub on first launch so subsequent launches
-      // know the user has been here before. Deleting the file resets state.
-      //
-      // The stub's contents will be replaced wholesale by the first-run
-      // wizard's confirmed values (hotkey + capture region) when that
-      // surface is built post-MVP.
-      const auto settings_path = data_dir / "settings.toml";
-      const bool first_run = !std::filesystem::exists (settings_path);
-      if (first_run) {
-         std::ofstream f { settings_path };
-         if (f) {
-            f << "# GrimVault settings — written on first launch.\n"
-              << "# Defaults apply for any key not set here.\n"
-              << "# See docs/architecture/grimvault-mvp.md §7.2 for the schema.\n";
-         } else {
-            gv::core::Logger::warn ("first-run: could not create {}",
-               settings_path.string ());
-         }
+      // Dev polls hard: the API is a container on the same box, and the
+      // whole point of the dev loop is changing a setting on the dashboard
+      // and watching the card change.
+      gv::app::SettingsSync::Config sync_cfg;
+      if (active_env.name == "dev") {
+         sync_cfg.interval      = std::chrono::seconds { 5 };
+         sync_cfg.backoff_floor = std::chrono::seconds { 5 };
       }
+
+      gv::app::SettingsSync settings_sync {
+         &api_client, &session, &settings_repo, sync_cfg };
+      QObject::connect (&settings_sync, &gv::app::SettingsSync::settings_changed,
+         &settings_bridge, &gv::app::SettingsBridge::apply);
 
       // Canonical signed-in state as the GUI last reconciled it. Updated by
       // the in-process sign-in/out handlers below and by the external-change
       // watcher, so neither double-reacts to a flip the other already handled.
       auto signed_state = std::make_shared<bool> (session.signed_in ());
+      auto signed_subject = std::make_shared<std::string> (
+         session.principal ().value_or (""));
+      auto settings_ready = std::make_shared<bool> (false);
+      auto settings_failure_notified = std::make_shared<bool> (false);
+      std::unordered_set<QThread*> oauth_workers;
+      bool sign_in_active = false;
 
       // ---- Sign-in: run the OAuth flow off the Qt main thread so the UI
       // stays responsive while the loopback server blocks on the callback.
       auto do_sign_in = [&] {
+         if (sign_in_active) {
+            gv::core::log::app.debug ("sign-in already in progress");
+            return;
+         }
+         sign_in_active = true;
+
          tray.showMessage (QStringLiteral ("GrimVault"),
             QStringLiteral ("Opening your browser to sign in…"),
             QSystemTrayIcon::Information, 4000);
 
-         auto* worker = QThread::create ([&] {
+         auto* worker = QThread::create ([&, oauth] {
             auto resp = oauth->authorize ();
             QMetaObject::invokeMethod (&app, [&, resp = std::move (resp)] () mutable {
                if (!resp.has_value ()) {
@@ -527,26 +706,104 @@ namespace {
                      QSystemTrayIcon::Critical, 8000);
                   return;
                }
+               const auto principal = session.principal ();
+               auto scoped = scope_settings (settings_repo, principal);
+               if (!scoped.has_value ()) {
+                  (void) session.sign_out (/*local_only=*/ true);
+                  tray.showMessage (QStringLiteral ("Sign-in failed"),
+                     QStringLiteral ("Could not isolate settings for this account."),
+                     QSystemTrayIcon::Critical, 8000);
+                  gv::core::log::app.error (
+                     "settings account scope failed: {}", scoped.error ().message);
+                  return;
+               }
+               settings_bridge.reload ();
                *signed_state = true;
-               tray.set_signed_in (true);
+               *signed_subject = principal.value_or ("");
+               *settings_ready = false;
+               *settings_failure_notified = false;
+               controller.set_authenticated (true, principal.value_or (""));
+               tray.set_connection_state (gv::ui::ConnectionState::Syncing);
                badge.set_signed_in (true);
                tray.showMessage (QStringLiteral ("Signed in"),
-                  QStringLiteral ("GrimVault is now connected to DarkerDB."),
+                  QStringLiteral ("Loading your GrimVault settings…"),
                   QSystemTrayIcon::Information, 5000);
                settings_sync.start ();
             }, Qt::QueuedConnection);
          });
-         QObject::connect (worker, &QThread::finished, worker, &QObject::deleteLater);
+         oauth_workers.insert (worker);
+         QObject::connect (worker, &QThread::finished, &app, [&, worker] {
+            oauth_workers.erase (worker);
+            sign_in_active = false;
+            worker->deleteLater ();
+         });
          worker->start ();
       };
 
       QObject::connect (&tray, &gv::ui::TrayIcon::sign_in_requested, &app, do_sign_in);
 
+      QObject::connect (&settings_sync, &gv::app::SettingsSync::poll_succeeded,
+         &app, [&, settings_ready, settings_failure_notified] (int) {
+            tray.set_connection_state (gv::ui::ConnectionState::Ready);
+            *settings_failure_notified = false;
+            if (*settings_ready) return;
+            *settings_ready = true;
+            tray.showMessage (QStringLiteral ("GrimVault ready"),
+               QStringLiteral ("Your settings are synced and item analysis is ready."),
+               QSystemTrayIcon::Information, 5000);
+         });
+
+      QObject::connect (&settings_sync, &gv::app::SettingsSync::poll_failed,
+         &app, [&, settings_failure_notified] (const QString&) {
+            if (!session.signed_in ()) return;
+            tray.set_connection_state (gv::ui::ConnectionState::Degraded);
+            if (*settings_failure_notified) return;
+            *settings_failure_notified = true;
+            tray.showMessage (QStringLiteral ("Settings temporarily unavailable"),
+               QStringLiteral ("GrimVault is using safe local defaults and will retry automatically."),
+               QSystemTrayIcon::Warning, 7000);
+         });
+
+      QObject::connect (&settings_sync, &gv::app::SettingsSync::authentication_required,
+         &app, [&, signed_state, signed_subject, settings_ready,
+                settings_failure_notified, do_sign_in] {
+            settings_sync.stop ();
+            *signed_state = false;
+            signed_subject->clear ();
+            *settings_ready = false;
+            *settings_failure_notified = false;
+            controller.set_authenticated (false);
+            if (auto scoped = scope_settings (settings_repo, std::nullopt);
+                scoped.has_value ()) {
+               settings_bridge.reload ();
+            } else {
+               gv::core::log::app.error (
+                  "settings sign-out scope failed: {}", scoped.error ().message);
+            }
+            tray.set_connection_state (gv::ui::ConnectionState::SignedOut);
+            badge.set_signed_in (false);
+            tray.showMessage (QStringLiteral ("Session expired"),
+               QStringLiteral ("Please sign in again. Your local defaults remain safe."),
+               QSystemTrayIcon::Warning, 7000);
+            if (!opts.no_auto_login) QTimer::singleShot (0, &app, do_sign_in);
+         });
+
       QObject::connect (&tray, &gv::ui::TrayIcon::sign_out_requested, &app, [&] {
          settings_sync.stop ();
          auto r = session.sign_out (/*local_only=*/ false);
          *signed_state = false;
-         tray.set_signed_in (false);
+         signed_subject->clear ();
+         *settings_ready = false;
+         *settings_failure_notified = false;
+         controller.set_authenticated (false);
+         if (auto scoped = scope_settings (settings_repo, std::nullopt);
+             scoped.has_value ()) {
+            settings_bridge.reload ();
+         } else {
+            gv::core::log::app.error (
+               "settings sign-out scope failed: {}", scoped.error ().message);
+         }
+         tray.set_connection_state (gv::ui::ConnectionState::SignedOut);
          badge.set_signed_in (false);
          if (r.has_value ()) {
             tray.showMessage (QStringLiteral ("Signed out"),
@@ -565,24 +822,53 @@ namespace {
       // whenever the state flips.
       auto* auth_watch = new QTimer (&app);
       auth_watch->setInterval (10'000);
-      QObject::connect (auth_watch, &QTimer::timeout, &app, [&, signed_state] {
+      QObject::connect (auth_watch, &QTimer::timeout, &app,
+         [&, signed_state, signed_subject, settings_failure_notified] {
 
+         session.reload ();
          const bool now = session.signed_in ();
-         if (now == *signed_state) return;
+         const auto principal = session.principal ();
+         const auto subject = principal.value_or ("");
+         const bool identity_changed = subject != *signed_subject;
+         if (now == *signed_state && !identity_changed) return;
+
+         settings_sync.stop ();
+         controller.set_authenticated (false);
+         if (identity_changed || !now) {
+            auto scoped = scope_settings (settings_repo, principal);
+            if (!scoped.has_value ()) {
+               tray.set_connection_state (gv::ui::ConnectionState::Degraded);
+               badge.set_signed_in (false);
+               gv::core::log::app.error (
+                  "settings external account scope failed: {}", scoped.error ().message);
+               if (!*settings_failure_notified) {
+                  *settings_failure_notified = true;
+                  tray.showMessage (QStringLiteral ("Settings unavailable"),
+                     QStringLiteral ("GrimVault paused to keep account settings isolated."),
+                     QSystemTrayIcon::Critical, 8000);
+               }
+               return;
+            }
+            settings_bridge.reload ();
+         }
          *signed_state = now;
+         *signed_subject = subject;
+         *settings_ready = false;
+         *settings_failure_notified = false;
 
          gv::core::log::app.info ("auth state changed externally: {}",
             now ? "signed in" : "signed out");
-         tray.set_signed_in (now);
+         tray.set_connection_state (now
+            ? gv::ui::ConnectionState::Syncing
+            : gv::ui::ConnectionState::SignedOut);
          badge.set_signed_in (now);
+         controller.set_authenticated (now, subject);
 
          if (now) {
             settings_sync.start ();
             tray.showMessage (QStringLiteral ("Signed in"),
-               QStringLiteral ("GrimVault is now connected to DarkerDB."),
+               QStringLiteral ("Loading your GrimVault settings…"),
                QSystemTrayIcon::Information, 5000);
-         } else {
-            settings_sync.stop ();
          }
       });
       auth_watch->start ();
@@ -616,27 +902,47 @@ namespace {
       QObject::connect (&tray, &gv::ui::TrayIcon::quit_requested,
          &app, &QApplication::quit);
 
-      // Env flag wins over the user setting so dev/CI can suppress unconditionally.
-      const char* dis_env = std::getenv ("GRIMVAULT_DISABLE_UPDATES");
-      const bool  disabled_by_env = dis_env && *dis_env && std::string_view { dis_env } != "0";
+      // behavior:is_auto_update_enabled, gated by the env lock resolved above.
+      // Re-evaluated on every settings change so toggling it in the
+      // dashboard starts or stops the checker without a restart.
+      auto running = std::make_shared<bool> (false);
+      auto sync_updates = [&update_service, &settings_bridge, disabled_by_env, running] {
+         const bool want = settings_bridge.auto_updates_enabled ();
 
-      bool auto_updates = true;
-      if (auto v = settings_repo.get ("general:auto_updates"); v.has_value () && v->has_value ()) {
-         auto_updates = (**v == "true" || **v == "1");
-      }
+         if (want == *running) return;
+         *running = want;
 
-      if (auto_updates && !disabled_by_env) {
-         update_service.set_check_interval_seconds (3600);
-         update_service.start ();
-      } else if (disabled_by_env) {
-         gv::core::log::update.info ("skipped (GRIMVAULT_DISABLE_UPDATES set)");
-      } else {
-         gv::core::log::update.info ("skipped (auto_updates disabled)");
-      }
+         if (want) {
+            update_service.set_check_interval_seconds (3600);
+            update_service.start ();
+            gv::core::log::update.info ("auto-updates enabled");
+            return;
+         }
+
+         update_service.stop ();
+         gv::core::log::update.info (disabled_by_env
+            ? "skipped (GRIMVAULT_DISABLE_UPDATES set)"
+            : "skipped (auto-updates disabled)");
+      };
+
+      QObject::connect (&settings_bridge, &gv::app::SettingsBridge::applied,
+         &app, sync_updates);
+      sync_updates ();
 
       const int rc = app.exec ();
 
+      // OAuth owns a blocking loopback wait and HTTP exchange. Keep every
+      // object captured by those workers alive and do not clean up libcurl
+      // until the workers have returned.
+      oauth->cancel_authorize ();
+      for (auto* worker : oauth_workers) {
+         worker->wait ();
+         delete worker;
+      }
+      oauth_workers.clear ();
+
       settings_sync.stop ();
+      controller.stop ();
       if (pipeline) pipeline->stop ();
       tracker.reset ();
       hotkeys.reset ();
@@ -644,7 +950,6 @@ namespace {
 
       gv::core::Logger::info ("GrimVault exiting with code {}", rc);
       gv::core::Logger::shutdown ();
-      gv::api::DarkerDbClient::global_cleanup ();
       return rc;
    }
 
@@ -658,10 +963,11 @@ namespace {
 
       QCoreApplication app (argc, argv);
       app.setApplicationName    (QStringLiteral ("GrimVault"));
-      app.setOrganizationName   (QStringLiteral ("DarkerDB"));
+      app.setOrganizationName   (QStringLiteral ("DDB"));
       app.setOrganizationDomain (QStringLiteral ("darkerdb.com"));
 
-      gv::api::DarkerDbClient::global_init ();
+      gv::core::http::Global http;
+      if (!http) return 1;
 
       // CLI logging goes to file but not stdout so we don't crowd subcommand
       // output. Init quietly.
@@ -671,7 +977,6 @@ namespace {
       const int rc = gv::cli::run (cli_args);
 
       gv::core::Logger::shutdown ();
-      gv::api::DarkerDbClient::global_cleanup ();
       return rc;
    }
 
@@ -696,8 +1001,11 @@ int main (int argc, char** argv)
    //
    // Recognized GUI-only flags: --hidden (from autostart entry),
    // --no-auto-login (skip the on-launch OAuth prompt), --debug (verbose
-   // logs + OCR stage dumps + debug overlay), --detached (relaunch in the
-   // background and return immediately).
+   // logs + OCR stage dumps), --debug=highlight:objects,highlight:game
+   // (explicit diagnostic borders), --detached (relaunch in the
+   // background and return immediately), --detect-only (stop the pipeline
+   // after detection; no OCR / lookup / augment), --fcr <n> (active frame
+   // capture rate, 1-60 fps).
    std::vector<std::string> cli_args;
    for (int i = 1; i < argc; ++i) cli_args.emplace_back (argv [i]);
 
@@ -705,9 +1013,13 @@ int main (int argc, char** argv)
    // same value. --env / --env=<name> is consumed from cli_args here.
    gv::core::set_active_env (gv::core::resolve_active_env (cli_args));
 
+   const double fcr = consume_fcr (cli_args);
+
    const auto is_gui_flag = [] (const std::string& a) {
       return a == "--hidden" || a == "--no-auto-login"
-          || a == "--debug"  || a == "--detached";
+          || a == "--debug"  || a.rfind ("--debug=", 0) == 0
+          || a == "--detached"
+          || a == "--detect-only";
    };
 
    const bool all_gui_flags = !cli_args.empty () &&
@@ -722,9 +1034,11 @@ int main (int argc, char** argv)
 #endif
 
       GuiOptions opts;
+      opts.fcr = fcr;
       for (const auto& a : cli_args) {
          if (a == "--no-auto-login") opts.no_auto_login = true;
-         if (a == "--debug")         opts.debug         = true;
+         if (a == "--debug" || a.rfind ("--debug=", 0) == 0) apply_debug_option (opts, a);
+         if (a == "--detect-only")   opts.detect_only   = true;
       }
       return run_gui (argc, argv, opts);
    }

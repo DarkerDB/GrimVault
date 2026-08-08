@@ -49,6 +49,7 @@ public:
       std::string window_class    = "UnrealWindow";        // "" = skip check
       std::string process_name    = "DungeonCrawler.exe";  // "" = skip check
       bool        emit_on_start   = true;     // EnumWindows probe at start
+      unsigned    reconcile_interval_ms = 500; // 0 disables missed-event polling
    };
 
    ~WindowTracker ();

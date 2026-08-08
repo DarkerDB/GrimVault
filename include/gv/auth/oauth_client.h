@@ -31,7 +31,7 @@ class OauthClient
 {
 public:
    struct Config {
-      std::string client_id;     // e.g. "grimvault"
+      std::string client_id;     // single OAuth client across all envs: "grimvault"
       std::string api_base_url;  // e.g. "https://api.dev.darkerdb.com"
       std::string auth_base_url; // e.g. "https://auth.dev.darkerdb.com"
       std::string spa_base_url;  // e.g. "https://dev.darkerdb.com" — the
@@ -58,6 +58,9 @@ public:
    // Run the full interactive flow. Blocks until the user hits the callback,
    // the user cancels, or `callback_timeout` elapses.
    core::Result<TokenResponse> authorize ();
+
+   // Interrupt a currently waiting loopback authorization. Idempotent.
+   void cancel_authorize () noexcept;
 
    // Refresh an existing refresh token. Per contract §3.3, the response MUST
    // include a new refresh token (rotation is mandatory); callers persist the

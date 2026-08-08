@@ -1,41 +1,65 @@
 <!doctype html>
 <!--
-   Augment host page, loaded by WebviewHost at https://grimvault.assets/augment.html
-   (virtual host -> this directory). Bridges native <-> ddb-tooltips:
-
-      native {type:'render', seq, entity, params}  ->  DDB.tooltips.render()
-      ResizeObserver                               ->  native {type:'size', seq, w, h}
-
-   Everything resolves locally (vendored dist under tooltips/); no network
-   at render time.
+   Hidden WebView2 render host. The native client supplies a structured DDB
+   entity; the vendored tooltip SDK owns all card markup and presentation.
+   This page owns only the transparent host, measurement bridge, and capture
+   behavior used by the native snapshot window.
 -->
 <html>
 <head>
 <meta charset="utf-8">
-<link rel="preload" as="font" type="font/ttf" href="tooltips/assets/SaintKDG_Light.ttf" crossorigin>
-<link rel="preload" as="font" type="font/ttf" href="tooltips/assets/SaintKDG_Medium.ttf" crossorigin>
-<link rel="preload" as="font" type="font/ttf" href="tooltips/assets/Pelagiad.ttf" crossorigin>
+<link rel="preload" as="font" type="font/woff2" href="tooltips/assets/SaintKDG_Light.woff2" crossorigin>
+<link rel="preload" as="font" type="font/woff2" href="tooltips/assets/SaintKDG_Medium.woff2" crossorigin>
+<link rel="preload" as="font" type="font/woff2" href="tooltips/assets/Pelagiad.woff2" crossorigin>
 <style>
+   :root {
+      /* Transparent capture headroom prevents transforms from clipping. */
+      --aug-pad: 20px;
+   }
+
    html, body {
       margin: 0;
       padding: 0;
-      background: transparent;
       overflow: hidden;
+      background: transparent;
+      pointer-events: none;
+      user-select: none;
+   }
+
+   #augment-wrap {
+      display: inline-block;
+      padding: var(--aug-pad);
+      pointer-events: none;
    }
 
    #augment {
       display: inline-block;
       pointer-events: none;
    }
+
+   #augment .ddb-tip-description {
+      white-space: pre-line;
+   }
+
+   /* The WebView is a hidden renderer. Capture the stable final frame; the
+      native snapshot window owns the visible entrance animation. */
+   html.snapshot #augment.ddb-tooltip {
+      animation: none;
+      opacity: 1;
+      transform: none;
+   }
 </style>
 <script src="tooltips/tooltip.min.js"></script>
 </head>
 <body>
-<div id="augment"></div>
+<div id="augment-wrap"><div id="augment"></div></div>
 <script>
    'use strict';
 
+   document.documentElement.classList.add ('snapshot');
+
    const target = document.getElementById ('augment');
+   const wrap   = document.getElementById ('augment-wrap');
    const bridge = window.chrome && window.chrome.webview;
 
    let seq = 0;
@@ -44,45 +68,159 @@
       DDB.tooltips.configure ({ linkBase: null });
    }
 
-   function postSize () {
+   /* Column choice, on `columns: 'auto'`.
+      Extra columns exist for one reason: a card taller than the space it is
+      placed in gets scaled down until nothing on it is readable. That is a
+      question about the rendered height, which only exists after a layout
+      pass — so the card is laid out in one column, measured, and re-laid-out
+      wide only if it actually overflowed.
 
+      Done here rather than in the host because it costs nothing here: this
+      runs before the size is ever reported, so the host sees one size and
+      takes one capture. Deciding host-side would mean render, measure,
+      re-render, re-capture.
+
+      The host's own fit-to-viewport shrink is the fallback if three columns
+      still don't fit, so a wrong guess degrades to today's behaviour. */
+   // Must match the card widths in the tooltip stylesheet.
+   const TWO_CARD_PX = 760;
+   const THREE_CARD_PX = 1160;
+
+   function autoColumns (msg) {
+      const section = msg.entity?.sections?.[0];
+      if (!section || section.columns !== 'auto') return;
+
+      const budgetH = Number (msg.entity.sections[0].budget_h) || 0;
+      const budgetW = Number (msg.entity.sections[0].budget_w) || 0;
+      if (!budgetH || !budgetW) return;
+
+      const pad = parseFloat (getComputedStyle (wrap).paddingLeft) || 0;
+      const contentBudgetH = Math.max (0, budgetH - 2 * pad);
+      const contentBudgetW = Math.max (0, budgetW - 2 * pad);
+
+      /* Fits as-is, or there is no room to go wide — either way, leave it. */
+      if (measure ().h <= contentBudgetH) return;
+      if (contentBudgetW < TWO_CARD_PX) return;
+
+      section.columns = 2;
+      DDB.tooltips.render (target, msg.entity, msg.params);
+
+      if (measure ().h <= contentBudgetH || contentBudgetW < THREE_CARD_PX) return;
+
+      section.columns = 3;
+      DDB.tooltips.render (target, msg.entity, msg.params);
+   }
+
+   function measure () {
+      return {
+         w: Math.max (target.offsetWidth,  target.scrollWidth),
+         h: Math.max (target.offsetHeight, target.scrollHeight),
+      };
+   }
+
+   function postSize () {
       if (!bridge || !seq) return;
 
-      const rect = target.getBoundingClientRect ();
-      if (rect.width < 1 || rect.height < 1) return;
+      const box = measure ();
+      const w = box.w;
+      const h = box.h;
+      if (w < 1 || h < 1) return;
 
+      const pad = parseFloat (getComputedStyle (wrap).paddingLeft) || 0;
       bridge.postMessage ({
          type: 'size',
-         seq:  seq,
-         w:    Math.ceil (rect.width),
-         h:    Math.ceil (rect.height),
+         seq,
+         w: Math.ceil (w),
+         h: Math.ceil (h),
+         pad: Math.ceil (pad),
       });
    }
 
-   // ResizeObserver alone misses same-size re-renders (no size change, no
-   // event) — the explicit post after each render covers those; the
-   // observer covers late shifts like font swap-in.
-   new ResizeObserver (postSize).observe (target);
+   /* Fonts and card art are warmed before real content. One stable layout
+      confirmation keeps the API-to-display path fast; ResizeObserver starts
+      another confirmation if a genuinely late resource changes the card. */
+   let poll = null;
+   let lastW = -1;
+   let lastH = -1;
+   let stable = 0;
+
+   function measureStable () {
+      const { w, h } = measure ();
+
+      if (w === lastW && h === lastH) {
+         if (++stable >= 1) {
+            poll = null;
+            postSize ();
+            return;
+         }
+      } else {
+         stable = 0;
+         lastW = w;
+         lastH = h;
+      }
+
+      poll = setTimeout (measureStable, 8);
+   }
+
+   function remeasure () {
+      if (poll) clearTimeout (poll);
+      lastW = -1;
+      lastH = -1;
+      stable = 0;
+      measureStable ();
+   }
+
+   /* Every icon on the card is a fixed-size <img> pointed at the CDN. Fixed
+      size means a late-arriving portrait changes no layout, so the
+      ResizeObserver never fires and the snapshot is taken of a card with a
+      hole where the art goes — which is exactly what a monster portrait the
+      cache had not seen before looked like.
+
+      Waiting on decode() closes that. Capped, because one slow asset must
+      not hold the whole card hostage: past the deadline we photograph what
+      we have and the icon simply misses this hover. */
+   const DECODE_BUDGET_MS = 350;
+
+   function whenPainted (done) {
+      const pending = [ ...target.querySelectorAll ('img') ]
+         .filter ((img) => !img.complete)
+         .map ((img) => img.decode ().catch (() => {}));
+
+      if (!pending.length) { done (); return; }
+
+      let settled = false;
+      const finish = () => { if (!settled) { settled = true; done (); } };
+
+      setTimeout (finish, DECODE_BUDGET_MS);
+      Promise.all (pending).then (finish);
+   }
+
+   new ResizeObserver (remeasure).observe (wrap);
+
+   if (bridge) bridge.postMessage ({ type: 'hello', ddb: typeof window.DDB });
 
    if (bridge) bridge.addEventListener ('message', (event) => {
-
       const msg = event.data || {};
 
       if (msg.type === 'clear') {
          seq = 0;
          target.replaceChildren ();
+         target.removeAttribute ('class');
          return;
       }
 
       if (msg.type !== 'render') return;
-
       seq = msg.seq || 0;
 
       try {
          DDB.tooltips.render (target, msg.entity, msg.params);
-         requestAnimationFrame (postSize);
+         autoColumns (msg);
+         /* Measure once immediately so a cached card is instant, then again
+            once any cold icons have decoded. */
+         remeasure ();
+         whenPainted (remeasure);
       } catch (err) {
-         bridge.postMessage ({ type: 'error', seq: seq, message: String (err) });
+         bridge.postMessage ({ type: 'error', seq, message: String (err) });
       }
    });
 </script>

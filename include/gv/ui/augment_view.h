@@ -1,6 +1,8 @@
 #pragma once
 
 #include <gv/core/result.h>
+#include <gv/ui/augment_payload.h>
+#include <gv/ui/overlay_window.h>
 #include <gv/ui/webview_host.h>
 
 #include <QRect>
@@ -41,8 +43,23 @@ public:
    ~AugmentView ();
 
    void present (const gv::api::TooltipLookup& lookup,
-                 const QRect& game, const QRect& anchor);
+                 const QRect& game, const QRect& anchor, bool animate = true);
+
    void clear ();
+
+   // Anchoring (docs/architecture/anchoring.md §7): show the card beside
+   // the anchored tooltip and follow it at presenter rate; anchor-lost
+   // hides after a short grace so transient losses never blink the card.
+   void anchor_shown (const QRect& game, const QPoint& offset, const QSize& tip,
+                      bool pinned_x, bool pinned_y, const QPoint& pin);
+
+   // immediate = a cursor-jump reset: hide now, no grace.
+   void anchor_lost (bool immediate);
+
+   // Live dashboard settings. set_layout takes effect on the next placement
+   // (opacity repaints immediately); set_options on the next render.
+   void set_layout  (const Layout& layout);
+   void set_options (const augment::Options& options);
 
 private:
    AugmentView ();

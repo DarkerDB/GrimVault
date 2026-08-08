@@ -11,6 +11,13 @@ class QVBoxLayout;
 
 namespace gv::ui {
 
+enum class ConnectionState {
+   SignedOut,
+   Syncing,
+   Ready,
+   Degraded,
+};
+
 // Frameless popup styled with the GrimVault palette (see qml/Palette.qml).
 // Rounded panel, soft shadow, palette-driven hover, single header line
 // ("GrimVault (Env) v0.0.1") with a status dot that's green when the
@@ -29,6 +36,7 @@ public:
    // Flip the auth label between "Sign In" (signed out) and "Log Out"
    // (signed in), and recolor the status dot (green/red).
    void set_signed_in (bool yes);
+   void set_connection_state (ConnectionState state);
 
    // Pop the menu so its bottom-right corner sits at `global_pos`
    // (cursor position). Clamps to the screen the cursor is on.
@@ -48,13 +56,16 @@ protected:
 
 private:
    QPushButton* auth_btn_   = nullptr;
+   QLabel*      status_label_ = nullptr;
    QWidget*     status_dot_ = nullptr;
    bool         signed_in_  = false;
+   ConnectionState state_   = ConnectionState::SignedOut;
 
    QPushButton* add_item       (QVBoxLayout* body, const QString& label);
    QWidget*     make_separator () const;
    void         refresh_dot    ();
    void         refresh_auth   ();
+   void         refresh_status ();
 };
 
 } // namespace gv::ui

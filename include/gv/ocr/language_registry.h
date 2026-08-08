@@ -17,14 +17,16 @@ namespace gv::ocr {
 // when a new family is requested past the limit.
 //
 // Used by the OCR pipeline: when the active game language changes, call
-// `acquire(family)` to get the recognizer; if not resident, it's loaded
+// `acquire(family)` to get an eviction-safe shared lease; if not resident, it is loaded
 // from <models_root>/paddle/<family-dir>/rec.onnx + dict.txt.
 class LanguageRegistry
 {
 public:
    LanguageRegistry (std::filesystem::path models_root, std::size_t max_resident = 2);
 
-   core::Result<PaddleRecognizer*> acquire (LanguageFamily family);
+   using Lease = std::shared_ptr<PaddleRecognizer>;
+
+   core::Result<Lease> acquire (LanguageFamily family);
 
    // For Diagnostics: list currently loaded families.
    std::vector<LanguageFamily> resident () const;
@@ -32,7 +34,7 @@ public:
 private:
    struct Entry {
       LanguageFamily                   family;
-      std::unique_ptr<PaddleRecognizer> rec;
+      Lease                              rec;
    };
 
    void evict_lru_locked ();

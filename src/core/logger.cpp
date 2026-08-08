@@ -22,8 +22,13 @@ namespace {
       std::error_code ec;
       std::filesystem::create_directories (log_dir, ec);
 
+      // dev-run redirects the GUI-subsystem process through a pipe so it can
+      // wait for it and display its output. Keep this sink in automatic mode:
+      // forcing the Windows console-color implementation against a redirected
+      // handle can make writes disappear. The launcher adds colors after it
+      // receives each plain-text line; file and ring sinks stay plain too.
       auto stdout_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt> ();
-      stdout_sink->set_pattern ("[%H:%M:%S.%e] [%^%l%$] %v");
+      stdout_sink->set_pattern ("[%H:%M:%S.%e] [%l] %v");
 
       auto file_sink = std::make_shared<spdlog::sinks::daily_file_sink_mt> (
          (log_dir / "grimvault.txt").string (),

@@ -1,0 +1,41 @@
+appId: com.darkerdb.grimvault
+productName: GrimVault
+directories:
+  output: dist
+  buildResources: resources
+files:
+  - assets/**/*
+  - node_modules/**/*
+  - package.json
+  - settings.ini
+  - src/**/*
+  - ui/**/*
+publish:
+  provider: s3
+  bucket: darkerdb.com
+  path: GrimVault
+  updaterCacheDirName: .update
+generateUpdatesFilesForAllChannels: true
+win:
+  icon: assets/images/Icon-324x356.png
+  target:
+    - nsis
+  requestedExecutionLevel: requireAdministrator
+  extraFiles:
+    - from: src/native/.build/
+      to: resources/dlls/
+      filter:
+        - "*.dll"
+    - from: src/native/.build
+      to: resources/
+      filter:
+        - "*.node"
+    - from: models/tesseract/
+      to: resources/models/
+    - from: models/vision/runs/detect/train/weights/best.onnx
+      to: resources/models/tooltip.onnx
+nsis:
+  oneClick: false
+  perMachine: true
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
