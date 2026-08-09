@@ -5,15 +5,15 @@
 
 #include <winsparkle/winsparkle.h>
 
-#include <atomic>
+#include <algorithm>
 #include <cstring>
+#include <limits>
 
 namespace gv::update {
 
 namespace {
 
-   UpdateService*           g_instance = nullptr;
-   std::atomic<bool>        g_started  { false };
+   UpdateService* g_instance = nullptr;
 
    void on_found      () { if (g_instance) emit g_instance->update_available (); }
    void on_dismiss    () { if (g_instance) emit g_instance->update_dismissed (); }
@@ -24,6 +24,9 @@ namespace {
 UpdateService::UpdateService (QObject* parent) : QObject (parent)
 {
    g_instance = this;
+
+   check_timer_.setInterval (60 * 60 * 1000);
+   connect (&check_timer_, &QTimer::timeout, this, &UpdateService::check_now_silent);
 
    win_sparkle_set_appcast_url    (gv::update::appcast_url);
    win_sparkle_set_app_details    (
@@ -46,13 +49,12 @@ UpdateService::~UpdateService ()
 
 void UpdateService::start ()
 {
-   if (g_started.exchange (true)) return;
+   if (initialized_) return;
 
    if (appcast_url == nullptr || std::strlen (appcast_url) == 0) {
       core::Logger::info (
-         "update: no appcast URL baked in (dev build?) — skipping auto-update init"
+         "update: no appcast URL baked in (dev build?) — skipping updater init"
       );
-      g_started.store (false);
       return;
    }
 
@@ -61,30 +63,67 @@ void UpdateService::start ()
          "update: ed25519 public key not embedded — REFUSING to enable auto-updates. "
          "Rebuild with -DGRIMVAULT_APPCAST_PUBKEY=<base64-32-byte-key> to ship updates."
       );
-      g_started.store (false);
       return;
    }
 
    win_sparkle_set_eddsa_public_key (appcast_pubkey);
+
+   // Dashboard settings are the consent surface. Keep WinSparkle's internal
+   // scheduler off so it neither asks again nor competes with check_timer_.
+   win_sparkle_set_automatic_check_for_updates (0);
    win_sparkle_init ();
+   initialized_ = true;
    core::Logger::info (
-      "update: WinSparkle initialized (appcast={}, signature verification ON)",
+      "update: WinSparkle initialized (appcast={}, signature verification ON, "
+      "dashboard-controlled scheduling ON)",
       gv::update::appcast_url
    );
 }
 
 void UpdateService::stop () noexcept
 {
-   if (!g_started.exchange (false)) return;
+   check_timer_.stop ();
+   if (!initialized_) return;
    win_sparkle_cleanup ();
+   initialized_ = false;
 }
 
-void UpdateService::check_now_with_ui () { win_sparkle_check_update_with_ui ();    }
-void UpdateService::check_now_silent  () { win_sparkle_check_update_without_ui (); }
+void UpdateService::check_now_with_ui ()
+{
+   start ();
+   if (initialized_) win_sparkle_check_update_with_ui ();
+}
+
+void UpdateService::check_now_silent ()
+{
+   start ();
+   if (initialized_) win_sparkle_check_update_without_ui ();
+}
 
 void UpdateService::set_check_interval_seconds (int seconds)
 {
-   win_sparkle_set_update_check_interval (seconds);
+   constexpr int min_seconds = 60 * 60;
+   constexpr int max_seconds = std::numeric_limits<int>::max () / 1000;
+   check_timer_.setInterval (std::clamp (seconds, min_seconds, max_seconds) * 1000);
+}
+
+void UpdateService::set_automatic_checks_enabled (bool enabled)
+{
+   if (!enabled) {
+      check_timer_.stop ();
+      return;
+   }
+
+   start ();
+   if (!initialized_ || check_timer_.isActive ()) return;
+
+   check_timer_.start ();
+
+   // Match WinSparkle's normal startup behavior without racing a setting
+   // change made before the event loop begins.
+   QTimer::singleShot (0, this, [this] {
+      if (check_timer_.isActive ()) check_now_silent ();
+   });
 }
 
 } // namespace gv::update
