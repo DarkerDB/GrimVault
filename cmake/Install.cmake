@@ -16,7 +16,18 @@
 
 # ---- Install the executable ----
 
+if (POLICY CMP0207)
+   cmake_policy (SET CMP0207 NEW)
+endif ()
+
 install (TARGETS grimvault
+   RUNTIME_DEPENDENCIES
+      DIRECTORIES "$<TARGET_FILE_DIR:grimvault>"
+      PRE_EXCLUDE_REGEXES
+         [[api-ms-win-.*]]
+         [[ext-ms-.*]]
+      POST_EXCLUDE_REGEXES
+         [[.*[\\/][Ww][Ii][Nn][Dd][Oo][Ww][Ss][\\/]([Ss][Yy][Ss][Tt][Ee][Mm]32|[Ww][Ii][Nn][Ss][Xx][Ss])[\\/].*]]
    RUNTIME DESTINATION .
    COMPONENT             application
 )
@@ -38,11 +49,10 @@ qt_generate_deploy_app_script (
 
 install (SCRIPT  "${qt_deploy_script}"  COMPONENT application)
 
-# Non-Qt runtime DLLs (OpenCV, ONNX, libcurl, etc.) discovered from imported
-# targets. TARGET_RUNTIME_DLLS resolves at install time.
-install (FILES       "$<TARGET_RUNTIME_DLLS:grimvault>"
-         DESTINATION .
-         COMPONENT   application)
+# ---- Compiler runtime ----
+set (CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION .)
+set (CMAKE_INSTALL_SYSTEM_RUNTIME_COMPONENT application)
+include (InstallRequiredSystemLibraries)
 
 # ---- Bundled data ----
 
@@ -158,9 +168,8 @@ else ()
    message (STATUS "WebView2 bootstrapper not present; installer will skip runtime check")
 endif ()
 
-# Components: bundle as a single .exe (not split-component install). Users
-# never need to pick which paddle model family to install; we ship them all.
-set (CPACK_COMPONENTS_ALL                 application models i18n assets schema)
+# ---- Required payload ----
+set (CPACK_MONOLITHIC_INSTALL             ON)
 
 # Generate a multi-resolution .ico from the source PNG at configure time
 # if it doesn't exist yet. Requires Python3 + Pillow; skips silently if

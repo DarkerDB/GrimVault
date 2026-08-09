@@ -56,6 +56,11 @@ $exe = Join-Path $destination 'grimvault.exe'
 $required = @(
    $exe,
    (Join-Path $destination 'WinSparkle.dll'),
+   (Join-Path $destination 'libcrypto-3-x64.dll'),
+   (Join-Path $destination 'libssl-3-x64.dll'),
+   (Join-Path $destination 'z.dll'),
+   (Join-Path $destination 'msvcp140.dll'),
+   (Join-Path $destination 'vcruntime140.dll'),
    (Join-Path $destination 'models\tooltip.onnx'),
    (Join-Path $destination 'plugins\platforms\qwindows.dll'),
    (Join-Path $destination 'web\augment.html')
@@ -79,6 +84,13 @@ if ($version.ProductName -ne 'GrimVault' -or $version.CompanyName -ne 'DarkerDB'
 $exeIconHash = Get-IconHash $exe
 if ($exeIconHash -ne $installerIconHash) {
    throw 'Installer and application icons do not match.'
+}
+
+$launch = Start-Process -FilePath $exe `
+   -ArgumentList '--help' `
+   -Wait -PassThru
+if ($launch.ExitCode -ne 0) {
+   throw "Installed GrimVault failed to start with exit code $($launch.ExitCode)."
 }
 
 Write-Host "Validated signed GrimVault package: $installerPath"

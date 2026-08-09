@@ -2,7 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
-## [2.0.0] - Unreleased
+## [2.0.1] - Unreleased
+
+### Fixed
+
+- Include the complete native dependency closure and Visual C++ runtime so a clean installation starts successfully.
+- Install models, translations, assets, and schema as one required payload without component selection.
+- Launch the installed binary during release validation so incomplete packages cannot publish.
+
+## [2.0.0] - 2026-08-09
 
 GrimVault 2.0 is a native 64-bit Windows companion for Dark and Darker. It
 watches the game for item tooltips, prices what you are hovering, and renders

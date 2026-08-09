@@ -15,7 +15,7 @@ A published GitHub Release runs this gate:
 4. Sign `grimvault.exe` with the SSL.com eSigner certificate.
 5. build the branded NSIS installer.
 6. Sign the installer with the same certificate.
-7. Install silently and verify Authenticode, publisher metadata, icon resources, and executable identity.
+7. Install the required monolithic payload silently, verify Authenticode, publisher metadata, icon resources, and executable identity, then launch the installed CLI.
 8. Publish the installer, SHA-256 file, symbols, and signed WinSparkle appcast.
 9. For stable production, atomically refresh the website's no-cache `latest` installer and checksum aliases.
 
@@ -81,6 +81,8 @@ Windows 11.
 - Negative monitor origins and per-monitor DPI are supported.
 - WebView2 is bootstrapped when missing. QML remains the renderer fallback.
 - The app and installer run per-user without elevation.
+- The installer exposes no optional components. Models, translations, assets, and schema are required.
+- Runtime dependency discovery and a post-install launch gate prevent incomplete packages from publishing.
 
 ## Branding
 
