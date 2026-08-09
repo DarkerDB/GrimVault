@@ -163,21 +163,15 @@ endif ()
 set (CPACK_COMPONENTS_ALL                 application models i18n assets schema)
 
 set (grimvault_installer_assets "${CMAKE_SOURCE_DIR}/assets/installer")
-foreach (grimvault_installer_asset IN ITEMS Header.bmp Welcome.bmp)
-   if (EXISTS "${grimvault_installer_assets}/${grimvault_installer_asset}")
-      file (COPY_FILE
-         "${grimvault_installer_assets}/${grimvault_installer_asset}"
-         "${grimvault_cpack_assets}/${grimvault_installer_asset}"
-         ONLY_IF_DIFFERENT)
-   endif ()
-endforeach ()
+if (EXISTS "${grimvault_installer_assets}/Header.bmp")
+   file (COPY_FILE
+      "${grimvault_installer_assets}/Header.bmp"
+      "${grimvault_cpack_assets}/Header.bmp"
+      ONLY_IF_DIFFERENT)
+endif ()
 
 if (EXISTS "${grimvault_cpack_assets}/Header.bmp")
    set (CPACK_NSIS_MUI_HEADERIMAGE "${grimvault_cpack_assets}/Header.bmp")
-endif ()
-if (EXISTS "${grimvault_cpack_assets}/Welcome.bmp")
-   set (CPACK_NSIS_MUI_WELCOMEFINISHPAGE_BITMAP "${grimvault_cpack_assets}/Welcome.bmp")
-   set (CPACK_NSIS_MUI_UNWELCOMEFINISHPAGE_BITMAP "${grimvault_cpack_assets}/Welcome.bmp")
 endif ()
 
 # Generate a multi-resolution .ico from the source PNG at configure time
