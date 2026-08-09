@@ -40,6 +40,7 @@ env:
    TARGET_ENV: ${{ github.event_name == 'release' && 'prod' || inputs.target_env }}
    VCPKG_COMMIT: 2b65c20fc66eda893aa15a15a453c3cf09500b19
    VCPKG_BINARY_SOURCES: clear;files,V:\.vcpkg-cache,readwrite
+   PACKAGE_DIR: V:\package
 
 jobs:
    compatibility:
@@ -177,7 +178,17 @@ jobs:
 
          - name: Package
            shell: pwsh
-           run: cmake --build --preset "release-windows-$env:TARGET_ENV" --target package
+           run: |
+              $build = "build/release-windows-$env:TARGET_ENV"
+              New-Item -ItemType Directory -Force $env:PACKAGE_DIR | Out-Null
+              cpack --config "$build/CPackConfig.cmake" -B $env:PACKAGE_DIR
+              $packageExitCode = $LASTEXITCODE
+
+              if ($packageExitCode -ne 0) {
+                 Get-ChildItem $env:PACKAGE_DIR -Filter NSISOutput.log -Recurse -ErrorAction SilentlyContinue |
+                    ForEach-Object { Get-Content $_.FullName }
+                 exit $packageExitCode
+              }
 
          - name: Sign installer
            shell: pwsh
@@ -187,7 +198,7 @@ jobs:
               SSL_COM_CREDENTIAL_ID: ${{ secrets.SSL_COM_CREDENTIAL_ID }}
               SSL_COM_TOTP_SECRET: ${{ secrets.SSL_COM_TOTP_SECRET }}
            run: |
-              $installer = Get-ChildItem "build/release-windows-$env:TARGET_ENV/GrimVault-Setup-*.exe" |
+              $installer = Get-ChildItem "$env:PACKAGE_DIR/GrimVault-Setup-*.exe" |
                  Select-Object -First 1
               if (-not $installer) { throw 'CPack did not produce an installer.' }
               tools\release\sign-windows.ps1 -Path $installer.FullName
@@ -195,7 +206,7 @@ jobs:
          - name: Validate signed package
            shell: pwsh
            run: |
-              $installer = Get-ChildItem "build/release-windows-$env:TARGET_ENV/GrimVault-Setup-*.exe" |
+              $installer = Get-ChildItem "$env:PACKAGE_DIR/GrimVault-Setup-*.exe" |
                  Select-Object -First 1
               tools\release\validate-package.ps1 -Installer $installer.FullName
 
@@ -203,7 +214,7 @@ jobs:
            shell: pwsh
            run: |
               $build = "build/release-windows-$env:TARGET_ENV"
-              $installer = Get-ChildItem "$build/GrimVault-Setup-*.exe" | Select-Object -First 1
+              $installer = Get-ChildItem "$env:PACKAGE_DIR/GrimVault-Setup-*.exe" | Select-Object -First 1
               New-Item -ItemType Directory -Force artifacts | Out-Null
               Copy-Item $installer.FullName artifacts\
 
