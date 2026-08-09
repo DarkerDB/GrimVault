@@ -87,7 +87,9 @@ Windows 11.
 ## Branding
 
 The executable, installer, Start Menu shortcut, desktop shortcut, welcome
-art, uninstaller, and version metadata all use GrimVault branding.
+art, uninstaller, and version metadata all use GrimVault branding. Release
+validation requires the Start Menu shortcut to resolve to the installed
+executable before publication.
 
 Source art is under `assets/images/`. Installer art is under
 `assets/installer/`. Regenerate both with `tools/build/png_to_ico.py`.

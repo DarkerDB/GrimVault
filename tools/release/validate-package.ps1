@@ -71,6 +71,21 @@ foreach ($path in $required) {
    }
 }
 
+$programs = [Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)
+$shortcutPath = Join-Path $programs 'GrimVault\GrimVault.lnk'
+if (-not (Test-Path $shortcutPath)) {
+   throw "Installer omitted the Start Menu shortcut: $shortcutPath"
+}
+
+$shell = New-Object -ComObject WScript.Shell
+$shortcut = $shell.CreateShortcut($shortcutPath)
+$shortcutTarget = [IO.Path]::GetFullPath($shortcut.TargetPath)
+$expectedTarget = [IO.Path]::GetFullPath($exe)
+if (-not [string]::Equals($shortcutTarget, $expectedTarget,
+      [StringComparison]::OrdinalIgnoreCase)) {
+   throw "Start Menu shortcut targets '$shortcutTarget' instead of '$expectedTarget'."
+}
+
 $exeSignature = Get-AuthenticodeSignature $exe
 if ($exeSignature.Status -ne 'Valid') {
    throw "Installed GrimVault executable is not signed: $($exeSignature.StatusMessage)"
