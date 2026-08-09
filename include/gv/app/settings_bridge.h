@@ -45,6 +45,9 @@ public:
       // --no-updates / GRIMVAULT_DISABLE_UPDATES: the dashboard's
       // auto-update toggle must not re-enable what the CLI turned off.
       bool                      updates_locked_off = false;
+
+      // --fcr is an explicit process-level override of the cloud setting.
+      bool                      capture_fps_locked = false;
    };
 
    explicit SettingsBridge (Dependencies deps, QObject* parent = nullptr);

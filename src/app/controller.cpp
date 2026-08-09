@@ -618,6 +618,11 @@ void Controller::set_configured_mode (Mode m)
    emit modeChanged (m);
 }
 
+void Controller::set_capture_fps (int fps)
+{
+   if (impl_->deps.pipeline) impl_->deps.pipeline->set_capture_fps (fps);
+}
+
 std::string Controller::accelerator_for (std::string_view action) const
 {
    std::lock_guard lk { impl_->hk_lock };

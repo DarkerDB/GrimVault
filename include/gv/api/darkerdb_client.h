@@ -297,7 +297,8 @@ struct TooltipLookup {
 //      "tooltip":  { "sections": { "header", ... }, "analysis": { "market_value", ... },
 //                    "is_price_history_sparkline_visible" },
 //      "pricing":  { "currency_display" },
-//      "behavior": { "is_auto_update_enabled", "is_launch_on_startup_enabled" },
+//      "behavior": { "is_auto_update_enabled", "is_launch_on_startup_enabled",
+//                    "capture_fps" },
 //      "hotkeys":  { "toggle_overlay", "force_refresh" },
 //      "updated_at": "..." }
 //
@@ -360,6 +361,7 @@ struct SettingsBundle {
    struct Behavior {
       bool is_auto_update_enabled       = true;
       bool is_launch_on_startup_enabled = true;
+      std::int32_t capture_fps          = 15;
    };
 
    struct Hotkeys {

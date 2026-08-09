@@ -94,6 +94,9 @@ public:
    // actually configured, rather than always landing on Auto.
    void set_configured_mode (Mode m);
 
+   // Apply the dashboard's maximum capture/readback rate live.
+   void set_capture_fps (int fps);
+
    // Action entry points. Each is safe to call from any thread; the heavy
    // lifting happens via QMetaObject::invokeMethod queued connection.
    void action_scan_now       ();

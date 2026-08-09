@@ -48,6 +48,7 @@ public:
       double                      active_fps         = 15.0;
       double                      anchored_fps       = 60.0;
       double                      anchored_burst_fps = 120.0;
+      double                      capture_fps        = 15.0;
       std::chrono::milliseconds   anchored_burst     { 150 };
       double                      idle_fps           = 3.0;
       std::chrono::milliseconds   idle_window        { 2000 };
@@ -119,6 +120,9 @@ public:
    // Manual keeps the pipeline armed but captures only after an immediate scan.
    void set_enabled   (bool on);
    void set_automatic (bool on);
+
+   // Maximum full-frame GPU readbacks per second. Applies immediately.
+   void set_capture_fps (double fps);
 
    void set_language (LanguageFamily f);
 
