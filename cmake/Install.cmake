@@ -133,10 +133,15 @@ set (CPACK_CREATE_DESKTOP_LINKS           "grimvault")
 # silently when the EdgeUpdate client key is absent. Per-user install, so
 # no UAC. Without the bootstrapper file the installer still builds; the app
 # then falls back to the QML renderer on machines missing the runtime.
+set (grimvault_cpack_assets "${CMAKE_BINARY_DIR}/cpack-assets")
+file (MAKE_DIRECTORY "${grimvault_cpack_assets}")
+
 set (grimvault_wv2_bootstrapper "${CMAKE_SOURCE_DIR}/tools/build/MicrosoftEdgeWebView2Setup.exe")
 
 if (EXISTS "${grimvault_wv2_bootstrapper}")
-   string (REPLACE "/" "\\\\" grimvault_wv2_bootstrapper_nsis "${grimvault_wv2_bootstrapper}")
+   set (grimvault_wv2_staged "${grimvault_cpack_assets}/MicrosoftEdgeWebView2Setup.exe")
+   file (COPY_FILE "${grimvault_wv2_bootstrapper}" "${grimvault_wv2_staged}" ONLY_IF_DIFFERENT)
+   string (REPLACE "/" "\\\\" grimvault_wv2_bootstrapper_nsis "${grimvault_wv2_staged}")
    set (CPACK_NSIS_EXTRA_INSTALL_COMMANDS "
       ClearErrors
       ReadRegStr $0 HKLM 'SOFTWARE\\\\WOW6432Node\\\\Microsoft\\\\EdgeUpdate\\\\Clients\\\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' 'pv'
@@ -158,12 +163,21 @@ endif ()
 set (CPACK_COMPONENTS_ALL                 application models i18n assets schema)
 
 set (grimvault_installer_assets "${CMAKE_SOURCE_DIR}/assets/installer")
-if (EXISTS "${grimvault_installer_assets}/Header.bmp")
-   set (CPACK_NSIS_MUI_HEADERIMAGE "${grimvault_installer_assets}/Header.bmp")
+foreach (grimvault_installer_asset IN ITEMS Header.bmp Welcome.bmp)
+   if (EXISTS "${grimvault_installer_assets}/${grimvault_installer_asset}")
+      file (COPY_FILE
+         "${grimvault_installer_assets}/${grimvault_installer_asset}"
+         "${grimvault_cpack_assets}/${grimvault_installer_asset}"
+         ONLY_IF_DIFFERENT)
+   endif ()
+endforeach ()
+
+if (EXISTS "${grimvault_cpack_assets}/Header.bmp")
+   set (CPACK_NSIS_MUI_HEADERIMAGE "${grimvault_cpack_assets}/Header.bmp")
 endif ()
-if (EXISTS "${grimvault_installer_assets}/Welcome.bmp")
-   set (CPACK_NSIS_MUI_WELCOMEFINISHPAGE_BITMAP "${grimvault_installer_assets}/Welcome.bmp")
-   set (CPACK_NSIS_MUI_UNWELCOMEFINISHPAGE_BITMAP "${grimvault_installer_assets}/Welcome.bmp")
+if (EXISTS "${grimvault_cpack_assets}/Welcome.bmp")
+   set (CPACK_NSIS_MUI_WELCOMEFINISHPAGE_BITMAP "${grimvault_cpack_assets}/Welcome.bmp")
+   set (CPACK_NSIS_MUI_UNWELCOMEFINISHPAGE_BITMAP "${grimvault_cpack_assets}/Welcome.bmp")
 endif ()
 
 # Generate a multi-resolution .ico from the source PNG at configure time
@@ -201,9 +215,11 @@ if (NOT EXISTS "${grimvault_icon_ico}" AND EXISTS "${grimvault_icon_png}")
 endif ()
 
 if (EXISTS "${grimvault_icon_ico}")
+   set (grimvault_icon_staged "${grimvault_cpack_assets}/GrimVault.ico")
+   file (COPY_FILE "${grimvault_icon_ico}" "${grimvault_icon_staged}" ONLY_IF_DIFFERENT)
    set (CPACK_NSIS_INSTALLED_ICON_NAME    "grimvault.exe")
-   set (CPACK_NSIS_MUI_ICON               "${grimvault_icon_ico}")
-   set (CPACK_NSIS_MUI_UNIICON            "${grimvault_icon_ico}")
+   set (CPACK_NSIS_MUI_ICON               "${grimvault_icon_staged}")
+   set (CPACK_NSIS_MUI_UNIICON            "${grimvault_icon_staged}")
 endif ()
 
 # CPack's stock NSIS template hard-codes an administrator manifest and exposes
