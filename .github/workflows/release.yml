@@ -39,6 +39,7 @@ env:
    RELEASE_VERSION: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.version || '0.0.0-dev' }}
    TARGET_ENV: ${{ github.event_name == 'release' && 'prod' || inputs.target_env }}
    VCPKG_COMMIT: 2b65c20fc66eda893aa15a15a453c3cf09500b19
+   VCPKG_BINARY_SOURCES: clear;files,V:\.vcpkg-cache,readwrite
 
 jobs:
    compatibility:
@@ -102,7 +103,7 @@ jobs:
            uses: actions/cache/restore@v4
            with:
               path: |
-                 ${{ env.LOCALAPPDATA }}\vcpkg\archives
+                 .vcpkg-cache
               key: vcpkg-windows-2022-release-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'tools/release/triplets/**') }}
               restore-keys: vcpkg-windows-2022-release-${{ env.VCPKG_COMMIT }}-
 
@@ -145,7 +146,7 @@ jobs:
            uses: actions/cache/save@v4
            with:
               path: |
-                 ${{ env.LOCALAPPDATA }}\vcpkg\archives
+                 .vcpkg-cache
               key: vcpkg-windows-2022-release-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'tools/release/triplets/**') }}
 
          - name: Build
@@ -156,6 +157,10 @@ jobs:
            shell: pwsh
            run: |
               $build = "build/release-windows-$env:TARGET_ENV"
+              $qtBin = Join-Path $env:QT_ROOT_DIR 'bin'
+              $opencvBin = Join-Path (Split-Path $env:OpenCV_DIR -Parent) 'bin'
+              $vcpkgBin = Join-Path $build 'vcpkg_installed\x64-windows-release\bin'
+              $env:PATH = "$qtBin;$opencvBin;$vcpkgBin;$env:PATH"
               ctest --test-dir $build --output-on-failure -L unit
               ctest --test-dir $build --output-on-failure -L e2e
 
