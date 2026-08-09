@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QTimer>
 
 namespace gv::update {
 
@@ -8,9 +9,10 @@ namespace gv::update {
 // binary at build time via the GRIMVAULT_APPCAST_URL CMake variable
 // (defaults to https://katforge-releases.s3.us-west-2.amazonaws.com/grimvault/appcast.xml).
 //
-// Lifecycle: construct once at app start, call start() after the main
-// window is shown. WinSparkle owns its own check thread; stop() must run
-// before app exit.
+// Lifecycle: construct once at app start, then call start() after the main
+// window is shown. WinSparkle's scheduler stays disabled: the dashboard
+// setting controls this service's timer, avoiding WinSparkle's separate
+// first-run consent and keeping live setting changes authoritative.
 class UpdateService : public QObject
 {
    Q_OBJECT
@@ -26,11 +28,16 @@ public:
    void check_now_silent  ();
 
    void set_check_interval_seconds (int seconds);
+   void set_automatic_checks_enabled (bool enabled);
 
 signals:
    void update_available ();
    void update_dismissed ();
    void update_error     ();
+
+private:
+   QTimer check_timer_;
+   bool   initialized_ = false;
 };
 
 } // namespace gv::update

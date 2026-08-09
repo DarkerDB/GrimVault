@@ -904,24 +904,25 @@ namespace {
       QObject::connect (&tray, &gv::ui::TrayIcon::quit_requested,
          &app, &QApplication::quit);
 
+      update_service.set_check_interval_seconds (3600);
+      update_service.start ();
+
       // behavior:is_auto_update_enabled, gated by the env lock resolved above.
       // Re-evaluated on every settings change so toggling it in the
       // dashboard starts or stops the checker without a restart.
-      auto running = std::make_shared<bool> (false);
+      auto running = std::make_shared<std::optional<bool>> ();
       auto sync_updates = [&update_service, &settings_bridge, disabled_by_env, running] {
          const bool want = settings_bridge.auto_updates_enabled ();
 
-         if (want == *running) return;
+         if (running->has_value () && want == **running) return;
          *running = want;
+         update_service.set_automatic_checks_enabled (want);
 
          if (want) {
-            update_service.set_check_interval_seconds (3600);
-            update_service.start ();
             gv::core::log::update.info ("auto-updates enabled");
             return;
          }
 
-         update_service.stop ();
          gv::core::log::update.info (disabled_by_env
             ? "skipped (GRIMVAULT_DISABLE_UPDATES set)"
             : "skipped (auto-updates disabled)");
