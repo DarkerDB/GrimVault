@@ -92,6 +92,11 @@ jobs:
               path: vcpkg
               fetch-depth: 1
 
+         - name: Map short vcpkg path
+           shell: pwsh
+           run: |
+              subst V: "$env:GITHUB_WORKSPACE"
+
          - name: Bootstrap pinned vcpkg
            shell: pwsh
            run: vcpkg\bootstrap-vcpkg.bat -disableMetrics
@@ -104,7 +109,7 @@ jobs:
          - name: Configure
            shell: pwsh
            env:
-              VCPKG_ROOT: ${{ github.workspace }}\vcpkg
+              VCPKG_ROOT: V:\vcpkg
            run: |
               $preset = "release-windows-$env:TARGET_ENV"
               cmake --preset $preset `
