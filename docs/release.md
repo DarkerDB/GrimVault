@@ -51,6 +51,12 @@ signs in place, and verifies both PowerShell Authenticode status and
 WinSparkle verifies every enclosure with the Ed25519 public key embedded by
 `cmake/AppcastUrl.cmake`.
 
+The DarkerDB dashboard's **Automatically check for updates** setting is the
+only automatic-check consent surface and defaults to on. GrimVault disables
+WinSparkle's built-in scheduler and consent dialog, then performs signed checks
+hourly while that cloud setting is enabled. Manual tray checks remain available
+when it is disabled.
+
 | Environment | Stable feed | Beta feed |
 |---|---|---|
 | `dev` | disabled | disabled |
