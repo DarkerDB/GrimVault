@@ -353,6 +353,15 @@ set_target_properties (grimvault PROPERTIES
    OUTPUT_NAME      grimvault
 )
 
+# ---- Runtime staging ----
+add_custom_command (TARGET grimvault POST_BUILD
+   COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+           "$<TARGET_RUNTIME_DLLS:grimvault>"
+           "$<TARGET_FILE_DIR:grimvault>"
+   VERBATIM
+   COMMAND_EXPAND_LISTS
+)
+
 # vcpkg's applocal.ps1 stages Qt6Core(d).dll and co., but not Qt plugins
 # (platforms/, imageformats/, etc.). Without the platforms plugin Qt fails
 # to start. Copy them ourselves from vcpkg's installed Qt6/plugins tree.

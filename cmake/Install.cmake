@@ -20,11 +20,6 @@ if (POLICY CMP0207)
    cmake_policy (SET CMP0207 NEW)
 endif ()
 
-# ---- Direct runtime dependencies ----
-install (FILES       "$<TARGET_RUNTIME_DLLS:grimvault>"
-         DESTINATION .
-         COMPONENT   application)
-
 install (TARGETS grimvault
    RUNTIME_DEPENDENCIES
       DIRECTORIES "$<TARGET_FILE_DIR:grimvault>"
