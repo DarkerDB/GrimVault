@@ -437,9 +437,13 @@ public:
    // bundle. Source of truth for any key the server manages.
    core::Result<SettingsBundle> get_settings ();
 
-   // Abort current transfers. Safe to call from another thread and reusable;
-   // future requests are assigned a new cancellation generation.
+   /// Abort current transfers. Safe to call from another thread and reusable;
+   /// future requests are assigned a new cancellation generation.
    void cancel_pending () noexcept;
+
+   /// Abort only the latency-critical tooltip lane. Settings and session work
+   /// continue while a newly hovered item supersedes an older analysis.
+   void cancel_analysis () noexcept;
 
 private:
    struct Impl;

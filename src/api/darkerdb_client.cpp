@@ -833,7 +833,8 @@ struct DDBClient::Impl
 {
    Config             cfg;
    gv::auth::Session* session  = nullptr;
-   std::atomic<std::uint64_t> cancel_epoch { 0 };
+   std::atomic<std::uint64_t> general_cancel_epoch { 0 };
+   std::atomic<std::uint64_t> analysis_cancel_epoch { 0 };
 
    struct Req {
       std::string_view  method;       // "GET" or "POST"
@@ -920,6 +921,7 @@ struct DDBClient::Impl
    {
       auto& lane_lock = req.latency_critical ? analysis_curl_lock : general_curl_lock;
       auto& lane_curl = req.latency_critical ? analysis_curl      : general_curl;
+      auto& cancel_epoch = req.latency_critical ? analysis_cancel_epoch : general_cancel_epoch;
       std::lock_guard lock { lane_lock };
 
       if (!lane_curl) lane_curl = curl_easy_init ();
@@ -1123,7 +1125,13 @@ DDBClient::~DDBClient () = default;
 
 void DDBClient::cancel_pending () noexcept
 {
-   impl_->cancel_epoch.fetch_add (1, std::memory_order_relaxed);
+   impl_->general_cancel_epoch.fetch_add (1, std::memory_order_relaxed);
+   impl_->analysis_cancel_epoch.fetch_add (1, std::memory_order_relaxed);
+}
+
+void DDBClient::cancel_analysis () noexcept
+{
+   impl_->analysis_cancel_epoch.fetch_add (1, std::memory_order_relaxed);
 }
 
 core::Result<TooltipLookup> DDBClient::lookup_tooltip (
