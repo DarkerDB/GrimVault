@@ -122,7 +122,7 @@ grimvault_add_module (db)
 target_link_libraries (gv_db PUBLIC
    gv::core
    SQLiteCpp
-   SQLite3::SQLite3
+   SQLite::SQLite3
    nlohmann_json::nlohmann_json
 )
 grimvault_embed_sql (gv_db
