@@ -171,6 +171,18 @@ else ()
    message (STATUS "WebView2 bootstrapper not present; installer will skip runtime check")
 endif ()
 
+# CPack skips its Start Menu macro during silent installs. Create the canonical
+# shortcut after either install mode and overwrite any stock shortcut so its
+# target is always the root-level executable.
+string (APPEND CPACK_NSIS_EXTRA_INSTALL_COMMANDS "
+   CreateDirectory '$SMPROGRAMS\\\\GrimVault'
+   CreateShortCut '$SMPROGRAMS\\\\GrimVault\\\\GrimVault.lnk' '$INSTDIR\\\\grimvault.exe' '' '$INSTDIR\\\\grimvault.exe' 0
+")
+string (APPEND CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS "
+   Delete '$SMPROGRAMS\\\\GrimVault\\\\GrimVault.lnk'
+   RMDir '$SMPROGRAMS\\\\GrimVault'
+")
+
 # ---- Required payload ----
 set (CPACK_MONOLITHIC_INSTALL             ON)
 
