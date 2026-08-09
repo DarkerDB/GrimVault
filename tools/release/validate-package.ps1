@@ -71,10 +71,16 @@ foreach ($path in $required) {
    }
 }
 
-$programs = [Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)
-$shortcutPath = Join-Path $programs 'GrimVault\GrimVault.lnk'
-if (-not (Test-Path $shortcutPath)) {
-   throw "Installer omitted the Start Menu shortcut: $shortcutPath"
+$programRoots = @(
+   [Environment]::GetFolderPath([Environment+SpecialFolder]::Programs),
+   [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonPrograms)
+) | Where-Object { $_ } | Select-Object -Unique
+$shortcutPaths = @($programRoots | ForEach-Object {
+   Join-Path $_ 'GrimVault\GrimVault.lnk'
+})
+$shortcutPath = $shortcutPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $shortcutPath) {
+   throw "Installer omitted the Start Menu shortcut: $($shortcutPaths -join ', ')"
 }
 
 $shell = New-Object -ComObject WScript.Shell
