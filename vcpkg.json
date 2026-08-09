@@ -2,6 +2,7 @@
    "name":        "grimvault",
    "version-string": "0.0.0",
    "builtin-baseline": "2b65c20fc66eda893aa15a15a453c3cf09500b19",
+   "default-features": [ "source-dependencies" ],
    "dependencies": [
       "cppwinrt",
       { "name": "curl",      "features": [ "openssl" ] },
@@ -10,12 +11,7 @@
       "fmt",
       "gtest",
       "nlohmann-json",
-      "opencv",
       "openssl",
-      { "name": "qtbase",       "features": [ "widgets" ] },
-      "qtcharts",
-      "qtdeclarative",
-      "qttools",
       "spscqueue",
       "spdlog",
       { "name": "sqlite3", "features": [ "fts5", "json1" ] },
@@ -24,5 +20,17 @@
       "webview2",
       "wil",
       "winsparkle"
-   ]
+   ],
+   "features": {
+      "source-dependencies": {
+         "description": "Build Qt and OpenCV from source for local development",
+         "dependencies": [
+            "opencv",
+            { "name": "qtbase", "features": [ "widgets" ] },
+            "qtcharts",
+            "qtdeclarative",
+            "qttools"
+         ]
+      }
+   }
 }
