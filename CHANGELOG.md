@@ -2,7 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
-## [2.0.1] - Unreleased
+## [2.0.2] - Unreleased
+
+### Fixed
+
+- Point installed Start Menu and desktop shortcuts at the root-level GrimVault executable.
+- Validate the installed Start Menu shortcut target before publishing a release.
+
+## [2.0.1] - 2026-08-09
 
 ### Fixed
 

@@ -133,6 +133,9 @@ set (CPACK_NSIS_REQUEST_EXECUTION_LEVEL   user)
 set (CPACK_NSIS_INSTALL_ROOT              "$LOCALAPPDATA\\Programs")
 
 # Start Menu + uninstaller shortcuts.
+# CPack assumes packaged executables live under bin unless told otherwise.
+# GrimVault deliberately installs its executable and DLLs at the install root.
+set (CPACK_NSIS_EXECUTABLES_DIRECTORY     ".")
 set (CPACK_PACKAGE_EXECUTABLES            "grimvault" "GrimVault")
 set (CPACK_CREATE_DESKTOP_LINKS           "grimvault")
 
