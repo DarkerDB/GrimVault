@@ -118,7 +118,8 @@ struct WgcStrategy::Impl
    Direct3D11CaptureFramePool                cont_pool    { nullptr };
    GraphicsCaptureSession                    cont_session { nullptr };
    winrt::event_token                        cont_token   {};
-   Frame                                     cont_latest;
+   Direct3D11CaptureFrame                    cont_latest  { nullptr };
+   ComPtr<ID3D11Texture2D>                   cont_staging;
    std::atomic<bool>                         cont_active  { false };
    std::uint64_t                             cont_monitor_id = 0;
    std::uint64_t                             cont_window_id  = 0;
@@ -486,6 +487,7 @@ core::Result<void> WgcStrategy::start_continuous (void* target, bool is_window)
    }
 
    stop_continuous ();
+   impl_->cont_active.store (true, std::memory_order_relaxed);
 
    try {
       if (!is_window) target = resolve_monitor (static_cast<HMONITOR> (target));
@@ -519,86 +521,30 @@ core::Result<void> WgcStrategy::start_continuous (void* target, bool is_window)
       impl_->cont_is_window  = is_window;
       impl_->cont_width      = size.Width;
       impl_->cont_height     = size.Height;
-      impl_->cont_active.store (true);
+      {
+         std::lock_guard lk { impl_->cont_lock };
+         impl_->cont_latest = nullptr;
+      }
+      impl_->cont_staging.Reset ();
 
       impl_->cont_token = impl_->cont_pool.FrameArrived (
-         [this, is_window] (auto&& sender, auto&&) {
+         [this] (auto&& sender, auto&&) {
             auto next = sender.TryGetNextFrame ();
             if (!next) return;
 
-            const auto content_size = next.ContentSize ();
-            if (content_size.Width <= 0 || content_size.Height <= 0) return;
-            if (content_size.Width != impl_->cont_width
-                  || content_size.Height != impl_->cont_height) {
-               impl_->cont_width  = content_size.Width;
-               impl_->cont_height = content_size.Height;
+            if (!impl_->cont_active.load (std::memory_order_relaxed)) {
                next.Close ();
-               sender.Recreate (
-                  impl_->winrt_device,
-                  DirectXPixelFormat::B8G8R8A8UIntNormalized,
-                  2,
-                  content_size);
-               core::Logger::info ("wgc: frame pool resized to {}x{}",
-                  content_size.Width, content_size.Height);
                return;
             }
 
-            auto surface = next.Surface ();
-            auto access  = surface.as<::IDirect3DDxgiInterfaceAccess> ();
-
-            ComPtr<ID3D11Texture2D> source;
-            if (FAILED (access->GetInterface (
-                  __uuidof (ID3D11Texture2D),
-                  reinterpret_cast<void**> (source.GetAddressOf ())))) return;
-
-            D3D11_TEXTURE2D_DESC desc {};
-            source->GetDesc (&desc);
-
-            D3D11_TEXTURE2D_DESC staging = desc;
-            staging.Usage          = D3D11_USAGE_STAGING;
-            staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-            staging.BindFlags      = 0;
-            staging.MiscFlags      = 0;
-
-            ComPtr<ID3D11Texture2D> staging_tex;
-            if (FAILED (impl_->d3d_device->CreateTexture2D (&staging, nullptr, staging_tex.GetAddressOf ()))) return;
-
-            impl_->d3d_context->CopyResource (staging_tex.Get (), source.Get ());
-
-            D3D11_MAPPED_SUBRESOURCE map {};
-            if (FAILED (impl_->d3d_context->Map (staging_tex.Get (), 0, D3D11_MAP_READ, 0, &map))) return;
-
-            const int width  = static_cast<int> (desc.Width);
-            const int height = static_cast<int> (desc.Height);
-            const int stride = static_cast<int> (map.RowPitch);
-            const POINT origin = is_window
-               ? window_origin (static_cast<HWND> (impl_->cont_target), width, height)
-               : monitor_origin (static_cast<HMONITOR> (impl_->cont_target));
-
-            auto pixels = std::shared_ptr<std::uint8_t []> (
-               new std::uint8_t [ static_cast<std::size_t> (stride) * height ]
-            );
-            std::memcpy (pixels.get (), map.pData, static_cast<std::size_t> (stride) * height);
-
-            impl_->d3d_context->Unmap (staging_tex.Get (), 0);
-
-            Frame f {
-               .data       = std::move (pixels),
-               .width      = width,
-               .height     = height,
-               .stride     = stride,
-               .origin_x   = origin.x,
-               .origin_y   = origin.y,
-               .dpi_scale  = 1.0,
-               .monitor_id = impl_->cont_monitor_id,
-               .window_id  = impl_->cont_window_id,
-               .timestamp  = std::chrono::steady_clock::now (),
-               .cursor     = cursor_now (),
-            };
-
             {
                std::lock_guard lk { impl_->cont_lock };
-               impl_->cont_latest = std::move (f);
+               if (!impl_->cont_active.load (std::memory_order_relaxed)) {
+                  next.Close ();
+                  return;
+               }
+               if (impl_->cont_latest) impl_->cont_latest.Close ();
+               impl_->cont_latest = std::move (next);
             }
             impl_->cont_cv.notify_one ();
          }
@@ -610,6 +556,7 @@ core::Result<void> WgcStrategy::start_continuous (void* target, bool is_window)
          size.Width, size.Height, is_window ? "window" : "monitor");
       return {};
    } catch (const winrt::hresult_error& e) {
+      stop_continuous ();
       return core::fail (core::Error::make (core::ErrorKind::Capture,
          "wgc: start_continuous failed: {}", winrt::to_string (e.message ())));
    }
@@ -621,15 +568,137 @@ core::Result<Frame> WgcStrategy::latest_frame (std::chrono::milliseconds timeout
       return core::fail (core::Error::make (core::ErrorKind::Capture, "wgc: continuous not active"));
    }
 
-   std::unique_lock lk { impl_->cont_lock };
-
-   if (!impl_->cont_cv.wait_for (lk, timeout, [this] { return !impl_->cont_latest.empty (); })) {
-      return core::fail (core::Error::make (core::ErrorKind::Capture, "wgc: latest_frame timeout"));
+   Direct3D11CaptureFrame captured { nullptr };
+   {
+      std::unique_lock lk { impl_->cont_lock };
+      if (!impl_->cont_cv.wait_for (lk, timeout, [this] {
+            return impl_->cont_latest || !impl_->cont_active.load (std::memory_order_relaxed);
+         })) {
+         return core::fail (core::Error::make (core::ErrorKind::Capture, "wgc: latest_frame timeout"));
+      }
+      if (!impl_->cont_active.load (std::memory_order_relaxed)) {
+         return core::fail (core::Error::make (core::ErrorKind::Capture, "wgc: continuous stopped"));
+      }
+      captured = std::move (impl_->cont_latest);
+      impl_->cont_latest = nullptr;
    }
 
-   Frame snapshot = impl_->cont_latest;
-   impl_->cont_latest = Frame {};        // consume — next caller waits for a fresh frame
-   return snapshot;
+   try {
+      const auto content_size = captured.ContentSize ();
+      if (content_size.Width <= 0 || content_size.Height <= 0) {
+         captured.Close ();
+         return core::fail (core::Error::make (core::ErrorKind::Capture, "wgc: empty frame"));
+      }
+
+      if (content_size.Width != impl_->cont_width
+            || content_size.Height != impl_->cont_height) {
+         impl_->cont_width  = content_size.Width;
+         impl_->cont_height = content_size.Height;
+         impl_->cont_staging.Reset ();
+         captured.Close ();
+         impl_->cont_pool.Recreate (
+            impl_->winrt_device,
+            DirectXPixelFormat::B8G8R8A8UIntNormalized,
+            2,
+            content_size);
+         core::Logger::info ("wgc: frame pool resized to {}x{}",
+            content_size.Width, content_size.Height);
+         return core::fail (core::Error::make (core::ErrorKind::Capture, "wgc: frame pool resized"));
+      }
+
+      auto surface = captured.Surface ();
+      auto access  = surface.as<::IDirect3DDxgiInterfaceAccess> ();
+
+      ComPtr<ID3D11Texture2D> source;
+      HRESULT hr = access->GetInterface (
+         __uuidof (ID3D11Texture2D),
+         reinterpret_cast<void**> (source.GetAddressOf ()));
+      if (FAILED (hr)) {
+         captured.Close ();
+         return core::fail (core::Error::make (
+            core::ErrorKind::Capture,
+            "wgc: GetInterface(texture) failed hr=0x{:08x}",
+            static_cast<unsigned> (hr)));
+      }
+
+      D3D11_TEXTURE2D_DESC desc {};
+      source->GetDesc (&desc);
+
+      bool recreate_staging = !impl_->cont_staging;
+      if (impl_->cont_staging) {
+         D3D11_TEXTURE2D_DESC current {};
+         impl_->cont_staging->GetDesc (&current);
+         recreate_staging = current.Width != desc.Width
+            || current.Height != desc.Height
+            || current.Format != desc.Format;
+      }
+
+      if (recreate_staging) {
+         D3D11_TEXTURE2D_DESC staging = desc;
+         staging.Usage          = D3D11_USAGE_STAGING;
+         staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+         staging.BindFlags      = 0;
+         staging.MiscFlags      = 0;
+
+         impl_->cont_staging.Reset ();
+         hr = impl_->d3d_device->CreateTexture2D (
+            &staging, nullptr, impl_->cont_staging.GetAddressOf ());
+         if (FAILED (hr)) {
+            captured.Close ();
+            return core::fail (core::Error::make (
+               core::ErrorKind::Capture,
+               "wgc: CreateTexture2D(staging) failed hr=0x{:08x}",
+               static_cast<unsigned> (hr)));
+         }
+      }
+
+      impl_->d3d_context->CopyResource (impl_->cont_staging.Get (), source.Get ());
+
+      D3D11_MAPPED_SUBRESOURCE map {};
+      hr = impl_->d3d_context->Map (
+         impl_->cont_staging.Get (), 0, D3D11_MAP_READ, 0, &map);
+      if (FAILED (hr)) {
+         captured.Close ();
+         return core::fail (core::Error::make (
+            core::ErrorKind::Capture,
+            "wgc: Map(staging) failed hr=0x{:08x}",
+            static_cast<unsigned> (hr)));
+      }
+
+      const int width  = static_cast<int> (desc.Width);
+      const int height = static_cast<int> (desc.Height);
+      const int stride = static_cast<int> (map.RowPitch);
+      const POINT origin = impl_->cont_is_window
+         ? window_origin (static_cast<HWND> (impl_->cont_target), width, height)
+         : monitor_origin (static_cast<HMONITOR> (impl_->cont_target));
+
+      auto pixels = std::shared_ptr<std::uint8_t []> (
+         new std::uint8_t [ static_cast<std::size_t> (stride) * height ],
+         std::default_delete<std::uint8_t []> ());
+      std::memcpy (pixels.get (), map.pData, static_cast<std::size_t> (stride) * height);
+
+      impl_->d3d_context->Unmap (impl_->cont_staging.Get (), 0);
+      captured.Close ();
+
+      return Frame {
+         .data       = std::move (pixels),
+         .width      = width,
+         .height     = height,
+         .stride     = stride,
+         .origin_x   = origin.x,
+         .origin_y   = origin.y,
+         .dpi_scale  = 1.0,
+         .monitor_id = impl_->cont_monitor_id,
+         .window_id  = impl_->cont_window_id,
+         .timestamp  = std::chrono::steady_clock::now (),
+         .cursor     = cursor_now (),
+      };
+   } catch (const winrt::hresult_error& e) {
+      if (captured) captured.Close ();
+      return core::fail (core::Error::make (
+         core::ErrorKind::Capture,
+         "wgc: latest_frame failed: {}", winrt::to_string (e.message ())));
+   }
 }
 
 void WgcStrategy::stop_continuous () noexcept
@@ -645,9 +714,16 @@ void WgcStrategy::stop_continuous () noexcept
    impl_->cont_pool    = nullptr;
    impl_->cont_session = nullptr;
    impl_->cont_token   = {};
+   {
+      std::lock_guard lk { impl_->cont_lock };
+      if (impl_->cont_latest) impl_->cont_latest.Close ();
+      impl_->cont_latest = nullptr;
+   }
+   impl_->cont_staging.Reset ();
    impl_->cont_target  = nullptr;
    impl_->cont_width   = 0;
    impl_->cont_height  = 0;
+   impl_->cont_cv.notify_all ();
 }
 
 } // namespace gv::capture
