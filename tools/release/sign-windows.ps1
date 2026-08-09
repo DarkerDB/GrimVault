@@ -38,15 +38,40 @@ if (-not $bat) {
    throw 'CodeSignTool.bat was not present in the SSL.com package.'
 }
 
+$jar = Get-ChildItem $bat.DirectoryName -Filter 'code_sign_tool-*.jar' -Recurse |
+   Select-Object -First 1
+$bundledJava = Get-ChildItem $bat.DirectoryName -Filter java.exe -Recurse |
+   Select-Object -First 1
+
+if (-not $jar) {
+   throw 'The SSL.com CodeSignTool JAR was not present in the package.'
+}
+if ($bundledJava) {
+   $javaPath = $bundledJava.FullName
+} else {
+   $javaCommand = Get-Command java.exe -ErrorAction SilentlyContinue
+   if (-not $javaCommand) {
+      throw 'Java was not available for SSL.com CodeSignTool.'
+   }
+   $javaPath = $javaCommand.Source
+}
+
+$signArguments = @(
+   '-Xmx1024m'
+   '-jar'
+   $jar.FullName
+   'sign'
+   "-username=$env:SSL_COM_USERNAME"
+   "-password=$env:SSL_COM_PASSWORD"
+   "-credential_id=$env:SSL_COM_CREDENTIAL_ID"
+   "-totp_secret=$env:SSL_COM_TOTP_SECRET"
+   "-input_file_path=$file"
+   '-override=true'
+)
+
 Push-Location $bat.DirectoryName
 try {
-   & $bat.FullName sign `
-      "-username=$env:SSL_COM_USERNAME" `
-      "-password=$env:SSL_COM_PASSWORD" `
-      "-credential_id=$env:SSL_COM_CREDENTIAL_ID" `
-      "-totp_secret=$env:SSL_COM_TOTP_SECRET" `
-      "-input_file_path=$file" `
-      -override
+   & $javaPath $signArguments
    if ($LASTEXITCODE -ne 0) {
       throw "SSL.com CodeSignTool failed with exit code $LASTEXITCODE."
    }
