@@ -281,6 +281,7 @@ struct Controller::Impl
 
    void enqueue_analysis (const ocr::RecognizedTooltip& rt)
    {
+      if (deps.api) deps.api->cancel_analysis ();
       {
          std::lock_guard lk { analysis_lock };
          pending_analysis = AnalysisJob { rt, game_language };
