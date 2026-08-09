@@ -42,6 +42,7 @@ TEST (Preferences, DefaultsMatchTheServerSchema)
    EXPECT_EQ (prefs.layout.offset_y, 20);
    EXPECT_TRUE (prefs.layout.enabled);
    EXPECT_EQ (prefs.options.currency_display, "absolute");
+   EXPECT_EQ (prefs.capture_fps, 15);
 }
 
 TEST (Preferences, FoldsTheOverlayGroup)
@@ -180,12 +181,14 @@ TEST (Preferences, FoldsBehaviorAndHotkeys)
    const auto prefs = folded ({
       { "behavior:is_auto_update_enabled",       "false" },
       { "behavior:is_launch_on_startup_enabled", "true"  },
+      { "behavior:capture_fps",                  "10"    },
       { "hotkeys:force_refresh",                 "F9"    },
       { "hotkeys:toggle_overlay",                "Ctrl+Alt+G" },
    });
 
    EXPECT_FALSE (prefs.auto_updates);
    EXPECT_TRUE  (prefs.launch_on_startup);
+   EXPECT_EQ (prefs.capture_fps, 10);
    EXPECT_EQ (prefs.hotkey_scan_now, "F9");
    EXPECT_EQ (prefs.hotkey_toggle_overlay, "Ctrl+Alt+G");
 }
@@ -198,18 +201,30 @@ TEST (Preferences, ErasedKeysRevertToDefaults)
    apply (prefs, "overlay:mode",                       "disabled");
    apply (prefs, "overlay:alignment",                  "top_left");
    apply (prefs, "behavior:is_launch_on_startup_enabled", "false");
+   apply (prefs, "behavior:capture_fps",                    "5");
    apply (prefs, "hotkeys:force_refresh",              "F9");
 
    apply (prefs, "overlay:mode",                       "");
    apply (prefs, "overlay:alignment",                  "");
    apply (prefs, "behavior:is_launch_on_startup_enabled", "");
+   apply (prefs, "behavior:capture_fps",                    "");
    apply (prefs, "hotkeys:force_refresh",              "");
 
    EXPECT_EQ (prefs.overlay_mode, Mode::Auto);
    EXPECT_TRUE (prefs.layout.enabled);
    EXPECT_EQ (prefs.layout.align, Align::Attached);
    EXPECT_TRUE (prefs.launch_on_startup);
+   EXPECT_EQ (prefs.capture_fps, 15);
    EXPECT_TRUE (prefs.hotkey_scan_now.empty ());
+}
+
+TEST (Preferences, RejectsUnsupportedCaptureRates)
+{
+   EXPECT_EQ (folded ({ { "behavior:capture_fps", "30" } }).capture_fps, 30);
+   EXPECT_EQ (folded ({ { "behavior:capture_fps", "1" } }).capture_fps, 15);
+   EXPECT_EQ (folded ({ { "behavior:capture_fps", "12" } }).capture_fps, 15);
+   EXPECT_EQ (folded ({ { "behavior:capture_fps", "60" } }).capture_fps, 15);
+   EXPECT_EQ (folded ({ { "behavior:capture_fps", "fast" } }).capture_fps, 15);
 }
 
 TEST (Preferences, ReportsWhetherAKeyWasConsumed)
