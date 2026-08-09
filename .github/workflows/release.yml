@@ -42,12 +42,8 @@ env:
 
 jobs:
    compatibility:
-      name: Windows ${{ matrix.windows }}
-      runs-on: ${{ matrix.windows }}
-      strategy:
-         fail-fast: false
-         matrix:
-            windows: [ windows-2022, windows-2025 ]
+      name: Windows release
+      runs-on: windows-2022
       steps:
          - uses: actions/checkout@v4
            with:
@@ -76,14 +72,39 @@ jobs:
            shell: pwsh
            run: choco install ninja nsis -y --no-progress
 
+         - name: Install prebuilt Qt
+           uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+           with:
+              version: '6.10.3'
+              arch: win64_msvc2022_64
+              modules: qtcharts
+              cache: true
+
+         - name: Install verified prebuilt OpenCV
+           shell: pwsh
+           run: |
+              $archive = Join-Path $env:RUNNER_TEMP 'opencv-4.12.0-windows.exe'
+              Invoke-WebRequest `
+                 -Uri 'https://github.com/opencv/opencv/releases/download/4.12.0/opencv-4.12.0-windows.exe' `
+                 -OutFile $archive
+
+              $expected = 'b753b14d880b9bc8d89d6acd3b665c040baec0211078435432fcae117db707af'
+              $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($actual -ne $expected) { throw "OpenCV checksum mismatch: $actual" }
+
+              & 7z x $archive "-o$env:RUNNER_TEMP" -y | Out-Null
+              $opencv = Join-Path $env:RUNNER_TEMP 'opencv\build\x64\vc16\lib'
+              if (-not (Test-Path $opencv)) { throw "OpenCV CMake package missing: $opencv" }
+              "OpenCV_DIR=$opencv" | Out-File -FilePath $env:GITHUB_ENV -Append
+
          - name: Restore vcpkg cache
-           uses: actions/cache@v4
+           id: vcpkg-cache
+           uses: actions/cache/restore@v4
            with:
               path: |
-                 vcpkg_installed
                  ${{ env.LOCALAPPDATA }}\vcpkg\archives
-              key: vcpkg-${{ matrix.windows }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
-              restore-keys: vcpkg-${{ matrix.windows }}-${{ env.VCPKG_COMMIT }}-
+              key: vcpkg-windows-2022-release-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'tools/release/triplets/**') }}
+              restore-keys: vcpkg-windows-2022-release-${{ env.VCPKG_COMMIT }}-
 
          - uses: actions/checkout@v4
            with:
@@ -102,7 +123,6 @@ jobs:
            run: vcpkg\bootstrap-vcpkg.bat -disableMetrics
 
          - name: Fetch verified WebView2 bootstrapper
-           if: matrix.windows == 'windows-2022'
            shell: pwsh
            run: tools\release\fetch-webview2.ps1
 
@@ -114,7 +134,19 @@ jobs:
               $preset = "release-windows-$env:TARGET_ENV"
               cmake --preset $preset `
                  "-DGRIMVAULT_CHANNEL=$env:CHANNEL" `
-                 "-DGRIMVAULT_VERSION=$env:RELEASE_VERSION"
+                 "-DGRIMVAULT_VERSION=$env:RELEASE_VERSION" `
+                 "-DOpenCV_DIR=$env:OpenCV_DIR" `
+                 "-DVCPKG_MANIFEST_NO_DEFAULT_FEATURES=ON" `
+                 "-DVCPKG_OVERLAY_TRIPLETS=V:/tools/release/triplets" `
+                 "-DVCPKG_TARGET_TRIPLET=x64-windows-release"
+
+         - name: Save vcpkg cache
+           if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+           uses: actions/cache/save@v4
+           with:
+              path: |
+                 ${{ env.LOCALAPPDATA }}\vcpkg\archives
+              key: vcpkg-windows-2022-release-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'tools/release/triplets/**') }}
 
          - name: Build
            shell: pwsh
@@ -128,7 +160,6 @@ jobs:
               ctest --test-dir $build --output-on-failure -L e2e
 
          - name: Sign application
-           if: matrix.windows == 'windows-2022'
            shell: pwsh
            env:
               SSL_COM_USERNAME: ${{ secrets.SSL_COM_USERNAME }}
@@ -140,12 +171,10 @@ jobs:
               tools\release\sign-windows.ps1 -Path $exe
 
          - name: Package
-           if: matrix.windows == 'windows-2022'
            shell: pwsh
            run: cmake --build --preset "release-windows-$env:TARGET_ENV" --target package
 
          - name: Sign installer
-           if: matrix.windows == 'windows-2022'
            shell: pwsh
            env:
               SSL_COM_USERNAME: ${{ secrets.SSL_COM_USERNAME }}
@@ -159,7 +188,6 @@ jobs:
               tools\release\sign-windows.ps1 -Path $installer.FullName
 
          - name: Validate signed package
-           if: matrix.windows == 'windows-2022'
            shell: pwsh
            run: |
               $installer = Get-ChildItem "build/release-windows-$env:TARGET_ENV/GrimVault-Setup-*.exe" |
@@ -167,7 +195,6 @@ jobs:
               tools\release\validate-package.ps1 -Installer $installer.FullName
 
          - name: Stage release artifacts
-           if: matrix.windows == 'windows-2022'
            shell: pwsh
            run: |
               $build = "build/release-windows-$env:TARGET_ENV"
@@ -188,7 +215,6 @@ jobs:
               }
 
          - uses: actions/upload-artifact@v4
-           if: matrix.windows == 'windows-2022'
            with:
               name: grimvault-${{ env.TARGET_ENV }}-${{ env.RELEASE_VERSION }}
               path: artifacts/*

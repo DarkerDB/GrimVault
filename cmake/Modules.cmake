@@ -57,21 +57,35 @@ function (grimvault_stage_qt_plugins target)
       return ()
    endif ()
 
-   # vcpkg installs Qt plugins under:
-   #    <prefix>/Qt6/plugins        (release)
-   #    <prefix>/debug/Qt6/plugins  (debug)
-   # At runtime Qt looks for them next to the executable in
-   #    <exe_dir>/<category>/<plugin>.dll  (e.g. platforms/qwindowsd.dll)
-   # so we copy the matching plugins tree post-build. windeployqt itself
-   # trips on vcpkg's split bin/debug-bin layout, so we do this directly.
-   set (vcpkg_root "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows")
-   if (DEFINED VCPKG_INSTALLED_DIR)
-      set (vcpkg_root "${VCPKG_INSTALLED_DIR}/x64-windows")
+   string (TOUPPER "${CMAKE_BUILD_TYPE}" qt_build_type)
+   get_target_property (qt_core_location Qt6::Core "IMPORTED_LOCATION_${qt_build_type}")
+   if (NOT qt_core_location)
+      get_target_property (qt_core_location Qt6::Core IMPORTED_LOCATION_RELEASE)
+   endif ()
+   if (NOT qt_core_location)
+      get_target_property (qt_core_location Qt6::Core IMPORTED_LOCATION)
+   endif ()
+   if (NOT qt_core_location)
+      message (FATAL_ERROR "Cannot resolve the Qt runtime directory")
+   endif ()
+
+   get_filename_component (qt_bin_dir "${qt_core_location}" DIRECTORY)
+   get_filename_component (qt_prefix "${qt_bin_dir}" DIRECTORY)
+
+   # Official Qt binaries use <prefix>/plugins and <prefix>/qml. vcpkg uses
+   # <prefix>/Qt6/plugins and <prefix>/Qt6/qml.
+   set (qt_plugins_dir "${qt_prefix}/plugins")
+   set (qt_qml_dir "${qt_prefix}/qml")
+   if (NOT EXISTS "${qt_plugins_dir}")
+      set (qt_plugins_dir "${qt_prefix}/Qt6/plugins")
+   endif ()
+   if (NOT EXISTS "${qt_qml_dir}")
+      set (qt_qml_dir "${qt_prefix}/Qt6/qml")
    endif ()
 
    add_custom_command (TARGET ${target} POST_BUILD
       COMMAND "${CMAKE_COMMAND}" -E copy_directory
-              "$<IF:$<CONFIG:Debug>,${vcpkg_root}/debug/Qt6/plugins,${vcpkg_root}/Qt6/plugins>"
+              "${qt_plugins_dir}"
               "$<TARGET_FILE_DIR:${target}>"
       COMMENT "Staging Qt plugins for ${target}"
       VERBATIM
@@ -85,7 +99,7 @@ function (grimvault_stage_qt_plugins target)
    # fails at runtime with "module not installed".
    add_custom_command (TARGET ${target} POST_BUILD
       COMMAND "${CMAKE_COMMAND}" -E copy_directory
-              "$<IF:$<CONFIG:Debug>,${vcpkg_root}/debug/Qt6/qml,${vcpkg_root}/Qt6/qml>"
+              "${qt_qml_dir}"
               "$<TARGET_FILE_DIR:${target}>"
       COMMENT "Staging Qt QML modules for ${target}"
       VERBATIM
@@ -97,13 +111,12 @@ function (grimvault_stage_qt_plugins target)
    # Qt6QuickLayouts.dll) that nothing links at build time, so the plugin
    # fails to load at runtime with "module could not be found". Stage every
    # Qt6Quick*.dll so any staged QML module finds its runtime.
-   file (GLOB qml_runtime_debug   "${vcpkg_root}/debug/bin/Qt6Quick*.dll")
-   file (GLOB qml_runtime_release "${vcpkg_root}/bin/Qt6Quick*.dll")
+   file (GLOB qml_runtime "${qt_bin_dir}/Qt6Quick*.dll")
 
-   if (qml_runtime_debug OR qml_runtime_release)
+   if (qml_runtime)
       add_custom_command (TARGET ${target} POST_BUILD
          COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-                 "$<IF:$<CONFIG:Debug>,${qml_runtime_debug},${qml_runtime_release}>"
+                 ${qml_runtime}
                  "$<TARGET_FILE_DIR:${target}>"
          COMMENT "Staging Qt QML runtime DLLs for ${target}"
          VERBATIM
