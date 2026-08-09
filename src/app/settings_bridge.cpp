@@ -47,6 +47,7 @@ struct SettingsBridge::Impl
       if (!deps.controller) return;
 
       deps.controller->set_configured_mode (prefs.overlay_mode);
+      if (!deps.capture_fps_locked) deps.controller->set_capture_fps (prefs.capture_fps);
 
       // A dashboard accelerator overrides the compiled default; an empty
       // one means the server never sent it, so leave the local binding be.

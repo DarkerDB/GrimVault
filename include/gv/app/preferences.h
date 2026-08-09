@@ -34,6 +34,7 @@ struct Preferences
 
    bool auto_updates      = true;
    bool launch_on_startup = true;
+   int  capture_fps       = 15;
 
    // hotkeys:force_refresh and hotkeys:toggle_overlay. Empty means the
    // server never sent one, so the client's local default stands.
@@ -72,6 +73,18 @@ namespace detail {
       const auto [ptr, ec] = std::from_chars (first, last, parsed);
       if (ec != std::errc {} || ptr != last) return fallback;
       return std::clamp (parsed, lo, hi);
+   }
+
+   inline int parse_capture_fps (std::string_view v, int fallback)
+   {
+      int parsed = 0;
+      const auto* first = v.data ();
+      const auto* last  = v.data () + v.size ();
+      const auto [ptr, ec] = std::from_chars (first, last, parsed);
+      if (ec != std::errc {} || ptr != last) return fallback;
+      return parsed == 5 || parsed == 10 || parsed == 15 || parsed == 30
+         ? parsed
+         : fallback;
    }
 
    inline gv::ui::Layout::Align parse_align (std::string_view v,
@@ -206,6 +219,11 @@ inline bool apply (Preferences& out, std::string_view key, std::string_view valu
    if (key == "behavior:is_launch_on_startup_enabled") {
       out.launch_on_startup = erased ? fallback.launch_on_startup
          : detail::parse_bool (value, fallback.launch_on_startup);
+      return true;
+   }
+   if (key == "behavior:capture_fps") {
+      out.capture_fps = erased ? fallback.capture_fps
+                               : detail::parse_capture_fps (value, fallback.capture_fps);
       return true;
    }
 

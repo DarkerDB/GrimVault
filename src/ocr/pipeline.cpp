@@ -137,13 +137,15 @@ void persist_sample (const std::filesystem::path& inbox,
 struct Pipeline::Impl
 {
    Impl (capture::CaptureService& c, vision::TooltipDetector& d, LanguageRegistry& r, Config cfg)
-      : capture (c), detector (d), registry (r), config (std::move (cfg))
+      : capture (c), detector (d), registry (r), config (std::move (cfg)),
+        capture_fps (std::clamp (config.capture_fps, 1.0, 60.0))
    {}
 
    capture::CaptureService&  capture;
    vision::TooltipDetector&  detector;
    LanguageRegistry&         registry;
    Config                    config;
+   std::atomic<double>       capture_fps;
 
    std::atomic<bool>         running   { false };
    std::atomic<bool>         enabled   { true };
@@ -206,9 +208,12 @@ struct Pipeline::Impl
       const bool bursting = tracking
          && std::chrono::steady_clock::now ().time_since_epoch ().count ()
             < burst_until.load (std::memory_order_relaxed);
-      const double fps = std::max (1.0, tracking
+      const double desired_fps = std::max (1.0, tracking
          ? (bursting ? config.anchored_burst_fps : config.anchored_fps)
          : (idle ? config.idle_fps : config.active_fps));
+      const double fps = std::min (
+         desired_fps,
+         capture_fps.load (std::memory_order_relaxed));
 
       return std::chrono::duration_cast<std::chrono::milliseconds> (
          std::chrono::duration<double> (1.0 / fps));
@@ -1054,6 +1059,12 @@ void Pipeline::set_automatic (bool on)
    impl_->generation.fetch_add (1, std::memory_order_relaxed);
    impl_->reset_requested.store (true, std::memory_order_relaxed);
 }
+void Pipeline::set_capture_fps (double fps)
+{
+   const double bounded = std::clamp (fps, 1.0, 60.0);
+   if (impl_->capture_fps.exchange (bounded, std::memory_order_relaxed) == bounded) return;
+   core::Logger::info ("pipeline: capture rate → {:.0f} fps", bounded);
+}
 void Pipeline::set_language (LanguageFamily f) { impl_->language.store (f); }
 
 bool Pipeline::is_current (std::uint64_t value) const noexcept
@@ -1095,7 +1106,8 @@ core::Result<void> Pipeline::start (TooltipCallback on_tooltip)
    impl_->ocr_thread     = std::thread { [this] { impl_->ocr_loop ();     } };
 
    core::Logger::info (
-      "pipeline: started (active_fps={:.1f}, anchored_fps={:.1f}, burst_fps={:.1f})",
+      "pipeline: started (capture_fps={:.1f}, active_fps={:.1f}, anchored_fps={:.1f}, burst_fps={:.1f})",
+      impl_->capture_fps.load (std::memory_order_relaxed),
       impl_->config.active_fps, impl_->config.anchored_fps,
       impl_->config.anchored_burst_fps);
    return {};

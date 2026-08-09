@@ -530,6 +530,7 @@ namespace {
          gv::ocr::Pipeline::Config pipe_cfg;
          if (opts.fcr > 0.0) {
             pipe_cfg.active_fps = opts.fcr;
+            pipe_cfg.capture_fps = opts.fcr;
             gv::core::Logger::info ("pipeline: frame capture rate {} fps (--fcr)", opts.fcr);
          }
          if (opts.debug) {
@@ -622,6 +623,7 @@ namespace {
          .controller         = &controller,
          .exe_path           = app.applicationFilePath ().toStdString (),
          .updates_locked_off = disabled_by_env,
+         .capture_fps_locked = opts.fcr > 0.0,
       }};
       settings_bridge.reload ();
 

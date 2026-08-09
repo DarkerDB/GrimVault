@@ -710,6 +710,7 @@ namespace {
          b.behavior.is_auto_update_enabled ? "true" : "false");
       put ("behavior:is_launch_on_startup_enabled",
          b.behavior.is_launch_on_startup_enabled ? "true" : "false");
+      put ("behavior:capture_fps", std::to_string (b.behavior.capture_fps));
 
       put ("hotkeys:toggle_overlay",  b.hotkeys.toggle_overlay);
       put ("hotkeys:force_refresh",   b.hotkeys.force_refresh);
@@ -793,6 +794,7 @@ namespace {
          "is_auto_update_enabled", out.is_auto_update_enabled);
       out.is_launch_on_startup_enabled = j.value (
          "is_launch_on_startup_enabled", out.is_launch_on_startup_enabled);
+      out.capture_fps = j.value ("capture_fps", out.capture_fps);
    }
 
    void parse_hotkeys (const nlohmann::json& j, SettingsBundle::Hotkeys& out)
