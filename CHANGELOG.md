@@ -2,7 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
-## [2.0.2] - Unreleased
+## [2.0.3] - Unreleased
+
+### Added
+
+- Add cloud-synced capture-rate controls to reduce GPU use.
+
+### Changed
+
+- Move automatic-update control to the dashboard and default it to enabled.
+
+### Fixed
+
+- Cancel superseded tooltip requests and pace GPU readbacks at the configured rate.
+
+## [2.0.2] - 2026-08-09
 
 ### Fixed
 
