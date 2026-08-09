@@ -162,18 +162,6 @@ endif ()
 # never need to pick which paddle model family to install; we ship them all.
 set (CPACK_COMPONENTS_ALL                 application models i18n assets schema)
 
-set (grimvault_installer_assets "${CMAKE_SOURCE_DIR}/assets/installer")
-if (EXISTS "${grimvault_installer_assets}/Header.bmp")
-   file (COPY_FILE
-      "${grimvault_installer_assets}/Header.bmp"
-      "${grimvault_cpack_assets}/Header.bmp"
-      ONLY_IF_DIFFERENT)
-endif ()
-
-if (EXISTS "${grimvault_cpack_assets}/Header.bmp")
-   set (CPACK_NSIS_MUI_HEADERIMAGE "${grimvault_cpack_assets}/Header.bmp")
-endif ()
-
 # Generate a multi-resolution .ico from the source PNG at configure time
 # if it doesn't exist yet. Requires Python3 + Pillow; skips silently if
 # either is unavailable (the EXISTS check below then leaves NSIS with its
