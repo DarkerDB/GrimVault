@@ -232,3 +232,81 @@ TEST (CaptureServiceTest, RuntimeSkipsUnavailableFallback)
    EXPECT_EQ    (service->current ().name (), "gdi.bitblt");
    EXPECT_EQ    (dxgi->init_calls, 1);
 }
+
+TEST (CaptureServiceTest, ForcedModeSwitchesToItsBackend)
+{
+   capture::CaptureService::Strategies strategies;
+   auto wgc = append (strategies, "wgc.borderless", true);
+   append (strategies, "dxgi.duplication", true);
+   append (strategies, "gdi.bitblt", true);
+
+   auto service = create (std::move (strategies));
+   ASSERT_NE (service, nullptr);
+   EXPECT_EQ (service->mode (), capture::CaptureMode::Automatic);
+
+   ASSERT_TRUE (service->set_mode (capture::CaptureMode::ForceGdi).has_value ());
+   EXPECT_EQ   (service->mode (), capture::CaptureMode::ForceGdi);
+   EXPECT_EQ   (service->current ().name (), "gdi.bitblt");
+   EXPECT_EQ   (wgc->shutdown_calls, 1);
+
+   const auto frame = service->capture_window (nullptr);
+   ASSERT_TRUE (frame.has_value ());
+   EXPECT_EQ   (frame->backend, capture::CaptureBackend::Gdi);
+}
+
+TEST (CaptureServiceTest, ForcedModeDisablesFailoverAndTargetRestore)
+{
+   capture::CaptureService::Strategies strategies;
+   append (strategies, "wgc.borderless", true);
+   append (strategies, "gdi.bitblt", true, { true, false, false, false, true });
+
+   auto service = create (std::move (strategies));
+   ASSERT_NE (service, nullptr);
+   ASSERT_TRUE (service->set_mode (capture::CaptureMode::ForceGdi).has_value ());
+
+   // A new target must not restore the preferred (wgc) strategy.
+   auto* first  = reinterpret_cast<void*> (std::uintptr_t { 1 });
+   auto* second = reinterpret_cast<void*> (std::uintptr_t { 2 });
+   EXPECT_TRUE (service->capture_window (first).has_value ());
+   EXPECT_EQ   (service->current ().name (), "gdi.bitblt");
+
+   // Repeated failures past the threshold must not fall through the ladder.
+   EXPECT_FALSE (service->capture_window (second).has_value ());
+   EXPECT_FALSE (service->capture_window (second).has_value ());
+   EXPECT_FALSE (service->capture_window (second).has_value ());
+   EXPECT_EQ    (service->current ().name (), "gdi.bitblt");
+
+   // And a recovery keeps producing frames from the pinned backend.
+   EXPECT_TRUE (service->capture_window (first).has_value ());
+   EXPECT_EQ   (service->current ().name (), "gdi.bitblt");
+}
+
+TEST (CaptureServiceTest, ForcedModeRejectsUnavailableBackend)
+{
+   capture::CaptureService::Strategies strategies;
+   append (strategies, "wgc.borderless", true);
+   append (strategies, "dxgi.duplication", false);
+
+   auto service = create (std::move (strategies));
+   ASSERT_NE (service, nullptr);
+
+   EXPECT_FALSE (service->set_mode (capture::CaptureMode::ForceDxgi).has_value ());
+   EXPECT_EQ    (service->mode (), capture::CaptureMode::Automatic);
+   EXPECT_EQ    (service->current ().name (), "wgc.borderless");
+}
+
+TEST (CaptureServiceTest, AutomaticModeRestoresThePreferredStrategy)
+{
+   capture::CaptureService::Strategies strategies;
+   auto wgc = append (strategies, "wgc.borderless", true);
+   append (strategies, "gdi.bitblt", true);
+
+   auto service = create (std::move (strategies));
+   ASSERT_NE (service, nullptr);
+   ASSERT_TRUE (service->set_mode (capture::CaptureMode::ForceGdi).has_value ());
+
+   ASSERT_TRUE (service->set_mode (capture::CaptureMode::Automatic).has_value ());
+   EXPECT_EQ   (service->mode (), capture::CaptureMode::Automatic);
+   EXPECT_EQ   (service->current ().name (), "wgc.borderless");
+   EXPECT_EQ   (wgc->init_calls, 2);
+}

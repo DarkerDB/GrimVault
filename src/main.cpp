@@ -525,6 +525,22 @@ namespace {
          gv::core::Logger::warn ("capture: not available at startup ({})", cs.error ().message);
       }
 
+      // Seed the stored capture-backend policy before the pipeline spins up
+      // so a forced backend applies from the first frame instead of after
+      // the first settings poll.
+      if (capture) {
+         if (auto v = settings_repo.get ("behavior:capture_mode");
+             v.has_value () && v->has_value ()) {
+            if (const auto mode = gv::capture::parse_capture_mode (**v);
+                mode.has_value ()) {
+               if (auto r = capture->set_mode (*mode); !r.has_value ()) {
+                  gv::core::Logger::warn ("capture: stored mode {} rejected: {}",
+                     **v, r.error ().message);
+               }
+            }
+         }
+      }
+
       std::unique_ptr<gv::ocr::Pipeline> pipeline;
       if (capture) {
          gv::ocr::Pipeline::Config pipe_cfg;

@@ -16,6 +16,12 @@ namespace gv::capture {
 class WgcStrategy : public ICaptureStrategy
 {
 public:
+   // True when this Windows build exposes GraphicsCaptureSession
+   // .IsBorderRequired, i.e. WGC can capture without the yellow border.
+   // Static so the default ladder can be ordered before any instance is
+   // initialized.
+   static bool borderless_capture_supported () noexcept;
+
    WgcStrategy ();
    ~WgcStrategy () override;
 

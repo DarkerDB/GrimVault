@@ -1,6 +1,7 @@
 #pragma once
 
 #include <gv/app/mode.h>
+#include <gv/capture/mode.h>
 #include <gv/core/result.h>
 #include <gv/core/window_tracker.h>
 
@@ -96,6 +97,9 @@ public:
 
    // Apply the dashboard's maximum capture/readback rate live.
    void set_capture_fps (int fps);
+
+   // Apply the dashboard's capture-backend policy live.
+   void set_capture_mode (capture::CaptureMode mode);
 
    // Action entry points. Each is safe to call from any thread; the heavy
    // lifting happens via QMetaObject::invokeMethod queued connection.

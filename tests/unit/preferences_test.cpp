@@ -5,6 +5,7 @@
 using gv::app::Mode;
 using gv::app::Preferences;
 using gv::app::apply;
+using gv::capture::CaptureMode;
 using Align = gv::ui::Layout::Align;
 using Columns = gv::ui::Layout::Columns;
 
@@ -43,6 +44,7 @@ TEST (Preferences, DefaultsMatchTheServerSchema)
    EXPECT_TRUE (prefs.layout.enabled);
    EXPECT_EQ (prefs.options.currency_display, "absolute");
    EXPECT_EQ (prefs.capture_fps, 15);
+   EXPECT_EQ (prefs.capture_mode, CaptureMode::Automatic);
 }
 
 TEST (Preferences, FoldsTheOverlayGroup)
@@ -225,6 +227,25 @@ TEST (Preferences, RejectsUnsupportedCaptureRates)
    EXPECT_EQ (folded ({ { "behavior:capture_fps", "12" } }).capture_fps, 15);
    EXPECT_EQ (folded ({ { "behavior:capture_fps", "60" } }).capture_fps, 15);
    EXPECT_EQ (folded ({ { "behavior:capture_fps", "fast" } }).capture_fps, 15);
+}
+
+TEST (Preferences, FoldsCaptureMode)
+{
+   EXPECT_EQ (folded ({ { "behavior:capture_mode", "automatic" } }).capture_mode,
+      CaptureMode::Automatic);
+   EXPECT_EQ (folded ({ { "behavior:capture_mode", "wgc" } }).capture_mode,
+      CaptureMode::ForceWgc);
+   EXPECT_EQ (folded ({ { "behavior:capture_mode", "dxgi" } }).capture_mode,
+      CaptureMode::ForceDxgi);
+   EXPECT_EQ (folded ({ { "behavior:capture_mode", "gdi" } }).capture_mode,
+      CaptureMode::ForceGdi);
+   EXPECT_EQ (folded ({ { "behavior:capture_mode", "vhs" } }).capture_mode,
+      CaptureMode::Automatic);
+
+   Preferences prefs;
+   apply (prefs, "behavior:capture_mode", "gdi");
+   apply (prefs, "behavior:capture_mode", "");
+   EXPECT_EQ (prefs.capture_mode, CaptureMode::Automatic);
 }
 
 TEST (Preferences, ReportsWhetherAKeyWasConsumed)

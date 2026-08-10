@@ -1,6 +1,7 @@
 #pragma once
 
 #include <gv/app/mode.h>
+#include <gv/capture/mode.h>
 #include <gv/ui/augment_payload.h>
 #include <gv/ui/layout.h>
 
@@ -35,6 +36,8 @@ struct Preferences
    bool auto_updates      = true;
    bool launch_on_startup = true;
    int  capture_fps       = 15;
+
+   capture::CaptureMode capture_mode = capture::CaptureMode::Automatic;
 
    // hotkeys:force_refresh and hotkeys:toggle_overlay. Empty means the
    // server never sent one, so the client's local default stands.
@@ -224,6 +227,13 @@ inline bool apply (Preferences& out, std::string_view key, std::string_view valu
    if (key == "behavior:capture_fps") {
       out.capture_fps = erased ? fallback.capture_fps
                                : detail::parse_capture_fps (value, fallback.capture_fps);
+      return true;
+   }
+   if (key == "behavior:capture_mode") {
+      const auto mode = capture::parse_capture_mode (value);
+      out.capture_mode = erased || !mode.has_value ()
+         ? fallback.capture_mode
+         : *mode;
       return true;
    }
 

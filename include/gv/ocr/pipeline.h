@@ -124,6 +124,11 @@ public:
    // Maximum full-frame GPU readbacks per second. Applies immediately.
    void set_capture_fps (double fps);
 
+   // Capture-backend policy. Applied on the capture thread before the next
+   // frame; a mode whose backend is unavailable is logged and capture stays
+   // on the current backend.
+   void set_capture_mode (capture::CaptureMode mode);
+
    void set_language (LanguageFamily f);
 
    // True only while `generation` still belongs to the current tooltip.
