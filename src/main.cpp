@@ -920,6 +920,12 @@ namespace {
       QObject::connect (&tray, &gv::ui::TrayIcon::quit_requested,
          &app, &QApplication::quit);
 
+      // The installer overwrites every loaded DLL, so the app must be gone
+      // before WinSparkle runs it. Queued: the request arrives on a
+      // WinSparkle worker thread.
+      QObject::connect (&update_service, &gv::update::UpdateService::shutdown_requested,
+         &app, &QApplication::quit, Qt::QueuedConnection);
+
       update_service.set_check_interval_seconds (3600);
       update_service.start ();
 

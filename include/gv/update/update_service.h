@@ -35,6 +35,11 @@ signals:
    void update_dismissed ();
    void update_error     ();
 
+   // WinSparkle is about to run the downloaded installer and needs the app
+   // gone so it can overwrite the binaries. Emitted from a WinSparkle worker
+   // thread; connect queued and exit the application promptly.
+   void shutdown_requested ();
+
 private:
    QTimer check_timer_;
    bool   initialized_ = false;
