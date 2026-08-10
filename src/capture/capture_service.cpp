@@ -41,10 +41,22 @@ namespace {
 
    CaptureService::Strategies default_strategies ()
    {
+      // Where WGC cannot suppress Windows' yellow capture border (no
+      // IsBorderRequired — Windows 10), prefer the borderless backends and
+      // keep bordered WGC as the last resort.
       CaptureService::Strategies strategies;
-      strategies.push_back (std::make_unique<WgcStrategy> ());
-      strategies.push_back (std::make_unique<DxgiDuplicationStrategy> ());
-      strategies.push_back (std::make_unique<GdiBitBltStrategy> ());
+      auto wgc = std::make_unique<WgcStrategy> ();
+
+      if (WgcStrategy::borderless_capture_supported ()) {
+         strategies.push_back (std::move (wgc));
+         strategies.push_back (std::make_unique<DxgiDuplicationStrategy> ());
+         strategies.push_back (std::make_unique<GdiBitBltStrategy> ());
+      } else {
+         strategies.push_back (std::make_unique<DxgiDuplicationStrategy> ());
+         strategies.push_back (std::make_unique<GdiBitBltStrategy> ());
+         strategies.push_back (std::move (wgc));
+      }
+
       return strategies;
    }
 
@@ -59,6 +71,7 @@ struct CaptureService::Impl
 
    std::vector<Entry> entries;
    Config             config;
+   CaptureMode        mode = CaptureMode::Automatic;
    std::size_t        active = 0;
    int                failures = 0;
    bool               fallback_exhausted = false;
@@ -82,6 +95,11 @@ struct CaptureService::Impl
    const ICaptureStrategy& current () const noexcept
    {
       return *entries [active].strategy;
+   }
+
+   bool pinned () const noexcept
+   {
+      return mode != CaptureMode::Automatic;
    }
 
    core::Result<void> initialize (std::size_t index)
@@ -131,7 +149,7 @@ struct CaptureService::Impl
          entries [i].availability = Availability::Unknown;
       }
 
-      restore_preferred ();
+      if (!pinned ()) restore_preferred ();
    }
 
    void note_success () noexcept
@@ -143,6 +161,15 @@ struct CaptureService::Impl
    bool activate_next (const core::Error& cause)
    {
       if (fallback_exhausted) return false;
+
+      if (pinned ()) {
+         failures = 0;
+         fallback_exhausted = true;
+         core::Logger::error (
+            "capture: {} failed and capture mode {} pins it: {}",
+            current ().name (), capture_mode_name (mode), cause.message);
+         return false;
+      }
 
       const auto previous = std::string { current ().name () };
       for (std::size_t i = active + 1; i < entries.size (); ++i) {
@@ -318,6 +345,36 @@ core::Result<void> CaptureService::switch_to (std::string_view strategy_name)
    return core::fail (core::Error::make (
       core::ErrorKind::InvalidArgument,
       "capture: unknown strategy '{}'", strategy_name));
+}
+
+core::Result<void> CaptureService::set_mode (CaptureMode mode)
+{
+   if (mode == impl_->mode) return {};
+
+   if (mode == CaptureMode::Automatic) {
+      impl_->mode = mode;
+      impl_->failures = 0;
+      impl_->fallback_exhausted = false;
+      impl_->restore_preferred ();
+      core::Logger::info ("capture: mode automatic; strategy {}",
+         impl_->current ().name ());
+      return {};
+   }
+
+   if (auto switched = switch_to (capture_mode_name (mode));
+       !switched.has_value ()) {
+      return switched;
+   }
+
+   impl_->mode = mode;
+   core::Logger::info ("capture: mode {} pins strategy {}",
+      capture_mode_name (mode), impl_->current ().name ());
+   return {};
+}
+
+CaptureMode CaptureService::mode () const noexcept
+{
+   return impl_->mode;
 }
 
 std::vector<std::string_view> CaptureService::available () const

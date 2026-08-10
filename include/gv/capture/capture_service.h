@@ -1,6 +1,7 @@
 #pragma once
 
 #include <gv/capture/i_capture_strategy.h>
+#include <gv/capture/mode.h>
 #include <gv/core/result.h>
 
 #include <chrono>
@@ -12,7 +13,15 @@ namespace gv::capture {
 
 // Orchestrates one or more ICaptureStrategy implementations. Picks the best
 // available strategy at startup, then advances through the same ladder after
-// repeated runtime capture failures.
+// repeated runtime capture failures. The default ladder is platform-aware:
+// where WGC cannot suppress Windows' yellow capture border (Windows 10) it
+// drops to last resort behind DXGI duplication and GDI.
+//
+// A CaptureMode pins that choice: Automatic keeps the ladder + failover,
+// the Force values lock capture to one backend (see set_mode).
+//
+// Not thread-safe. All calls, including set_mode, belong to whichever
+// thread owns capture — the pipeline's capture thread once it is running.
 //
 // Diagnostics page can ask CaptureService to enumerate available strategies
 // and switch between them at runtime (gv.capture.switch-strategy command).
@@ -56,6 +65,14 @@ public:
 
    // Switch to a different strategy by name (e.g. for diagnostics).
    core::Result<void> switch_to (std::string_view strategy_name);
+
+   // Apply the capture-backend policy. Automatic restores the preferred
+   // ladder position and re-enables failover; a Force value switches to its
+   // backend and pins it (capture failures report errors instead of falling
+   // through). Fails without changing anything when the forced backend
+   // cannot initialize.
+   core::Result<void> set_mode (CaptureMode mode);
+   CaptureMode        mode () const noexcept;
 
    // Strategies that initialized successfully during this process. Unprobed
    // candidates are omitted instead of being reported as available.

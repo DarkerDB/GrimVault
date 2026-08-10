@@ -138,7 +138,8 @@ struct Pipeline::Impl
 {
    Impl (capture::CaptureService& c, vision::TooltipDetector& d, LanguageRegistry& r, Config cfg)
       : capture (c), detector (d), registry (r), config (std::move (cfg)),
-        capture_fps (std::clamp (config.capture_fps, 1.0, 60.0))
+        capture_fps (std::clamp (config.capture_fps, 1.0, 60.0)),
+        capture_mode (c.mode ())
    {}
 
    capture::CaptureService&  capture;
@@ -146,6 +147,7 @@ struct Pipeline::Impl
    LanguageRegistry&         registry;
    Config                    config;
    std::atomic<double>       capture_fps;
+   std::atomic<capture::CaptureMode> capture_mode { capture::CaptureMode::Automatic };
 
    std::atomic<bool>         running   { false };
    std::atomic<bool>         enabled   { true };
@@ -225,8 +227,29 @@ struct Pipeline::Impl
       bool  session_active  = false;
       bool  continuous_ok   = true;   // flips false after a failed (re)start
       int   continuous_errors = 0;
+      auto  applied_mode    = capture.mode ();
 
       while (running.load (std::memory_order_relaxed)) {
+         // The service is owned by this thread once the loop runs, so mode
+         // changes from the settings bridge land here, between frames. A
+         // rejected mode is not retried — the service kept its previous
+         // strategy and the next settings change re-arms the check.
+         const auto want_mode = capture_mode.load (std::memory_order_relaxed);
+         if (want_mode != applied_mode) {
+            if (session_active) {
+               capture.stop_continuous ();
+               session_active = false;
+            }
+            if (auto r = capture.set_mode (want_mode); !r.has_value ()) {
+               core::Logger::warn ("pipeline: capture mode {} rejected: {}",
+                  capture::capture_mode_name (want_mode), r.error ().message);
+            }
+            applied_mode      = want_mode;
+            current_target    = nullptr;
+            continuous_ok     = true;
+            continuous_errors = 0;
+         }
+
          void* now_target = window.load ();
          const bool forced = force_scan.load (std::memory_order_relaxed);
 
@@ -1064,6 +1087,11 @@ void Pipeline::set_capture_fps (double fps)
    const double bounded = std::clamp (fps, 1.0, 60.0);
    if (impl_->capture_fps.exchange (bounded, std::memory_order_relaxed) == bounded) return;
    core::Logger::info ("pipeline: capture rate → {:.0f} fps", bounded);
+}
+void Pipeline::set_capture_mode (capture::CaptureMode mode)
+{
+   if (impl_->capture_mode.exchange (mode, std::memory_order_relaxed) == mode) return;
+   core::Logger::info ("pipeline: capture mode → {}", capture::capture_mode_name (mode));
 }
 void Pipeline::set_language (LanguageFamily f) { impl_->language.store (f); }
 

@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 - Add cloud-synced capture-rate controls to reduce GPU use.
+- Add a cloud-synced capture backend setting: automatic, or force WGC, DXGI, or GDI.
 
 ### Changed
 
@@ -15,6 +16,7 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - Cancel superseded tooltip requests and pace GPU readbacks at the configured rate.
+- Avoid Windows' yellow capture border on Windows 10 by preferring borderless capture backends when WGC cannot suppress it.
 
 ## [2.0.2] - 2026-08-09
 

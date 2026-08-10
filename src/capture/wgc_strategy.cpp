@@ -348,6 +348,11 @@ struct WgcStrategy::Impl
    }
 };
 
+bool WgcStrategy::borderless_capture_supported () noexcept
+{
+   return detect_borderless_supported ();
+}
+
 WgcStrategy::WgcStrategy  () : impl_ (std::make_unique<Impl> ()) {}
 WgcStrategy::~WgcStrategy ()                                     = default;
 
