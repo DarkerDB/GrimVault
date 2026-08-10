@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.4] - 2026-08-10
+
+- Changed release v0.0.4-rc.1
+- Changed publish the stable appcast only from dispatched releases
+- Fixed close the running app before the installer extracts
+
 ## [0.0.4-rc.1] - 2026-08-10
 
 - Changed publish the stable appcast only from dispatched releases
