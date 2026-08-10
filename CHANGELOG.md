@@ -2,6 +2,54 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.3] - 2026-08-10
+
+- Changed release v0.0.3-rc.3
+- Changed stamp the 2.0.3 release date
+- Changed sync vendored tooltip lib to 1.5.19
+- Added capture backend selection and prefer borderless capture
+- Changed add changelog for 2.0.3
+- Changed describe dashboard-controlled update checks
+- Changed cover capture-fps preference parsing
+- Fixed cancel superseded tooltip analysis requests
+- Added control automatic updates from the dashboard
+- Fixed pace gpu readbacks in wgc capture strategy
+- Added cloud-synced capture-rate control
+- Fixed validate start menu shortcut in per-user or shared programs
+- Changed ensure nsis creates canonical grimvault start menu shortcut
+- Fixed point nsis shortcuts to root-level grimvault executable
+- Changed move runtime dll staging to post-build step for cpack resolution
+- Changed stage direct runtime dlls before scanning dependencies
+- Fixed include runtime dependencies and validate installed binary
+- Fixed remove incompatible NSIS header bitmap
+- Fixed remove incompatible NSIS welcome bitmap
+- Fixed stage NSIS assets before packaging
+- Fixed shorten Windows package staging path
+- Fixed bypass batch parsing for Windows signing
+- Fixed expose release DLLs to Windows tests
+- Fixed unblock accelerated Windows release
+- Changed accelerate Windows releases
+- Changed map workspace to short drive for vcpkg path-length fix
+- Fixed quote cmake args in windows release workflow
+- Changed sync darkerdb tooltip bundle to 1.5.18
+- Added harden production and minor artifact analysis
+- Changed reconcile preserved checkout with canonical trunk
+- Added preserve GrimVault desktop overhaul snapshot
+- Changed merge canonical grimvault OAuth client naming
+- Added merge complete grimvault market analysis
+- Changed sync DarkerDB tooltip bundle 1.5.16
+- Added complete grimvault overhaul and tooltip market refinements
+- Added overhaul grimvault capture, auth, settings, and release flow
+- Changed sync darkerdb tooltip bundle 1.5.12 with vendor-price removal
+- Changed sync darkerdb tooltip bundle 1.5.11
+- Changed resync darkerdb tooltip bundle after vendor-placement fix
+- Changed resync vendored ddb-tooltips to 1.5.9
+- Added overlay column layout preference
+- Fixed remove stray merge conflict markers from augment_view
+- Changed sync the vendored library to 1.5.8
+- Changed sync
+- Changed [DDB-5] docs: rename OAuth client_id grimvault-desktop to grimvault
+
 ## [0.0.3-rc.3] - 2026-08-10
 
 - Changed stamp the 2.0.3 release date
