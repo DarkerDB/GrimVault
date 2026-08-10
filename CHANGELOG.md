@@ -97,7 +97,7 @@ All notable changes to this project will be documented in this file.
 - Changed sync
 - Changed [DDB-5] docs: rename OAuth client_id grimvault-desktop to grimvault
 
-## [2.0.4] - Unreleased
+## [2.0.4] - 2026-08-10
 
 ### Fixed
 

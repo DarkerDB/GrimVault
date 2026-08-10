@@ -240,7 +240,11 @@ jobs:
    publish:
       name: Publish release
       needs: compatibility
-      if: github.event_name == 'release' || inputs.publish
+      # Release events publish only prereleases (the beta feed). The stable
+      # appcast carries the PRODUCT version (2.x), which only a dispatch with
+      # inputs.version can supply — a stable tag event would push its raw
+      # source tag (v0.0.x) into the feed and read as a downgrade.
+      if: (github.event_name == 'release' && github.event.release.prerelease) || (github.event_name == 'workflow_dispatch' && inputs.publish)
       runs-on: ubuntu-24.04
       steps:
          - uses: actions/checkout@v4
