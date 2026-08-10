@@ -171,6 +171,32 @@ else ()
    message (STATUS "WebView2 bootstrapper not present; installer will skip runtime check")
 endif ()
 
+# A running GrimVault holds every DLL this installer overwrites, and NSIS's
+# Abort/Retry/Ignore on a locked file lets Ignore produce a mixed-version
+# install. Before extracting anything, wait for the app's single-instance
+# mutex (main.cpp k_single_instance_mutex) to clear — the update path asks
+# the app to exit via WinSparkle's shutdown request, so this normally just
+# absorbs teardown time — and past ~15s ask the user to quit it.
+set (CPACK_NSIS_EXTRA_PREINSTALL_COMMANDS "
+   StrCpy $1 0
+   gv_instance_wait:
+   System::Call 'kernel32::OpenMutex(i 0x00100000, i 0, t \"Global\\\\GrimVault.SingleInstance.v1\") p .r0'
+   StrCmp $0 0 gv_instance_gone
+   System::Call 'kernel32::CloseHandle(p r0)'
+   DetailPrint 'Waiting for GrimVault to close...'
+   IntOp $1 $1 + 1
+   IntCmp $1 30 gv_instance_prompt 0 gv_instance_prompt
+   Sleep 500
+   Goto gv_instance_wait
+   gv_instance_prompt:
+   MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION 'GrimVault is still running. Quit it from the tray icon, then press Retry.' IDRETRY gv_instance_reset
+   Abort 'Installation cancelled: GrimVault is running.'
+   gv_instance_reset:
+   StrCpy $1 0
+   Goto gv_instance_wait
+   gv_instance_gone:
+")
+
 # CPack skips its Start Menu macro during silent installs. Create the canonical
 # shortcut after either install mode and overwrite any stock shortcut so its
 # target is always the root-level executable.

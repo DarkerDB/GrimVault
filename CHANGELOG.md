@@ -97,6 +97,13 @@ All notable changes to this project will be documented in this file.
 - Changed sync
 - Changed [DDB-5] docs: rename OAuth client_id grimvault-desktop to grimvault
 
+## [2.0.4] - Unreleased
+
+### Fixed
+
+- Exit promptly when the updater asks so the installer never races a running GrimVault.
+- Make the installer wait for a running GrimVault to close before extracting, instead of failing on locked files.
+
 ## [2.0.3] - 2026-08-10
 
 ### Added

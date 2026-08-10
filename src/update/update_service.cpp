@@ -18,6 +18,7 @@ namespace {
    void on_found      () { if (g_instance) emit g_instance->update_available (); }
    void on_dismiss    () { if (g_instance) emit g_instance->update_dismissed (); }
    void on_error      () { if (g_instance) emit g_instance->update_error     (); }
+   void on_shutdown   () { if (g_instance) emit g_instance->shutdown_requested (); }
 
 } // namespace
 
@@ -39,6 +40,10 @@ UpdateService::UpdateService (QObject* parent) : QObject (parent)
    win_sparkle_set_did_not_find_update_callback (&on_dismiss);
    win_sparkle_set_update_cancelled_callback    (&on_dismiss);
    win_sparkle_set_error_callback               (&on_error);
+
+   // Without this, WinSparkle launches the installer over a still-running
+   // tray app and the extract fails on the loaded Qt DLLs.
+   win_sparkle_set_shutdown_request_callback    (&on_shutdown);
 }
 
 UpdateService::~UpdateService ()
