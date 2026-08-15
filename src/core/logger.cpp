@@ -5,6 +5,8 @@
 #include <spdlog/sinks/daily_file_sink.h>
 #include <spdlog/sinks/ringbuffer_sink.h>
 
+#include <chrono>
+#include <ctime>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -16,6 +18,40 @@ namespace {
 
    std::shared_ptr<spdlog::sinks::ringbuffer_sink_mt> g_ring_sink;
    std::once_flag g_init_flag;
+
+   std::mutex               g_header_mutex;
+   std::vector<std::string> g_header;
+   int                      g_header_day = -1;
+
+   int local_day ()
+   {
+      const auto now = std::chrono::system_clock::to_time_t (
+         std::chrono::system_clock::now ());
+      std::tm parts {};
+#ifdef _WIN32
+      ::localtime_s (&parts, &now);
+#else
+      ::localtime_r (&now, &parts);
+#endif
+      return parts.tm_year * 512 + parts.tm_yday;
+   }
+
+   void write_header ()
+   {
+      for (const auto& line : g_header) spdlog::info ("[session] {}", line);
+   }
+
+   void ensure_header ()
+   {
+      std::lock_guard lock { g_header_mutex };
+      if (g_header.empty ()) return;
+
+      const int day = local_day ();
+      if (day == g_header_day) return;
+
+      g_header_day = day;
+      write_header ();
+   }
 
    void do_init (const std::filesystem::path& log_dir, bool verbose)
    {
@@ -78,10 +114,18 @@ void Logger::shutdown ()
    g_ring_sink.reset ();
 }
 
-void Logger::info  (std::string_view msg) { spdlog::info  ("{}", msg); }
-void Logger::warn  (std::string_view msg) { spdlog::warn  ("{}", msg); }
-void Logger::error (std::string_view msg) { spdlog::error ("{}", msg); }
-void Logger::debug (std::string_view msg) { spdlog::debug ("{}", msg); }
+void Logger::info  (std::string_view msg) { ensure_header (); spdlog::info  ("{}", msg); }
+void Logger::warn  (std::string_view msg) { ensure_header (); spdlog::warn  ("{}", msg); }
+void Logger::error (std::string_view msg) { ensure_header (); spdlog::error ("{}", msg); }
+void Logger::debug (std::string_view msg) { ensure_header (); spdlog::debug ("{}", msg); }
+
+void Logger::set_header (std::vector<std::string> lines)
+{
+   std::lock_guard lock { g_header_mutex };
+   g_header     = std::move (lines);
+   g_header_day = local_day ();
+   write_header ();
+}
 
 std::vector<std::string> Logger::tail (std::size_t n)
 {
@@ -92,13 +136,15 @@ std::vector<std::string> Logger::tail (std::size_t n)
    return g_ring_sink->last_formatted (n);
 }
 
-void Log::info  (std::string_view msg) const { spdlog::info  ("[{}] {}", tag_, msg); }
-void Log::warn  (std::string_view msg) const { spdlog::warn  ("[{}] {}", tag_, msg); }
-void Log::error (std::string_view msg) const { spdlog::error ("[{}] {}", tag_, msg); }
-void Log::debug (std::string_view msg) const { spdlog::debug ("[{}] {}", tag_, msg); }
+void Log::info  (std::string_view msg) const { ensure_header (); spdlog::info  ("[{}] {}", tag_, msg); }
+void Log::warn  (std::string_view msg) const { ensure_header (); spdlog::warn  ("[{}] {}", tag_, msg); }
+void Log::error (std::string_view msg) const { ensure_header (); spdlog::error ("[{}] {}", tag_, msg); }
+void Log::debug (std::string_view msg) const { ensure_header (); spdlog::debug ("[{}] {}", tag_, msg); }
 
 void Log::event (std::string_view name, Fields fields) const
 {
+   ensure_header ();
+
    std::string line;
    line.reserve (name.size () + 64);
    line.append (name.data (), name.size ());

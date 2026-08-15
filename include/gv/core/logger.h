@@ -57,6 +57,10 @@ public:
    }
 
    static std::vector<std::string> tail (std::size_t n = 100);
+
+   // Session identity + machine context, re-emitted whenever the daily file
+   // sink rolls so no log file is ever anonymous.
+   static void set_header (std::vector<std::string> lines);
 };
 
 class Log
