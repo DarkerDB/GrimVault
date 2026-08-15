@@ -60,17 +60,17 @@ when it is disabled.
 | Environment | Stable feed | Beta feed |
 |---|---|---|
 | `dev` | disabled | disabled |
-| `qa` | `https://releases.katforge.com/grimvault/qa/appcast.xml` | `https://releases.katforge.com/grimvault/qa/appcast-beta.xml` |
-| `prod` | `https://releases.katforge.com/grimvault/appcast.xml` | `https://releases.katforge.com/grimvault/appcast-beta.xml` |
+| `qa` | `https://releases.darkerdb.com/grimvault/qa/appcast.xml` | `https://releases.darkerdb.com/grimvault/qa/appcast-beta.xml` |
+| `prod` | `https://releases.darkerdb.com/grimvault/appcast.xml` | `https://releases.darkerdb.com/grimvault/appcast-beta.xml` |
 
 Artifacts remain private in `s3://katforge-releases`. CloudFront OAC serves
-the public `releases.katforge.com` URLs.
+the public `releases.darkerdb.com` URLs.
 
 The appcast generator verifies that the configured private key derives the
 embedded public key before publishing.
 
 The V2 website cutover should download
-`https://releases.katforge.com/grimvault/latest/GrimVault-Setup.exe` only after
+`https://releases.darkerdb.com/grimvault/latest/GrimVault-Setup.exe` only after
 the first stable production publish has created it. Only stable production
 publishes update that alias. Versioned release artifacts stay immutable.
 

@@ -96,5 +96,5 @@ installs the package silently and verifies the installed executable's
 Authenticode signature and GrimVault metadata.
 
 WinSparkle appcasts use a separate Ed25519 enclosure signature and publish
-through `https://releases.katforge.com`. Stable production releases also
+through `https://releases.darkerdb.com`. Stable production releases also
 refresh a no-cache `grimvault/latest/GrimVault-Setup.exe` alias for the website.

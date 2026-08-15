@@ -31,9 +31,9 @@ endif ()
 if (GRIMVAULT_ENV STREQUAL "dev")
    set (_GV_APPCAST_DEFAULT "")
 elseif (GRIMVAULT_ENV STREQUAL "qa")
-   set (_GV_APPCAST_DEFAULT "https://releases.katforge.com/grimvault/qa/${_GV_APPCAST_FILE}")
+   set (_GV_APPCAST_DEFAULT "https://releases.darkerdb.com/grimvault/qa/${_GV_APPCAST_FILE}")
 else ()
-   set (_GV_APPCAST_DEFAULT "https://releases.katforge.com/grimvault/${_GV_APPCAST_FILE}")
+   set (_GV_APPCAST_DEFAULT "https://releases.darkerdb.com/grimvault/${_GV_APPCAST_FILE}")
 endif ()
 
 set (GRIMVAULT_APPCAST_URL "${_GV_APPCAST_DEFAULT}"
