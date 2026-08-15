@@ -929,6 +929,17 @@ namespace {
       });
       auth_watch->start ();
 
+      gv::core::diagnostics::process_sample ();
+      auto* perf_watch = new QTimer (&app);
+      perf_watch->setInterval (60'000);
+      QObject::connect (perf_watch, &QTimer::timeout, &app, [] {
+         if (const auto sample = gv::core::diagnostics::process_sample ();
+             !sample.empty ()) {
+            gv::core::log::app.info ("perf {}", sample);
+         }
+      });
+      perf_watch->start ();
+
       // Auto-launch the OAuth flow when starting up signed-out, unless the
       // operator passed --no-auto-login. Already-signed-in users skip
       // straight to settings sync.
