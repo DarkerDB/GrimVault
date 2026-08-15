@@ -15,7 +15,7 @@ namespace gv::capture {
 // available strategy at startup, then advances through the same ladder after
 // repeated runtime capture failures. The default ladder is platform-aware:
 // where WGC cannot suppress Windows' yellow capture border (Windows 10) it
-// drops to last resort behind DXGI duplication and GDI.
+// prefers DXGI duplication. GDI remains available only as a forced mode.
 //
 // A CaptureMode pins that choice: Automatic keeps the ladder + failover,
 // the Force values lock capture to one backend (see set_mode).

@@ -134,7 +134,7 @@ TEST (CaptureServiceTest, StartupSelectsFirstInitializedStrategy)
    EXPECT_EQ (available.front (), "dxgi.duplication");
 }
 
-TEST (CaptureServiceTest, RuntimeFallsThroughEntireLadder)
+TEST (CaptureServiceTest, RuntimeDoesNotFallThroughToGdi)
 {
    capture::CaptureService::Strategies strategies;
    auto wgc  = append (strategies, "wgc.borderless", true, { false, false });
@@ -152,12 +152,11 @@ TEST (CaptureServiceTest, RuntimeFallsThroughEntireLadder)
    EXPECT_EQ    (wgc->shutdown_calls, 1);
 
    EXPECT_FALSE (service->capture_window (nullptr).has_value ());
-   const auto gdiFrame = service->capture_window (nullptr);
-   ASSERT_TRUE (gdiFrame.has_value ());
-   EXPECT_EQ   (gdiFrame->backend, capture::CaptureBackend::Gdi);
-   EXPECT_EQ    (service->current ().name (), "gdi.bitblt");
-   EXPECT_EQ    (dxgi->shutdown_calls, 1);
-   EXPECT_EQ    (gdi->capture_calls, 1);
+   EXPECT_FALSE (service->capture_window (nullptr).has_value ());
+   EXPECT_EQ    (service->current ().name (), "dxgi.duplication");
+   EXPECT_EQ    (dxgi->shutdown_calls, 0);
+   EXPECT_EQ    (gdi->init_calls, 0);
+   EXPECT_EQ    (gdi->capture_calls, 0);
 }
 
 TEST (CaptureServiceTest, SuccessfulFrameResetsFailureCount)
@@ -217,20 +216,18 @@ TEST (CaptureServiceTest, NewTargetRestoresPreferredStrategy)
    EXPECT_EQ   (dxgi->shutdown_calls, 1);
 }
 
-TEST (CaptureServiceTest, RuntimeSkipsUnavailableFallback)
+TEST (CaptureServiceTest, StartupRejectsManualOnlyGdi)
 {
    capture::CaptureService::Strategies strategies;
-   append (strategies, "wgc.borderless", true, { false, false });
+   append (strategies, "wgc.borderless", false);
    auto dxgi = append (strategies, "dxgi.duplication", false);
-   append (strategies, "gdi.bitblt", true, { true });
+   auto gdi = append (strategies, "gdi.bitblt", true, { true });
 
-   auto service = create (std::move (strategies));
-   ASSERT_NE (service, nullptr);
-
-   EXPECT_FALSE (service->capture_window (nullptr).has_value ());
-   EXPECT_TRUE  (service->capture_window (nullptr).has_value ());
-   EXPECT_EQ    (service->current ().name (), "gdi.bitblt");
+   auto service = capture::CaptureService::create (
+      std::move (strategies), capture::CaptureService::Config {});
+   EXPECT_FALSE (service.has_value ());
    EXPECT_EQ    (dxgi->init_calls, 1);
+   EXPECT_EQ    (gdi->init_calls, 0);
 }
 
 TEST (CaptureServiceTest, ForcedModeSwitchesToItsBackend)
@@ -309,4 +306,20 @@ TEST (CaptureServiceTest, AutomaticModeRestoresThePreferredStrategy)
    EXPECT_EQ   (service->mode (), capture::CaptureMode::Automatic);
    EXPECT_EQ   (service->current ().name (), "wgc.borderless");
    EXPECT_EQ   (wgc->init_calls, 2);
+}
+
+TEST (CaptureServiceTest, AutomaticModeRejectsManualOnlyBackend)
+{
+   capture::CaptureService::Strategies strategies;
+   auto wgc = append (strategies, "wgc.borderless", true);
+   append (strategies, "gdi.bitblt", true);
+
+   auto service = create (std::move (strategies));
+   ASSERT_NE (service, nullptr);
+   ASSERT_TRUE (service->set_mode (capture::CaptureMode::ForceGdi).has_value ());
+   wgc->initializes = false;
+
+   EXPECT_FALSE (service->set_mode (capture::CaptureMode::Automatic).has_value ());
+   EXPECT_EQ    (service->mode (), capture::CaptureMode::ForceGdi);
+   EXPECT_EQ    (service->current ().name (), "gdi.bitblt");
 }
