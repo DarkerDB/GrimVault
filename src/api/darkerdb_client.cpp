@@ -1,4 +1,5 @@
 #include <gv/api/darkerdb_client.h>
+#include <gv/core/api_contract.h>
 
 #include <gv/auth/session.h>
 #include <gv/core/diagnostics.h>
@@ -19,6 +20,7 @@
 #include <chrono>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 #include <mutex>
 #include <sstream>
@@ -32,6 +34,35 @@ namespace {
 
    constexpr std::array<int, 3> k_retry_delays_ms { 200, 500, 1500 };
    constexpr std::size_t k_max_response_bytes = 2 * 1024 * 1024;
+
+   std::string normalized_cache_text (std::string_view text)
+   {
+      std::string out;
+      out.reserve (text.size ());
+      bool spacing = true;
+      for (const unsigned char ch : text) {
+         if (std::isspace (ch)) {
+            spacing = !out.empty ();
+            continue;
+         }
+         if (spacing && !out.empty ()) out.push_back (' ');
+         spacing = false;
+         out.push_back (static_cast<char> (std::tolower (ch)));
+      }
+      return out;
+   }
+
+   long server_total_us (std::string_view timing)
+   {
+      constexpr std::string_view marker = "total;dur=";
+      const auto start = timing.find (marker);
+      if (start == std::string_view::npos) return 0;
+      const std::string value { timing.substr (start + marker.size ()) };
+      char* end = nullptr;
+      const double milliseconds = std::strtod (value.c_str (), &end);
+      if (end == value.c_str () || milliseconds <= 0.0) return 0;
+      return static_cast<long> (std::lround (milliseconds * 1000.0));
+   }
 
    struct WriteState {
       std::string* body = nullptr;
@@ -359,8 +390,25 @@ namespace {
 
    void parse_market (const nlohmann::json& j, MarketAnalysis& out)
    {
-      out.active_listings     = integer_or_zero (j, "active_listings");
-      out.sales_30d           = integer_or_zero (j, "sales_30d");
+      with_object (j, "activity", [&] (const nlohmann::json& activity) {
+         with_object (activity, "sales", [&] (const nlohmann::json& sales) {
+            out.sales.count = integer_or_zero (sales, "count");
+            out.sales.capped = sales.value ("capped", false);
+            out.sales.window_hours = integer_or_zero (sales, "window_hours");
+         });
+         with_object (activity, "active_listings", [&] (const nlohmann::json& active) {
+            out.active_listings.count = integer_or_zero (active, "count");
+            out.active_listings.capped = active.value ("capped", false);
+         });
+      });
+      // Rolling-deploy tolerance for a new client briefly reaching an old API.
+      if (out.sales.window_hours == 0 && j.contains ("sales_30d")) {
+         out.sales.count = integer_or_zero (j, "sales_30d");
+         out.sales.window_hours = 30 * 24;
+      }
+      if (out.active_listings.count == 0 && j.contains ("active_listings")) {
+         out.active_listings.count = integer_or_zero (j, "active_listings");
+      }
       out.average_sale_price  = optional_number<std::int64_t> (j, "average_sale_price");
       out.median_sale_price   = optional_number<std::int64_t> (j, "median_sale_price");
       out.trend_percent       = optional_number<double> (j, "trend_percent");
@@ -908,7 +956,9 @@ struct DDBClient::Impl
       long                       dns_us = 0;
       long                       connect_us = 0;
       long                       tls_us = 0;
+      long                       pretransfer_us = 0;
       long                       ttfb_us = 0;
+      long                       unattributed_ttfb_us = 0;
       std::string                request_id;
       std::string                server_timing;
    };
@@ -930,6 +980,7 @@ struct DDBClient::Impl
    };
    std::mutex analysis_cache_lock;
    std::unordered_map<std::string, CachedAnalysis> analysis_cache;
+   std::unordered_map<std::string, std::chrono::steady_clock::time_point> not_found_cache;
 
    std::optional<TooltipLookup> cached_analysis (const std::string& key)
    {
@@ -965,6 +1016,27 @@ struct DDBClient::Impl
       });
    }
 
+   bool cached_not_found (const std::string& key)
+   {
+      std::lock_guard lock { analysis_cache_lock };
+      const auto found = not_found_cache.find (key);
+      if (found == not_found_cache.end ()) return false;
+      if (found->second <= std::chrono::steady_clock::now ()) {
+         not_found_cache.erase (found);
+         return false;
+      }
+      return true;
+   }
+
+   void cache_not_found (const std::string& key)
+   {
+      if (key.empty ()) return;
+      std::lock_guard lock { analysis_cache_lock };
+      if (not_found_cache.size () >= 64) not_found_cache.erase (not_found_cache.begin ());
+      not_found_cache.insert_or_assign (
+         key, std::chrono::steady_clock::now () + std::chrono::seconds { 30 });
+   }
+
    ~Impl ()
    {
       if (general_curl)  curl_easy_cleanup (general_curl);
@@ -988,6 +1060,8 @@ struct DDBClient::Impl
       curl_easy_reset (curl);
 
       curl_slist* headers = nullptr;
+      headers = curl_slist_append (
+         headers, std::string { gv::core::api_contract::header_line }.c_str ());
       headers = curl_slist_append (headers, ("User-Agent: " + cfg.user_agent).c_str ());
       headers = curl_slist_append (headers, ("X-Client-Id: " + cfg.client_id).c_str ());
       headers = curl_slist_append (headers,
@@ -1042,7 +1116,7 @@ struct DDBClient::Impl
       res.server_timing = std::move (header_state.server_timing);
       res.elapsed = std::chrono::duration_cast<std::chrono::milliseconds> (
          std::chrono::steady_clock::now () - t0);
-#ifdef CURLINFO_NAMELOOKUP_TIME_T
+#if LIBCURL_VERSION_NUM >= 0x073D00
       curl_off_t timing_us = 0;
       curl_easy_getinfo (curl, CURLINFO_NAMELOOKUP_TIME_T, &timing_us);
       res.dns_us = static_cast<long> (timing_us);
@@ -1050,8 +1124,12 @@ struct DDBClient::Impl
       res.connect_us = static_cast<long> (timing_us);
       curl_easy_getinfo (curl, CURLINFO_APPCONNECT_TIME_T, &timing_us);
       res.tls_us = static_cast<long> (timing_us);
+      curl_easy_getinfo (curl, CURLINFO_PRETRANSFER_TIME_T, &timing_us);
+      res.pretransfer_us = static_cast<long> (timing_us);
       curl_easy_getinfo (curl, CURLINFO_STARTTRANSFER_TIME_T, &timing_us);
       res.ttfb_us = static_cast<long> (timing_us);
+      res.unattributed_ttfb_us = std::max (
+         0L, res.ttfb_us - res.pretransfer_us - server_total_us (res.server_timing));
 #endif
 
       curl_slist_free_all (headers);
@@ -1083,7 +1161,9 @@ struct DDBClient::Impl
          { "dns_us", std::to_string (res.dns_us) },
          { "connect_us", std::to_string (res.connect_us) },
          { "tls_us", std::to_string (res.tls_us) },
+         { "pretransfer_us", std::to_string (res.pretransfer_us) },
          { "ttfb_us", std::to_string (res.ttfb_us) },
+         { "unattributed_ttfb_us", std::to_string (res.unattributed_ttfb_us) },
          { "request_id", res.request_id },
          { "server_timing", res.server_timing },
       });
@@ -1203,12 +1283,17 @@ core::Result<TooltipLookup> DDBClient::lookup_tooltip (
       : std::nullopt;
    std::string cache_key;
    if (principal && !principal->empty ()) {
-      cache_key = "lookup\x1f" + *principal + "\x1f" + lang + "\x1f" + text;
+      cache_key = "lookup\x1f" + *principal + "\x1f" + lang + "\x1f"
+         + normalized_cache_text (text);
       if (auto cached = impl_->cached_analysis (cache_key)) {
          core::log::api.event ("lookup.cache_hit", {
             { "item_id", cached->item_id },
          });
          return std::move (*cached);
+      }
+      if (impl_->cached_not_found (cache_key)) {
+         return core::fail (core::Error::make (core::ErrorKind::NotFound,
+            "darkerdb: item not recognized"));
       }
    }
 
@@ -1246,6 +1331,7 @@ core::Result<TooltipLookup> DDBClient::lookup_tooltip (
    if (!res.has_value ()) return core::fail (res.error ());
 
    if (res->status == 404) {
+      impl_->cache_not_found (cache_key);
       return core::fail (core::Error::make (core::ErrorKind::NotFound,
          "darkerdb: item not recognized"));
    }
@@ -1284,6 +1370,7 @@ core::Result<TooltipLookup> DDBClient::analyze_tooltip (
    float                confidence,
    std::string_view     capture_backend,
    const std::unordered_map<std::string, std::string>& gems,
+   const std::vector<std::string>& enabled_widgets,
    std::chrono::seconds cache_ttl
 ) {
    const std::string lang { language };
@@ -1292,6 +1379,10 @@ core::Result<TooltipLookup> DDBClient::analyze_tooltip (
       gems.begin (), gems.end ()
    };
    std::sort (ordered_gems.begin (), ordered_gems.end ());
+   auto ordered_widgets = enabled_widgets;
+   std::sort (ordered_widgets.begin (), ordered_widgets.end ());
+   ordered_widgets.erase (
+      std::unique (ordered_widgets.begin (), ordered_widgets.end ()), ordered_widgets.end ());
    const auto principal = impl_->session
       ? impl_->session->principal ()
       : std::nullopt;
@@ -1300,11 +1391,14 @@ core::Result<TooltipLookup> DDBClient::analyze_tooltip (
    if (principal && !principal->empty ()) {
       cache_key.append ("analyze\x1f").append (*principal)
          .append ("\x1f").append (lang)
-         .append ("\x1f").append (text)
+         .append ("\x1f").append (normalized_cache_text (text))
          .append ("\x1f").append (std::to_string (confidence_bucket))
          .append ("\x1f").append (capture_backend);
       for (const auto& [line, family] : ordered_gems) {
          cache_key.append ("\x1e").append (line).append ("\x1f").append (family);
+      }
+      for (const auto& widget : ordered_widgets) {
+         cache_key.append ("\x1d").append (widget);
       }
    }
    if (!cache_key.empty ()) {
@@ -1313,6 +1407,10 @@ core::Result<TooltipLookup> DDBClient::analyze_tooltip (
             { "item_id", cached->item_id },
          });
          return std::move (*cached);
+      }
+      if (impl_->cached_not_found (cache_key)) {
+         return core::fail (core::Error::make (core::ErrorKind::NotFound,
+            "ddb: item not recognized"));
       }
    }
 
@@ -1341,6 +1439,7 @@ core::Result<TooltipLookup> DDBClient::analyze_tooltip (
       }},
       { "hints", {
          { "capture_backend", capture_backend.empty () ? "unknown" : capture_backend },
+         { "enabled_widgets", ordered_widgets },
       }},
    };
 
@@ -1355,6 +1454,7 @@ core::Result<TooltipLookup> DDBClient::analyze_tooltip (
    if (!res.has_value ()) return core::fail (res.error ());
 
    if (res->status == 404) {
+      impl_->cache_not_found (cache_key);
       return core::fail (core::Error::make (core::ErrorKind::NotFound,
          "ddb: item not recognized"));
    }

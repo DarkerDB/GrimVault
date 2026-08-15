@@ -87,8 +87,8 @@ TEST (AugmentPayload, CompleteAnalysisRendersPremiumSections)
       .roll_percentile = 55,
       .grade = "C",
    });
-   lookup.market_analysis.sales_30d = 28;
-   lookup.market_analysis.active_listings = 17;
+   lookup.market_analysis.sales = { .count = 28, .capped = false, .window_hours = 48 };
+   lookup.market_analysis.active_listings = { .count = 17, .capped = false };
    lookup.market_analysis.trend_percent = 8.1;
    lookup.market_analysis.median_sale_seconds = 2520;
    lookup.market_analysis.days_supply = 18.2;
@@ -215,6 +215,10 @@ TEST (AugmentPayload, CompleteAnalysisRendersPremiumSections)
    EXPECT_EQ (analysis ["recipes"][0]["materials"][0]["quantity"], 2);
    EXPECT_EQ (analysis ["recipes"][0]["materials"][0]["is_this"], true);
    EXPECT_EQ (analysis ["market"]["median_sale_seconds"], 2520);
+   EXPECT_EQ (analysis ["market"]["sales_30d"], 28);
+   EXPECT_EQ (analysis ["market"]["sales_capped"], false);
+   EXPECT_EQ (analysis ["market"]["sales_window_hours"], 48);
+   EXPECT_EQ (analysis ["market"]["active_listings"], 17);
    EXPECT_EQ (analysis ["market"]["days_supply"], 18.2);
    EXPECT_EQ (analysis ["market"]["price_stability"], "stable");
    EXPECT_EQ (analysis ["similar_sales"][0]["price"], 425);

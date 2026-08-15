@@ -7,6 +7,8 @@
 #include <gv/ui/overlay_window.h>
 
 #include <map>
+#include <utility>
+#include <vector>
 
 namespace gv::app {
 
@@ -49,6 +51,11 @@ struct SettingsBridge::Impl
       deps.controller->set_configured_mode (prefs.overlay_mode);
       if (!deps.capture_fps_locked) deps.controller->set_capture_fps (prefs.capture_fps);
       deps.controller->set_capture_mode (prefs.capture_mode);
+      std::vector<std::string> enabled_widgets;
+      for (const auto& [widget, enabled] : prefs.options.widgets) {
+         if (enabled) enabled_widgets.push_back (widget);
+      }
+      deps.controller->set_enabled_widgets (std::move (enabled_widgets));
 
       // A dashboard accelerator overrides the compiled default; an empty
       // one means the server never sent it, so leave the local binding be.
