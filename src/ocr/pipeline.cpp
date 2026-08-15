@@ -228,6 +228,8 @@ struct Pipeline::Impl
       bool  continuous_ok   = true;   // flips false after a failed (re)start
       int   continuous_errors = 0;
       auto  applied_mode    = capture.mode ();
+      int   dropped_frames  = 0;
+      auto  last_drop_report = std::chrono::steady_clock::now ();
 
       while (running.load (std::memory_order_relaxed)) {
          // The service is owned by this thread once the loop runs, so mode
@@ -324,7 +326,19 @@ struct Pipeline::Impl
          }
 
          if (frame_res.has_value () && !frame_res->empty ()) {
-            (void) capture_q.try_push (std::move (*frame_res));
+            if (!capture_q.try_push (std::move (*frame_res))) ++dropped_frames;
+         }
+
+         if (const auto now = std::chrono::steady_clock::now ();
+             now - last_drop_report > std::chrono::seconds { 10 }) {
+            if (dropped_frames > 0) {
+               core::log::vision.event ("frame_drops", {
+                  { "dropped", std::to_string (dropped_frames) },
+                  { "window_s", "10" },
+               });
+               dropped_frames = 0;
+            }
+            last_drop_report = now;
          }
 
          // Pace BOTH paths. The continuous path returns the latest frame as
