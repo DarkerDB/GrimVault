@@ -28,7 +28,7 @@ cmd.exe /c "W:\\home\\ethan\\.katforge\\realms\\grimvault\\tools\\build\\wsl-bui
 cmd.exe /c "W:\\home\\ethan\\.katforge\\realms\\grimvault\\tools\\build\\wsl-test.bat"    # + unit tests
 ```
 
-That's it. The script configures with `windows-msvc-debug`, builds, installs
+That's it. The script configures with `windows-msvc-test`, builds, installs
 the `grimvault` CLI shim on your user PATH, and runs the binary with two env
 vars set so it stays local:
 
@@ -116,10 +116,13 @@ grimvault --no-auto-login
 ## CLI on PATH
 
 `tools/dev-run.ps1` writes `C:\Users\<you>\.bin\grimvault.cmd` pointing at
-the just-built `build\windows-msvc-debug\grimvault.exe`. From then on:
+the just-built executable and the source-only development runner. From then on:
 
 ```powershell
 grimvault --help
+grimvault dev           # configure, build, and run local source with --debug
+grimvault dev -NoRun    # configure and build without launching
+grimvault dev --fcr 5   # build, run, and forward app arguments
 grimvault status        # env, signed-in user, expiry, /v2/grimvault/ping result
 grimvault whoami        # alias of status
 grimvault login         # interactive OAuth (browser opens)
@@ -218,9 +221,11 @@ pwsh tools\install-cli.ps1 -AddToPath
 # then open a fresh shell so the new PATH is visible
 ```
 
-The shim is a 2-line `.cmd` that forwards `%*` to the real exe — the exe
-stays put so Qt's adjacent-DLL discovery keeps working. Each `dev-run.ps1`
-rewrites the shim, so you're always invoking the latest build.
+The shim forwards ordinary commands to the real exe and `grimvault dev` to
+the source runner. The exe stays put so Qt's adjacent-DLL discovery keeps
+working. Each `dev-run.ps1` refreshes its target file, so it always invokes the
+latest build without rewriting an active shim. Installer-distributed binaries
+do not include the source-only command.
 
 ## Bundled test data
 
