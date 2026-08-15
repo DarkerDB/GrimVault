@@ -39,23 +39,28 @@ namespace {
       return CaptureBackend::Unknown;
    }
 
+   bool automatic (std::string_view name) noexcept
+   {
+      return backend (name) != CaptureBackend::Gdi;
+   }
+
    CaptureService::Strategies default_strategies ()
    {
       // Where WGC cannot suppress Windows' yellow capture border (no
       // IsBorderRequired — Windows 10), prefer the borderless backends and
-      // keep bordered WGC as the last resort.
+      // keep bordered WGC as the last automatic resort.
       CaptureService::Strategies strategies;
       auto wgc = std::make_unique<WgcStrategy> ();
 
       if (WgcStrategy::borderless_capture_supported ()) {
          strategies.push_back (std::move (wgc));
          strategies.push_back (std::make_unique<DxgiDuplicationStrategy> ());
-         strategies.push_back (std::make_unique<GdiBitBltStrategy> ());
       } else {
          strategies.push_back (std::make_unique<DxgiDuplicationStrategy> ());
-         strategies.push_back (std::make_unique<GdiBitBltStrategy> ());
          strategies.push_back (std::move (wgc));
       }
+
+      strategies.push_back (std::make_unique<GdiBitBltStrategy> ());
 
       return strategies;
    }
@@ -114,12 +119,13 @@ struct CaptureService::Impl
       return result;
    }
 
-   void restore_preferred ()
+   bool restore_preferred ()
    {
-      if (active == 0) return;
+      if (active == 0) return automatic (current ().name ());
 
       const auto previous = std::string { current ().name () };
       for (std::size_t i = 0; i < active; ++i) {
+         if (!automatic (entries [i].strategy->name ())) continue;
          auto initialized = initialize (i);
          if (!initialized.has_value ()) continue;
 
@@ -129,8 +135,10 @@ struct CaptureService::Impl
          core::Logger::info (
             "capture: restored preferred strategy {} for new target; previous={}",
             current ().name (), previous);
-         return;
+         return true;
       }
+
+      return automatic (current ().name ());
    }
 
    void update_target (void* value, bool is_window)
@@ -173,6 +181,7 @@ struct CaptureService::Impl
 
       const auto previous = std::string { current ().name () };
       for (std::size_t i = active + 1; i < entries.size (); ++i) {
+         if (!automatic (entries [i].strategy->name ())) continue;
          auto initialized = initialize (i);
          if (!initialized.has_value ()) {
             core::Logger::warn ("capture: {} unavailable during failover: {}",
@@ -251,6 +260,7 @@ core::Result<std::unique_ptr<CaptureService>> CaptureService::create (
    std::string last_error;
 
    for (std::size_t i = 0; i < impl->entries.size (); ++i) {
+      if (!automatic (impl->entries [i].strategy->name ())) continue;
       auto initialized = impl->initialize (i);
       if (initialized.has_value ()) {
          impl->active = i;
@@ -352,10 +362,13 @@ core::Result<void> CaptureService::set_mode (CaptureMode mode)
    if (mode == impl_->mode) return {};
 
    if (mode == CaptureMode::Automatic) {
+      if (!impl_->restore_preferred ()) {
+         return core::fail (core::Error::make (
+            core::ErrorKind::Capture, "capture: no automatic backend is available"));
+      }
       impl_->mode = mode;
       impl_->failures = 0;
       impl_->fallback_exhausted = false;
-      impl_->restore_preferred ();
       core::Logger::info ("capture: mode automatic; strategy {}",
          impl_->current ().name ());
       return {};
