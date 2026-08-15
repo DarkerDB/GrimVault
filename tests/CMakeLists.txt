@@ -9,6 +9,7 @@ if (unit_sources)
    target_link_libraries (grimvault_unit_tests PRIVATE
       gv::core
       gv::db
+      gv::api
       gv::capture
       gv::vision
       gv::ocr

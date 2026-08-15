@@ -712,6 +712,7 @@ namespace {
       put ("behavior:is_launch_on_startup_enabled",
          b.behavior.is_launch_on_startup_enabled ? "true" : "false");
       put ("behavior:capture_fps", std::to_string (b.behavior.capture_fps));
+      put ("behavior:capture_mode", b.behavior.capture_mode);
 
       put ("hotkeys:toggle_overlay",  b.hotkeys.toggle_overlay);
       put ("hotkeys:force_refresh",   b.hotkeys.force_refresh);
@@ -796,6 +797,7 @@ namespace {
       out.is_launch_on_startup_enabled = j.value (
          "is_launch_on_startup_enabled", out.is_launch_on_startup_enabled);
       out.capture_fps = j.value ("capture_fps", out.capture_fps);
+      out.capture_mode = j.value ("capture_mode", out.capture_mode);
    }
 
    void parse_hotkeys (const nlohmann::json& j, SettingsBundle::Hotkeys& out)
@@ -805,8 +807,8 @@ namespace {
       out.open_in_browser = j.value ("open_in_browser", out.open_in_browser);
    }
 
-   void parse_settings (const nlohmann::json& body, SettingsBundle& out,
-                        const std::vector<std::string>& analysis_order)
+   void fold_settings (const nlohmann::json& body, SettingsBundle& out,
+                       const std::vector<std::string>& analysis_order)
    {
       if (!body.is_object ()) {
          flatten_to_values (out);
@@ -829,6 +831,58 @@ namespace {
    }
 
 } // namespace
+
+core::Result<SettingsBundle> parse_settings (std::string_view response)
+{
+   auto json = nlohmann::json::parse (response, nullptr, false);
+   if (json.is_discarded ()) {
+      return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
+         "darkerdb: settings invalid JSON"));
+   }
+
+   const auto& body = body_of (json);
+   constexpr std::array<std::string_view, 5> required_groups {
+      "behavior", "hotkeys", "overlay", "pricing", "tooltip"
+   };
+   if (!body.is_object () || std::any_of (
+         required_groups.begin (), required_groups.end (), [&body] (std::string_view group) {
+            auto it = body.find (group);
+            return it == body.end () || !it->is_object ();
+         })) {
+      return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
+         "darkerdb: settings response is incomplete"));
+   }
+
+   std::vector<std::string> analysis_order;
+   auto ordered = nlohmann::ordered_json::parse (response, nullptr, false);
+   if (!ordered.is_discarded () && ordered.is_object ()) {
+      const auto* ordered_body = &ordered;
+      if (auto wrapped = ordered.find ("body"); wrapped != ordered.end ()) ordered_body = &*wrapped;
+      if (ordered_body->is_object ()) {
+         auto tooltip = ordered_body->find ("tooltip");
+         if (tooltip != ordered_body->end () && tooltip->is_object ()) {
+            auto analysis = tooltip->find ("analysis");
+            if (analysis != tooltip->end () && analysis->is_object ()) {
+               analysis_order.reserve (analysis->size ());
+               for (const auto& [widget, visible] : analysis->items ()) {
+                  (void) visible;
+                  analysis_order.push_back (widget);
+               }
+            }
+         }
+      }
+   }
+
+   SettingsBundle out;
+   out.raw = json;
+   try {
+      fold_settings (body, out, analysis_order);
+   } catch (const nlohmann::json::exception& e) {
+      return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
+         "darkerdb: invalid settings values: {}", e.what ()));
+   }
+   return out;
+}
 
 struct DDBClient::Impl
 {
@@ -1387,54 +1441,7 @@ core::Result<SettingsBundle> DDBClient::get_settings ()
          "darkerdb: settings HTTP {}: {}", res->status, res->body.substr (0, 200)));
    }
 
-   auto json = nlohmann::json::parse (res->body, nullptr, false);
-   if (json.is_discarded ()) {
-      return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
-         "darkerdb: settings invalid JSON"));
-   }
-
-   const auto& body = body_of (json);
-   constexpr std::array<std::string_view, 5> required_groups {
-      "behavior", "hotkeys", "overlay", "pricing", "tooltip"
-   };
-   if (!body.is_object () || std::any_of (
-         required_groups.begin (), required_groups.end (), [&body] (std::string_view group) {
-            auto it = body.find (group);
-            return it == body.end () || !it->is_object ();
-         })) {
-      return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
-         "darkerdb: settings response is incomplete"));
-   }
-
-   std::vector<std::string> analysis_order;
-   auto ordered = nlohmann::ordered_json::parse (res->body, nullptr, false);
-   if (!ordered.is_discarded () && ordered.is_object ()) {
-      const auto* ordered_body = &ordered;
-      if (auto wrapped = ordered.find ("body"); wrapped != ordered.end ()) ordered_body = &*wrapped;
-      if (ordered_body->is_object ()) {
-         auto tooltip = ordered_body->find ("tooltip");
-         if (tooltip != ordered_body->end () && tooltip->is_object ()) {
-            auto analysis = tooltip->find ("analysis");
-            if (analysis != tooltip->end () && analysis->is_object ()) {
-               analysis_order.reserve (analysis->size ());
-               for (const auto& [widget, visible] : analysis->items ()) {
-                  (void) visible;
-                  analysis_order.push_back (widget);
-               }
-            }
-         }
-      }
-   }
-
-   SettingsBundle out;
-   out.raw = json;
-   try {
-      parse_settings (body, out, analysis_order);
-   } catch (const nlohmann::json::exception& e) {
-      return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
-         "darkerdb: invalid settings values: {}", e.what ()));
-   }
-   return out;
+   return parse_settings (res->body);
 }
 
 } // namespace gv::api
