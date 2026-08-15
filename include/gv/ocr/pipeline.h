@@ -57,7 +57,8 @@ public:
       int                         pin_near_edge_px   = 48;
       int                         pin_right_edge_px  = 32;
       int                         identity_bits      = 14;
-      int                         identity_detail_px = 4;
+      int                         identity_detail_px = 32;
+      int                         identity_frames    = 2;
       int                         search_free_px     = 16;
       int                         search_pinned_px   = 3;
       int                         cursor_reset_px    = 140;

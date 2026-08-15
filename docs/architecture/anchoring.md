@@ -89,9 +89,14 @@ center of the next vision search but never moves the Augment.
 
 At the observed box, a fixed-cost 64-bit grid hash samples the tooltip
 interior. Sampling cost is independent of tooltip area. A stable hash means
-the same card: mouse positioning remains authoritative. A materially changed
-hash authorizes reacquisition and repositioning. A replacement hard-hides the
-old Augment immediately, then passes through the normal two-frame detector and
+the same card: mouse positioning remains authoritative. Replacement demands
+hard confirmation: the hash delta (`identity_bits`) AND the changed
+detail-pixel count (`identity_detail_px`) must both cross threshold, and must
+do so on `identity_frames` consecutive frames. Either signal alone is capture
+noise — dxgi in particular moves tens of detail pixels on a static card,
+while a real swap or a failed locate saturates both (64 bits, 1024 px) and
+still confirms within two frames. A confirmed replacement hard-hides the old
+Augment immediately, then passes through the normal two-frame detector and
 refiner settle gate before the new Augment animates in. This prevents a single
 fade-out frame from resurrecting a disappearing tooltip.
 

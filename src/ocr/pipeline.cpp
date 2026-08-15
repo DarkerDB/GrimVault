@@ -355,6 +355,7 @@ struct Pipeline::Impl
       capture::CursorPos prev_cursor {};
       bool              have_prev = false;
       int               stable_frames = 0;
+      int               identity_streak = 0;
 
       vision::Anchor    anchor;
       std::uint64_t     anchor_generation = 0;
@@ -405,6 +406,7 @@ struct Pipeline::Impl
          generation.fetch_add (1, std::memory_order_relaxed);
          have_prev       = false;
          stable_frames   = 0;
+         identity_streak = 0;
          anchored_cursor = {};
       };
 
@@ -625,8 +627,9 @@ struct Pipeline::Impl
                   metrics.max_detail_pixels = std::max (
                      metrics.max_detail_pixels, detail_pixels);
                   const bool region_changed = hash_bits >= config.identity_bits
-                     || detail_pixels >= config.identity_detail_px;
-                  if (region_changed) {
+                     && detail_pixels >= config.identity_detail_px;
+                  identity_streak = region_changed ? identity_streak + 1 : 0;
+                  if (identity_streak >= std::max (1, config.identity_frames)) {
                      core::log::vision.event ("replacement_candidate", {
                         { "hash_bits", std::to_string (hash_bits) },
                         { "detail_px", std::to_string (detail_pixels) },
@@ -648,10 +651,11 @@ struct Pipeline::Impl
                         std::memory_order_relaxed);
                      have_prev = false;
                      stable_frames = 0;
+                     identity_streak = 0;
                      anchored_cursor = {};
                      continue;
                   }
-                  observed_box = *observed;
+                  if (observed.has_value ()) observed_box = *observed;
                }
 
                last_box = { px, py, anchor.w, anchor.h };
@@ -757,6 +761,7 @@ struct Pipeline::Impl
             metrics = {};
             have_prev       = false;
             stable_frames   = 0;
+            identity_streak = 0;
             anchored_cursor = c;
             core::Logger::debug (
                "anchoring: anchored {},{} {}x{} offset {},{} locked {}/{}",
