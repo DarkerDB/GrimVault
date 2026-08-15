@@ -24,6 +24,7 @@ class AppcastTest (unittest.TestCase):
       directory: Path,
       key: SigningKey,
       public_key: str,
+      url: str = "https://releases.darkerdb.com/grimvault/2.0.0/GrimVault-Setup.exe",
    ) -> subprocess.CompletedProcess[str]:
       installer = directory / "GrimVault-Setup-prod-2.0.0.exe"
       installer.write_bytes (b"signed-installer-fixture")
@@ -40,7 +41,7 @@ class AppcastTest (unittest.TestCase):
             "--installer", str (installer),
             "--output", str (output),
             "--public-key", public_key,
-            "--url", "https://releases.katforge.com/grimvault/2.0.0/GrimVault-Setup.exe",
+            "--url", url,
             "--version", "2.0.0",
          ],
          capture_output=True,
@@ -75,6 +76,19 @@ class AppcastTest (unittest.TestCase):
 
          self.assertNotEqual (result.returncode, 0)
          self.assertIn ("does not match", result.stderr)
+
+   def test_rejects_the_platform_release_host (self) -> None:
+      with tempfile.TemporaryDirectory () as raw_directory:
+         key = SigningKey.generate ()
+         result = self.run_generator (
+            Path (raw_directory),
+            key,
+            base64.b64encode (bytes (key.verify_key)).decode ("ascii"),
+            "https://releases.katforge.com/grimvault/2.0.0/GrimVault-Setup.exe",
+         )
+
+         self.assertNotEqual (result.returncode, 0)
+         self.assertIn ("releases.darkerdb.com/grimvault", result.stderr)
 
 
 if __name__ == "__main__":

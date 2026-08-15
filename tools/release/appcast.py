@@ -11,11 +11,13 @@ from pathlib import Path
 import re
 import sys
 import xml.etree.ElementTree as ET
+from urllib.parse import urlparse
 
 from nacl.signing import SigningKey
 
 
 SPARKLE = "http://www.andymatuschak.org/xml-namespaces/sparkle"
+RELEASE_HOST = "releases.darkerdb.com"
 VERSION = re.compile (
    r"^\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)(?:[.-]\d+)?)?(?:\+[0-9A-Za-z.-]+)?$"
 )
@@ -78,8 +80,13 @@ def main () -> int:
       raise ValueError (f"invalid release version: {options.version}")
    if not options.installer.is_file ():
       raise ValueError (f"installer does not exist: {options.installer}")
-   if not options.url.startswith ("https://releases.katforge.com/"):
-      raise ValueError ("installer URL must use releases.katforge.com")
+   installer_url = urlparse (options.url)
+   if (
+      installer_url.scheme != "https"
+      or installer_url.netloc != RELEASE_HOST
+      or not installer_url.path.startswith ("/grimvault/")
+   ):
+      raise ValueError ("installer URL must use releases.darkerdb.com/grimvault")
 
    key = signing_key (options.public_key)
    signature = key.sign (options.installer.read_bytes ()).signature
