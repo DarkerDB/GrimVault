@@ -1,6 +1,7 @@
 #include <gv/api/darkerdb_client.h>
 
 #include <gv/auth/session.h>
+#include <gv/core/diagnostics.h>
 #include <gv/core/env_resolver.h>
 #include <gv/core/http.h>
 #include <gv/core/logger.h>
@@ -937,6 +938,8 @@ struct DDBClient::Impl
       headers = curl_slist_append (headers, ("X-Client-Id: " + cfg.client_id).c_str ());
       headers = curl_slist_append (headers,
          ("X-Client-Version: " + std::string { gv::core::version::string }).c_str ());
+      headers = curl_slist_append (headers,
+         ("X-Client-Session: " + gv::core::diagnostics::session_id ()).c_str ());
       if (!bearer.empty ()) {
          headers = curl_slist_append (headers, ("Authorization: Bearer " + bearer).c_str ());
       }
