@@ -16,6 +16,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <utility>
+
 #ifdef _WIN32
    #include <Windows.h>
 #endif
@@ -197,6 +199,7 @@ struct AugmentView::Impl
 
    std::uint64_t seq         = 0;
    std::uint64_t pending_seq = 0;
+   bool          shown       = false;
    bool          warm        = false;
    bool          prewarming  = false;
    std::optional<PendingPresentation> waiting;
@@ -280,6 +283,9 @@ struct AugmentView::Impl
    // ends, so the card does too (no exit animation).
    void conceal ()
    {
+      if (std::exchange (shown, false)) {
+         core::Logger::info ("augment: conceal seq={}", seq);
+      }
       host->post_json (json { { "type", "clear" } }.dump ());
       if (snapshot) snapshot->clear ();
    }
@@ -433,6 +439,7 @@ void AugmentView::present (const gv::api::TooltipLookup& lookup,
    impl->host->post_json (
       augment::render_message (lookup, impl->pending_seq, options).dump ());
 
+   impl->shown = true;
    core::Logger::info ("augment: render '{}' seq={}", lookup.canonical_name, impl->seq);
 }
 
