@@ -298,7 +298,7 @@ struct TooltipLookup {
 //                    "is_price_history_sparkline_visible" },
 //      "pricing":  { "currency_display" },
 //      "behavior": { "is_auto_update_enabled", "is_launch_on_startup_enabled",
-//                    "capture_fps" },
+//                    "capture_fps", "capture_mode" },
 //      "hotkeys":  { "toggle_overlay", "force_refresh" },
 //      "updated_at": "..." }
 //
@@ -362,6 +362,7 @@ struct SettingsBundle {
       bool is_auto_update_enabled       = true;
       bool is_launch_on_startup_enabled = true;
       std::int32_t capture_fps          = 15;
+      std::string capture_mode          = "automatic";
    };
 
    struct Hotkeys {
@@ -380,6 +381,8 @@ struct SettingsBundle {
    std::unordered_map<std::string, std::string> values;
    nlohmann::json                                raw;
 };
+
+core::Result<SettingsBundle> parse_settings (std::string_view json);
 
 // Probe response from /v2/grimvault/ping. Used by CLI `status` / `doctor`.
 struct PingResult {

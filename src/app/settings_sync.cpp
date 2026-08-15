@@ -168,7 +168,6 @@ void SettingsSync::poll_now ()
                "overlay:", "tooltip:", "pricing:", "behavior:", "hotkeys:"
             };
             for (const auto& [key, value] : existing) {
-               (void) value;
                const bool managed = std::any_of (
                   std::begin (managed_prefixes), std::end (managed_prefixes),
                   [&key] (std::string_view prefix) { return key.starts_with (prefix); });
@@ -181,6 +180,7 @@ void SettingsSync::poll_now ()
                   continue;
                }
                ++changed;
+               log.info ("settings diff: {}: '{}' -> '<unset>'", key, value);
                emit settings_changed (QString::fromStdString (key), {});
             }
 
@@ -205,6 +205,7 @@ void SettingsSync::poll_now ()
                const auto& value = bundle->values.at (key_text);
                const auto it = existing.find (key_text);
                if (it != existing.end () && it->second == value) continue;
+               const auto previous = it == existing.end () ? "<unset>" : it->second;
 
                auto w = impl_->repo->set (key_text, value);
                if (!w.has_value ()) {
@@ -212,6 +213,7 @@ void SettingsSync::poll_now ()
                   continue;
                }
                ++changed;
+               log.info ("settings diff: {}: '{}' -> '{}'", key, previous, value);
                emit settings_changed (QString::fromStdString (key_text),
                                       QString::fromStdString (value));
             }
