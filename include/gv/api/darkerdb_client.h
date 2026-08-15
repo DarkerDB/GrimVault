@@ -90,9 +90,15 @@ struct GemOptimization {
    std::string            note;
 };
 
+struct ActivityCount {
+   std::int64_t count = 0;
+   bool         capped = false;
+   std::int64_t window_hours = 0;
+};
+
 struct MarketAnalysis {
-   std::int64_t       active_listings = 0;
-   std::int64_t       sales_30d       = 0;
+   ActivityCount active_listings;
+   ActivityCount sales;
    // What the item actually sold for, unweighted. Distinct from
    // Pricing::median, which is adjusted for this instance's roll.
    std::optional<std::int64_t> average_sale_price;
@@ -430,6 +436,7 @@ public:
       float            confidence,
       std::string_view capture_backend,
       const std::unordered_map<std::string, std::string>& gems = {},
+      const std::vector<std::string>& enabled_widgets = {},
       std::chrono::seconds cache_ttl = std::chrono::seconds (180)
    );
 

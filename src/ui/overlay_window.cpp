@@ -75,9 +75,14 @@ namespace {
       if (shows (lookup, options, "roll_quality") && lookup.roll_score) {
          out << QStringLiteral ("Roll quality: %1 / 100").arg (*lookup.roll_score);
       }
-      if (shows (lookup, options, "market_trends")
-          && lookup.market_analysis.sales_30d > 0) {
-         out << QStringLiteral ("Sales (30d): %1").arg (lookup.market_analysis.sales_30d);
+      if (shows (lookup, options, "market_activity")
+          && lookup.market_analysis.sales.count > 0) {
+         const auto count = QStringLiteral ("%1%2")
+            .arg (lookup.market_analysis.sales.count)
+            .arg (lookup.market_analysis.sales.capped ? QStringLiteral ("+") : QString {});
+         out << QStringLiteral ("Sales: %1 / %2h")
+                   .arg (count)
+                   .arg (lookup.market_analysis.sales.window_hours);
       }
 
       const auto append_plan = [&out] (const std::optional<gv::api::GemPlan>& plan,

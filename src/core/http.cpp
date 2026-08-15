@@ -1,5 +1,6 @@
 #include <gv/core/http.h>
 
+#include <gv/core/api_contract.h>
 #include <gv/core/env_resolver.h>
 #include <gv/core/environment.h>
 #include <gv/core/logger.h>
@@ -76,6 +77,9 @@ Result<Response> perform (const Request& req)
    }
 
    curl_slist* headers = nullptr;
+
+   headers = curl_slist_append (
+      headers, std::string { api_contract::header_line }.c_str ());
 
    for (const auto& h : req.headers) {
       const auto line = h.name + ": " + h.value;

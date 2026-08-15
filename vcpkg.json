@@ -26,7 +26,34 @@
          "description": "Build Qt and OpenCV from source for local development",
          "dependencies": [
             "opencv",
-            { "name": "qtbase", "features": [ "widgets" ] },
+            {
+               "name": "qtbase",
+               "default-features": false,
+               "features": [
+                  "brotli",
+                  "concurrent",
+                  "dbus",
+                  "dnslookup",
+                  "doubleconversion",
+                  "freetype",
+                  "gui",
+                  "harfbuzz",
+                  "icu",
+                  "jpeg",
+                  "network",
+                  "opengl",
+                  "openssl",
+                  "pcre2",
+                  "png",
+                  "sessionmanager",
+                  "sql",
+                  "sql-sqlite",
+                  "testlib",
+                  "thread",
+                  "widgets",
+                  "zstd"
+               ]
+            },
             "qtcharts",
             "qtdeclarative",
             "qttools"

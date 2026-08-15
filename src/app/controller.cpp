@@ -19,6 +19,7 @@
 
 #include <Windows.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -28,6 +29,7 @@
 #include <optional>
 #include <sstream>
 #include <thread>
+#include <utility>
 
 namespace gv::app {
 
@@ -140,12 +142,15 @@ struct Controller::Impl
    struct AnalysisJob {
       ocr::RecognizedTooltip tooltip;
       std::string            language;
+      std::vector<std::string> enabled_widgets;
    };
    std::thread                analysis_thread;
    std::mutex                 analysis_lock;
    std::condition_variable    analysis_ready;
    std::optional<AnalysisJob> pending_analysis;
    bool                       analysis_stopping = false;
+   std::mutex                 widgets_lock;
+   std::vector<std::string>   enabled_widgets;
 
    // Cache of currently bound accelerators by action id.
    std::mutex                                  hk_lock;
@@ -282,9 +287,14 @@ struct Controller::Impl
    void enqueue_analysis (const ocr::RecognizedTooltip& rt)
    {
       if (deps.api) deps.api->cancel_analysis ();
+      std::vector<std::string> widgets;
+      {
+         std::lock_guard lk { widgets_lock };
+         widgets = enabled_widgets;
+      }
       {
          std::lock_guard lk { analysis_lock };
-         pending_analysis = AnalysisJob { rt, game_language };
+         pending_analysis = AnalysisJob { rt, game_language, std::move (widgets) };
       }
       analysis_ready.notify_one ();
    }
@@ -311,7 +321,8 @@ struct Controller::Impl
          const auto analysis_started = std::chrono::steady_clock::now ();
          auto result = deps.api->analyze_tooltip (
             job.tooltip.text, job.language, job.tooltip.confidence,
-            capture::backend_name (job.tooltip.backend), job.tooltip.gems);
+            capture::backend_name (job.tooltip.backend), job.tooltip.gems,
+            job.enabled_widgets);
          const auto analysis_ms = std::chrono::duration_cast<std::chrono::milliseconds> (
             std::chrono::steady_clock::now () - analysis_started).count ();
 
@@ -556,6 +567,14 @@ Controller::~Controller ()
 }
 
 Mode Controller::mode () const noexcept { return impl_->mode.load (); }
+
+void Controller::set_enabled_widgets (std::vector<std::string> widgets)
+{
+   std::sort (widgets.begin (), widgets.end ());
+   widgets.erase (std::unique (widgets.begin (), widgets.end ()), widgets.end ());
+   std::lock_guard lk { impl_->widgets_lock };
+   impl_->enabled_widgets = std::move (widgets);
+}
 
 void Controller::set_authenticated (bool authenticated, std::string principal)
 {

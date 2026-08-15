@@ -11,6 +11,7 @@
 #include <atomic>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace gv::db  { class Database; class UserHotkeysRepo; class UserSettingsRepo; }
 namespace gv::api { class DDBClient; }
@@ -100,6 +101,10 @@ public:
 
    // Apply the dashboard's capture-backend policy live.
    void set_capture_mode (capture::CaptureMode mode);
+
+   // Enabled dashboard widgets sent as a computation hint. The API still
+   // intersects these with the authenticated plan before doing less work.
+   void set_enabled_widgets (std::vector<std::string> widgets);
 
    // Action entry points. Each is safe to call from any thread; the heavy
    // lifting happens via QMetaObject::invokeMethod queued connection.
