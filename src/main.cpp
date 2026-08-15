@@ -12,6 +12,7 @@
 #include <gv/core/hotkey_manager.h>
 #include <gv/core/http.h>
 #include <gv/core/ini_migrator.h>
+#include <gv/core/diagnostics.h>
 #include <gv/core/logger.h>
 #include <gv/core/single_instance.h>
 #include <gv/core/version.h>
@@ -541,6 +542,42 @@ namespace {
          }
       }
 
+      const auto publish_session_header = [&] {
+         namespace diag = gv::core::diagnostics;
+
+         std::vector<std::string> header;
+         header.push_back (fmt::format ("grimvault {} env={} session={} install={}",
+            gv::core::version::string,
+            std::string { active_env.name },
+            diag::session_id (),
+            diag::install_id (data_dir)));
+         header.push_back (fmt::format ("api={} auth={}",
+            std::string { active_env.api_base_url },
+            std::string { active_env.auth_base_url }));
+         header.push_back (fmt::format ("identity={}",
+            session.principal ().value_or ("signed-out")));
+         header.push_back (fmt::format ("capture={}",
+            capture ? std::string { capture->current ().name () } : "none"));
+
+         for (auto& line : diag::machine ()) header.push_back (std::move (line));
+
+         if (auto stored = settings_repo.all (); stored.has_value ()) {
+            std::vector<std::string> keys;
+            keys.reserve (stored->size ());
+            for (const auto& [key, value] : *stored) {
+               keys.push_back (fmt::format ("{}={}", key, value));
+            }
+            std::sort (keys.begin (), keys.end ());
+            for (auto& entry : keys) {
+               header.push_back (fmt::format ("setting {}", entry));
+            }
+         }
+
+         gv::core::Logger::set_header (std::move (header));
+      };
+
+      publish_session_header ();
+
       std::unique_ptr<gv::ocr::Pipeline> pipeline;
       if (capture) {
          gv::ocr::Pipeline::Config pipe_cfg;
@@ -876,6 +913,7 @@ namespace {
 
          gv::core::log::app.info ("auth state changed externally: {}",
             now ? "signed in" : "signed out");
+         publish_session_header ();
          tray.set_connection_state (now
             ? gv::ui::ConnectionState::Syncing
             : gv::ui::ConnectionState::SignedOut);
