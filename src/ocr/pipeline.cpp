@@ -1,4 +1,5 @@
 #include <gv/ocr/pipeline.h>
+#include <gv/ocr/capture_policy.h>
 #include <gv/ocr/preprocessor.h>
 #include <gv/core/environment.h>
 #include <gv/core/logger.h>
@@ -254,9 +255,17 @@ struct Pipeline::Impl
 
          void* now_target = window.load ();
          const bool forced = force_scan.load (std::memory_order_relaxed);
+         const bool auto_scan = automatic.load (std::memory_order_relaxed);
+         const bool tracking = capture_tracking (
+            auto_scan,
+            anchored.load (std::memory_order_relaxed),
+            reacquiring.load (std::memory_order_relaxed));
 
-         if (!enabled.load (std::memory_order_relaxed)
-             || (!automatic.load (std::memory_order_relaxed) && !forced)) {
+         if (!capture_active (
+               enabled.load (std::memory_order_relaxed),
+               auto_scan,
+               forced,
+               tracking)) {
             if (session_active) {
                capture.stop_continuous ();
                session_active = false;
@@ -269,7 +278,7 @@ struct Pipeline::Impl
          // detection against monitor frames — that's pure CPU burn with
          // nothing to find. A forced scan (F5) still grabs one monitor
          // frame so desktop testing works without the game.
-         if (now_target == nullptr && !forced) {
+         if (!capture_targeted (now_target != nullptr, forced, tracking)) {
             if (session_active) {
                capture.stop_continuous ();
                session_active = false;
