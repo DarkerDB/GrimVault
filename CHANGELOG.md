@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.5] - 2026-08-15
+
+- Fixed make gdi capture an explicit compatibility mode
+- Fixed align manual augment dismissal with automatic mode
+- Added dated api contract with widget hints and timing observability
+- Fixed sync and log capture mode settings
+- Added dev command for building and running local source
+- Added log augment view conceal events
+- Added log dropped frame counts in ocr pipeline
+- Added send session id in darkerdb client requests
+- Added log periodic process cpu and memory samples
+- Added publish session diagnostics header on startup and auth change
+- Added emit session header in daily log files
+- Added diagnostics module for session and machine info
+- Added require multi-frame confirmation for anchor replacement
+- Changed vendored tooltip library to 1.5.22
+- Changed use releases.darkerdb.com as canonical appcast host
+- Changed sync vendored tooltip lib to 1.5.20
+
 ## [0.0.4] - 2026-08-10
 
 - Changed release v0.0.4-rc.1
