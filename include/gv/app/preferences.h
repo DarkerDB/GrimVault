@@ -35,6 +35,7 @@ struct Preferences
 
    bool auto_updates      = true;
    bool launch_on_startup = true;
+   bool performance_mode  = false;
    int  capture_fps       = 15;
 
    capture::CaptureMode capture_mode = capture::CaptureMode::Automatic;
@@ -222,6 +223,11 @@ inline bool apply (Preferences& out, std::string_view key, std::string_view valu
    if (key == "behavior:is_launch_on_startup_enabled") {
       out.launch_on_startup = erased ? fallback.launch_on_startup
          : detail::parse_bool (value, fallback.launch_on_startup);
+      return true;
+   }
+   if (key == "behavior:is_performance_mode_enabled") {
+      out.performance_mode = erased ? fallback.performance_mode
+         : detail::parse_bool (value, fallback.performance_mode);
       return true;
    }
    if (key == "behavior:capture_fps") {

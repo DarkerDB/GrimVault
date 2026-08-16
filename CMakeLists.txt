@@ -24,6 +24,7 @@ include (Modules)
 include (EmbedSql)
 include (Env)
 include (AppcastUrl)
+include (OnnxRuntime)
 
 # ---- Global compile flags ----
 
@@ -157,6 +158,9 @@ target_link_libraries (gv_vision PUBLIC
    opencv_core
    opencv_dnn
    opencv_imgproc
+   PRIVATE
+   onnxruntime::onnxruntime
+   directml::directml
 )
 
 grimvault_add_module (ocr)
@@ -360,6 +364,12 @@ add_custom_command (TARGET grimvault POST_BUILD
            "$<TARGET_FILE_DIR:grimvault>"
    VERBATIM
    COMMAND_EXPAND_LISTS
+)
+add_custom_command (TARGET grimvault POST_BUILD
+   COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+           "${GRIMVAULT_ONNXRUNTIME_PROVIDERS_RUNTIME}"
+           "$<TARGET_FILE_DIR:grimvault>"
+   VERBATIM
 )
 
 # vcpkg's applocal.ps1 stages Qt6Core(d).dll and co., but not Qt plugins

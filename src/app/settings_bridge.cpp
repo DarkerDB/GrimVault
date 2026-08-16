@@ -51,6 +51,7 @@ struct SettingsBridge::Impl
       deps.controller->set_configured_mode (prefs.overlay_mode);
       if (!deps.capture_fps_locked) deps.controller->set_capture_fps (prefs.capture_fps);
       deps.controller->set_capture_mode (prefs.capture_mode);
+      deps.controller->set_performance_mode (prefs.performance_mode);
       std::vector<std::string> enabled_widgets;
       for (const auto& [widget, enabled] : prefs.options.widgets) {
          if (enabled) enabled_widgets.push_back (widget);

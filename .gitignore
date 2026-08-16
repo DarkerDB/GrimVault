@@ -17,6 +17,8 @@
 /tools/ocr-train/cache
 /tools/ocr-train/inbox-dataset-*
 /tools/ocr-train/inbox-review.tsv
+/tools/tooltip-train/.venv
+/tools/tooltip-train/output
 
 # CMake / native build
 /build

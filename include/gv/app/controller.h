@@ -102,6 +102,8 @@ public:
    // Apply the dashboard's capture-backend policy live.
    void set_capture_mode (capture::CaptureMode mode);
 
+   void set_performance_mode (bool on);
+
    // Enabled dashboard widgets sent as a computation hint. The API still
    // intersects these with the authenticated plan before doing less work.
    void set_enabled_widgets (std::vector<std::string> widgets);

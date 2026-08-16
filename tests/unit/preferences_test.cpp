@@ -183,6 +183,7 @@ TEST (Preferences, FoldsBehaviorAndHotkeys)
    const auto prefs = folded ({
       { "behavior:is_auto_update_enabled",       "false" },
       { "behavior:is_launch_on_startup_enabled", "true"  },
+      { "behavior:is_performance_mode_enabled",  "true"  },
       { "behavior:capture_fps",                  "10"    },
       { "hotkeys:force_refresh",                 "F9"    },
       { "hotkeys:toggle_overlay",                "Ctrl+Alt+G" },
@@ -190,6 +191,7 @@ TEST (Preferences, FoldsBehaviorAndHotkeys)
 
    EXPECT_FALSE (prefs.auto_updates);
    EXPECT_TRUE  (prefs.launch_on_startup);
+   EXPECT_TRUE  (prefs.performance_mode);
    EXPECT_EQ (prefs.capture_fps, 10);
    EXPECT_EQ (prefs.hotkey_scan_now, "F9");
    EXPECT_EQ (prefs.hotkey_toggle_overlay, "Ctrl+Alt+G");
@@ -203,12 +205,14 @@ TEST (Preferences, ErasedKeysRevertToDefaults)
    apply (prefs, "overlay:mode",                       "disabled");
    apply (prefs, "overlay:alignment",                  "top_left");
    apply (prefs, "behavior:is_launch_on_startup_enabled", "false");
+   apply (prefs, "behavior:is_performance_mode_enabled",  "true");
    apply (prefs, "behavior:capture_fps",                    "5");
    apply (prefs, "hotkeys:force_refresh",              "F9");
 
    apply (prefs, "overlay:mode",                       "");
    apply (prefs, "overlay:alignment",                  "");
    apply (prefs, "behavior:is_launch_on_startup_enabled", "");
+   apply (prefs, "behavior:is_performance_mode_enabled",  "");
    apply (prefs, "behavior:capture_fps",                    "");
    apply (prefs, "hotkeys:force_refresh",              "");
 
@@ -216,6 +220,7 @@ TEST (Preferences, ErasedKeysRevertToDefaults)
    EXPECT_TRUE (prefs.layout.enabled);
    EXPECT_EQ (prefs.layout.align, Align::Attached);
    EXPECT_TRUE (prefs.launch_on_startup);
+   EXPECT_FALSE (prefs.performance_mode);
    EXPECT_EQ (prefs.capture_fps, 15);
    EXPECT_TRUE (prefs.hotkey_scan_now.empty ());
 }

@@ -90,6 +90,25 @@ install (FILES      "${CMAKE_SOURCE_DIR}/LICENSE"
          DESTINATION .
          COMPONENT   application)
 
+install (FILES
+   "${GRIMVAULT_ONNXRUNTIME_RUNTIME}"
+   "${GRIMVAULT_ONNXRUNTIME_PROVIDERS_RUNTIME}"
+   "${GRIMVAULT_DIRECTML_RUNTIME}"
+   DESTINATION .
+   COMPONENT application)
+
+install (FILES
+   "${GRIMVAULT_ONNXRUNTIME_LICENSE}"
+   DESTINATION licenses
+   RENAME ONNX-Runtime.txt
+   COMPONENT application)
+
+install (FILES
+   "${GRIMVAULT_DIRECTML_LICENSE}"
+   DESTINATION licenses
+   RENAME DirectML.txt
+   COMPONENT application)
+
 # ---- CPack: NSIS Windows installer ----
 
 set (CPACK_PACKAGE_NAME           "GrimVault")

@@ -130,6 +130,8 @@ public:
    // on the current backend.
    void set_capture_mode (capture::CaptureMode mode);
 
+   void set_performance_mode (bool on);
+
    void set_language (LanguageFamily f);
 
    // True only while `generation` still belongs to the current tooltip.

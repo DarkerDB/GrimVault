@@ -32,6 +32,13 @@ TEST (CapturePolicy, AutomaticContinuesReacquisition)
    EXPECT_TRUE (capture_tracking (true, false, true));
 }
 
+TEST (CapturePolicy, PerformanceModeWaitsForRequest)
+{
+   EXPECT_FALSE (capture_active (true, true, false, false, true));
+   EXPECT_TRUE (capture_active (true, true, true, false, true));
+   EXPECT_TRUE (capture_active (true, true, false, true, true));
+}
+
 TEST (CapturePolicy, DisabledAlwaysRests)
 {
    EXPECT_FALSE (capture_active (false, true, true, true));

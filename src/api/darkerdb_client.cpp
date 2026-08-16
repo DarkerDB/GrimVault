@@ -759,6 +759,8 @@ namespace {
          b.behavior.is_auto_update_enabled ? "true" : "false");
       put ("behavior:is_launch_on_startup_enabled",
          b.behavior.is_launch_on_startup_enabled ? "true" : "false");
+      put ("behavior:is_performance_mode_enabled",
+         b.behavior.is_performance_mode_enabled ? "true" : "false");
       put ("behavior:capture_fps", std::to_string (b.behavior.capture_fps));
       put ("behavior:capture_mode", b.behavior.capture_mode);
 
@@ -844,6 +846,8 @@ namespace {
          "is_auto_update_enabled", out.is_auto_update_enabled);
       out.is_launch_on_startup_enabled = j.value (
          "is_launch_on_startup_enabled", out.is_launch_on_startup_enabled);
+      out.is_performance_mode_enabled = j.value (
+         "is_performance_mode_enabled", out.is_performance_mode_enabled);
       out.capture_fps = j.value ("capture_fps", out.capture_fps);
       out.capture_mode = j.value ("capture_mode", out.capture_mode);
    }

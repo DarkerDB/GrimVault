@@ -15,9 +15,6 @@ struct TooltipBox {
    int           class_id   = 0;
 };
 
-// YOLO-style ONNX tooltip detector. Loads tooltip.onnx, runs inference on
-// each Frame, emits zero or more bounding boxes around the in-game tooltip
-// region(s). Non-Max Suppression is applied internally.
 class TooltipDetector
 {
 public:
@@ -28,7 +25,6 @@ public:
 
    core::Result<std::vector<TooltipBox>> detect (const capture::Frame& frame);
 
-   // Confidence threshold for keeping a detection. Defaults to 0.45.
    void  set_threshold (float t) noexcept;
    float threshold () const noexcept;
 

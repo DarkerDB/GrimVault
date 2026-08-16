@@ -153,6 +153,7 @@ struct Pipeline::Impl
    std::atomic<bool>         running   { false };
    std::atomic<bool>         enabled   { true };
    std::atomic<bool>         automatic { true };
+   std::atomic<bool>         performance_mode { false };
    std::atomic<bool>         detect_only { false };
    std::atomic<bool>         anchored { false };
    std::atomic<bool>         reacquiring { false };
@@ -180,9 +181,7 @@ struct Pipeline::Impl
 
    std::atomic<long long>    last_detect_ms { 0 };
 
-   // One-shot bypass of the stability gate; set by request_immediate_scan,
-   // consumed and cleared by vision_loop.
-   std::atomic<bool>         force_scan { false };
+   std::atomic<int>          force_scans { 0 };
 
    // Idle policy state: steady_clock tick of the last tooltip detection (or
    // forced scan). capture_loop drops to idle_fps once it ages past
@@ -254,8 +253,9 @@ struct Pipeline::Impl
          }
 
          void* now_target = window.load ();
-         const bool forced = force_scan.load (std::memory_order_relaxed);
+         const bool forced = force_scans.load (std::memory_order_relaxed) > 0;
          const bool auto_scan = automatic.load (std::memory_order_relaxed);
+         const bool conservative = performance_mode.load (std::memory_order_relaxed);
          const bool tracking = capture_tracking (
             auto_scan,
             anchored.load (std::memory_order_relaxed),
@@ -265,7 +265,8 @@ struct Pipeline::Impl
                enabled.load (std::memory_order_relaxed),
                auto_scan,
                forced,
-               tracking)) {
+               tracking,
+               conservative)) {
             if (session_active) {
                capture.stop_continuous ();
                session_active = false;
@@ -545,7 +546,10 @@ struct Pipeline::Impl
 
          // Consume the force flag up front — leaving it latched on a fruitless
          // scan would hold the capture loop out of its no-window sleep.
-         const bool forced = force_scan.exchange (false);
+         int pending = force_scans.load (std::memory_order_relaxed);
+         while (pending > 0 && !force_scans.compare_exchange_weak (
+            pending, pending - 1, std::memory_order_relaxed)) {}
+         const bool forced = pending > 0;
 
          cv::Mat bgra { frame.height, frame.width, CV_8UC4,
                         frame.data.get (),
@@ -1099,14 +1103,14 @@ void Pipeline::set_active_window (void* hwnd)
 void Pipeline::set_enabled (bool on)
 {
    if (impl_->enabled.exchange (on) == on) return;
-   impl_->force_scan.store (false, std::memory_order_relaxed);
+   impl_->force_scans.store (0, std::memory_order_relaxed);
    impl_->generation.fetch_add (1, std::memory_order_relaxed);
    impl_->reset_requested.store (true, std::memory_order_relaxed);
 }
 void Pipeline::set_automatic (bool on)
 {
    if (impl_->automatic.exchange (on) == on) return;
-   impl_->force_scan.store (false, std::memory_order_relaxed);
+   impl_->force_scans.store (0, std::memory_order_relaxed);
    impl_->generation.fetch_add (1, std::memory_order_relaxed);
    impl_->reset_requested.store (true, std::memory_order_relaxed);
 }
@@ -1121,6 +1125,13 @@ void Pipeline::set_capture_mode (capture::CaptureMode mode)
    if (impl_->capture_mode.exchange (mode, std::memory_order_relaxed) == mode) return;
    core::Logger::info ("pipeline: capture mode → {}", capture::capture_mode_name (mode));
 }
+void Pipeline::set_performance_mode (bool on)
+{
+   if (impl_->performance_mode.exchange (on, std::memory_order_relaxed) == on) return;
+   impl_->force_scans.store (0, std::memory_order_relaxed);
+   impl_->reset_requested.store (true, std::memory_order_relaxed);
+   core::Logger::info ("pipeline: performance mode {}", on ? "enabled" : "disabled");
+}
 void Pipeline::set_language (LanguageFamily f) { impl_->language.store (f); }
 
 bool Pipeline::is_current (std::uint64_t value) const noexcept
@@ -1133,7 +1144,10 @@ void Pipeline::request_immediate_scan ()
    if (!impl_->enabled.load (std::memory_order_relaxed)) return;
    // Wake from idle pacing too, or a forced scan waits up to 1/idle_fps.
    impl_->mark_activity ();
-   impl_->force_scan.store (true);
+   const int requested = impl_->performance_mode.load (std::memory_order_relaxed) ? 2 : 1;
+   int pending = impl_->force_scans.load (std::memory_order_relaxed);
+   while (pending < requested && !impl_->force_scans.compare_exchange_weak (
+      pending, requested, std::memory_order_relaxed)) {}
 }
 
 core::Result<void> Pipeline::start (TooltipCallback on_tooltip)

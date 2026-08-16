@@ -36,6 +36,7 @@ namespace gv::app {
 namespace {
 
    constexpr int k_mouse_still_ms = 100;
+   constexpr int k_performance_mouse_still_ms = 250;
    constexpr int k_mouse_poll_ms  = 16;     // ~60 Hz
 
    struct DefaultRow { const char* action; const char* accelerator; };
@@ -117,6 +118,7 @@ struct Controller::Impl
 
    std::atomic<Mode>      mode { Mode::Auto };
    std::atomic<bool>      authenticated { false };
+   std::atomic<bool>      performance_mode { false };
    std::mutex             session_lock;
    std::int64_t           session_id = 0;
    std::string            account_id;
@@ -436,7 +438,10 @@ struct Controller::Impl
          const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds> (
             std::chrono::steady_clock::now () - last_change).count ();
 
-         if (elapsed < k_mouse_still_ms) continue;
+         const int settle_ms = performance_mode.load (std::memory_order_relaxed)
+            ? k_performance_mouse_still_ms
+            : k_mouse_still_ms;
+         if (elapsed < settle_ms) continue;
 
          // Check the cursor is inside the game window.
          core::WindowRect bounds;
@@ -646,6 +651,12 @@ void Controller::set_capture_fps (int fps)
 void Controller::set_capture_mode (capture::CaptureMode mode)
 {
    if (impl_->deps.pipeline) impl_->deps.pipeline->set_capture_mode (mode);
+}
+
+void Controller::set_performance_mode (bool on)
+{
+   impl_->performance_mode.store (on, std::memory_order_relaxed);
+   if (impl_->deps.pipeline) impl_->deps.pipeline->set_performance_mode (on);
 }
 
 std::string Controller::accelerator_for (std::string_view action) const

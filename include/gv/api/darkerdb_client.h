@@ -367,6 +367,7 @@ struct SettingsBundle {
    struct Behavior {
       bool is_auto_update_enabled       = true;
       bool is_launch_on_startup_enabled = true;
+      bool is_performance_mode_enabled  = false;
       std::int32_t capture_fps          = 15;
       std::string capture_mode          = "automatic";
    };

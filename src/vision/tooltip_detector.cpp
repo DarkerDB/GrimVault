@@ -1,67 +1,111 @@
-#include <gv/vision/tooltip_detector.h>
 #include <gv/core/logger.h>
+#include <gv/vision/tooltip_detector.h>
+
+#include <dml_provider_factory.h>
+#include <onnxruntime_cxx_api.h>
 
 #include <opencv2/dnn.hpp>
 #include <opencv2/imgproc.hpp>
 
+#include <algorithm>
+#include <array>
 #include <mutex>
+#include <string>
 
 namespace gv::vision {
 
 namespace {
 
-   constexpr int   k_model_size = 640;     // 640x640 YOLOv8 input
-   constexpr float k_nms_iou    = 0.45f;
+   constexpr int k_model_size = 416;
+   constexpr float k_nms_iou = 0.45f;
 
 } // namespace
 
 struct TooltipDetector::Impl
 {
-   std::unique_ptr<cv::dnn::Net> net;
-   std::mutex                    lock;
-   float                         threshold = 0.45f;
+   Ort::Env env { ORT_LOGGING_LEVEL_WARNING, "grimvault" };
+   std::unique_ptr<Ort::Session> session;
+   std::filesystem::path model_path;
+   std::string input_name;
+   std::string output_name;
+   std::mutex lock;
+   float threshold = 0.45f;
+   bool directml = false;
+
+   void load (bool gpu)
+   {
+      Ort::SessionOptions options;
+      options.SetGraphOptimizationLevel (GraphOptimizationLevel::ORT_ENABLE_ALL);
+      if (gpu) {
+         options.DisableMemPattern ();
+         options.SetExecutionMode (ExecutionMode::ORT_SEQUENTIAL);
+         const OrtDmlApi* api = nullptr;
+         Ort::ThrowOnError (Ort::GetApi ().GetExecutionProviderApi (
+            "DML", ORT_API_VERSION, reinterpret_cast<const void**> (&api)));
+         OrtDmlDeviceOptions device {
+            .Preference = OrtDmlPerformancePreference::HighPerformance,
+            .Filter = OrtDmlDeviceFilter::Gpu,
+         };
+         Ort::ThrowOnError (api->SessionOptionsAppendExecutionProvider_DML2 (options, &device));
+      }
+
+      auto next = std::make_unique<Ort::Session> (env, model_path.c_str (), options);
+      Ort::AllocatorWithDefaultOptions allocator;
+      input_name = next->GetInputNameAllocated (0, allocator).get ();
+      output_name = next->GetOutputNameAllocated (0, allocator).get ();
+      session = std::move (next);
+      directml = gpu;
+   }
 };
 
-TooltipDetector::TooltipDetector  () : impl_ (std::make_unique<Impl> ()) {}
-TooltipDetector::~TooltipDetector ()                                     = default;
+TooltipDetector::TooltipDetector ()
+    : impl_ (std::make_unique<Impl> ())
+{
+}
+TooltipDetector::~TooltipDetector () = default;
 
 core::Result<void> TooltipDetector::initialize (const std::filesystem::path& onnx_path)
 {
+   if (!std::filesystem::exists (onnx_path)) {
+      return core::fail (core::Error::make (
+         core::ErrorKind::Ocr, "tooltip_detector: model not found {}", onnx_path.string ()));
+   }
+
+   impl_->model_path = onnx_path;
    try {
-      auto net = std::make_unique<cv::dnn::Net> (cv::dnn::readNetFromONNX (onnx_path.string ()));
+      impl_->load (true);
+      core::Logger::info ("tooltip_detector: DirectML backend");
+      return { };
+   } catch (const Ort::Exception& error) {
+      core::Logger::warn ("tooltip_detector: DirectML unavailable: {}; using CPU", error.what ());
+   }
 
-      if (net->empty ()) {
-         return core::fail (core::Error::make (core::ErrorKind::Ocr,
-            "tooltip_detector: failed to load model {}", onnx_path.string ()));
-      }
-
-      // CPU backend only. vcpkg's opencv4 port ships without the cuda
-      // feature in our manifest, so cv::cuda::* symbols aren't available.
-      // Add `opencv4[cuda]` to vcpkg.json + check cv::cuda::getCudaEnabledDeviceCount
-      // here to re-enable GPU acceleration when CUDA is available.
-      net->setPreferableBackend (cv::dnn::DNN_BACKEND_OPENCV);
-      net->setPreferableTarget  (cv::dnn::DNN_TARGET_CPU);
-      core::Logger::info ("tooltip_detector: CPU backend");
-
-      impl_->net = std::move (net);
-      return {};
-   } catch (const cv::Exception& e) {
-      return core::fail (core::Error::make (core::ErrorKind::Ocr,
-         "tooltip_detector: cv::Exception: {}", e.what ()));
+   try {
+      impl_->load (false);
+      core::Logger::info ("tooltip_detector: CPU fallback backend");
+      return { };
+   } catch (const Ort::Exception& error) {
+      return core::fail (
+         core::Error::make (core::ErrorKind::Ocr, "tooltip_detector: {}", error.what ()));
    }
 }
 
-void  TooltipDetector::set_threshold (float t) noexcept { impl_->threshold = t; }
-float TooltipDetector::threshold     () const  noexcept { return impl_->threshold; }
+void TooltipDetector::set_threshold (float value) noexcept
+{
+   impl_->threshold = value;
+}
+float TooltipDetector::threshold () const noexcept
+{
+   return impl_->threshold;
+}
 
 core::Result<std::vector<TooltipBox>> TooltipDetector::detect (const capture::Frame& frame)
 {
-   if (!impl_->net) {
-      return core::fail (core::Error::make (core::ErrorKind::Ocr, "tooltip_detector: not initialized"));
+   if (!impl_->session) {
+      return core::fail (
+         core::Error::make (core::ErrorKind::Ocr, "tooltip_detector: not initialized"));
    }
-   if (frame.empty ()) {
-      return std::vector<TooltipBox> {};
-   }
+   if (frame.empty ()) return std::vector<TooltipBox> { };
 
    std::lock_guard lock { impl_->lock };
 
@@ -70,85 +114,101 @@ core::Result<std::vector<TooltipBox>> TooltipDetector::detect (const capture::Fr
       cv::Mat bgr;
       cv::cvtColor (bgra, bgr, cv::COLOR_BGRA2BGR);
 
-      // Letterbox to square so aspect is preserved.
-      const int side = std::max (bgr.cols, bgr.rows);
-      cv::Mat   square = cv::Mat::zeros (side, side, CV_8UC3);
-      bgr.copyTo (square (cv::Rect (0, 0, bgr.cols, bgr.rows)));
+      const float scale = std::min (static_cast<float> (k_model_size) / bgr.cols,
+         static_cast<float> (k_model_size) / bgr.rows);
+      cv::Mat resized;
+      cv::resize (bgr, resized,
+         cv::Size { static_cast<int> (bgr.cols * scale), static_cast<int> (bgr.rows * scale) });
+      cv::Mat padded (k_model_size, k_model_size, CV_8UC3, cv::Scalar { 114, 114, 114 });
+      resized.copyTo (padded (cv::Rect { 0, 0, resized.cols, resized.rows }));
 
-      cv::Mat blob;
-      cv::dnn::blobFromImage (
-         square,
-         blob,
-         1.0 / 255.0,
-         cv::Size (k_model_size, k_model_size),
-         cv::Scalar (),
-         /*swapRB=*/ true,
-         /*crop=*/   false
-      );
+      std::vector<float> input (3 * k_model_size * k_model_size);
+      const int plane = k_model_size * k_model_size;
+      for (int y = 0; y < k_model_size; ++y) {
+         const auto* pixels = padded.ptr<cv::Vec3b> (y);
+         for (int x = 0; x < k_model_size; ++x) {
+            const int index = y * k_model_size + x;
+            input[index] = pixels[x][0];
+            input[plane + index] = pixels[x][1];
+            input[2 * plane + index] = pixels[x][2];
+         }
+      }
 
-      impl_->net->setInput (blob);
+      const std::array<std::int64_t, 4> shape { 1, 3, k_model_size, k_model_size };
+      auto memory = Ort::MemoryInfo::CreateCpu (OrtArenaAllocator, OrtMemTypeDefault);
+      auto tensor = Ort::Value::CreateTensor<float> (
+         memory, input.data (), input.size (), shape.data (), shape.size ());
+      const auto run = [&] {
+         const std::array<const char*, 1> input_names { impl_->input_name.c_str () };
+         const std::array<const char*, 1> output_names { impl_->output_name.c_str () };
+         return impl_->session->Run (
+            Ort::RunOptions { nullptr }, input_names.data (), &tensor, 1, output_names.data (), 1);
+      };
+      std::vector<Ort::Value> outputs;
+      try {
+         outputs = run ();
+      } catch (const Ort::Exception& error) {
+         if (!impl_->directml) throw;
+         core::Logger::warn (
+            "tooltip_detector: DirectML inference failed: {}; using CPU", error.what ());
+         impl_->load (false);
+         outputs = run ();
+      }
+      const auto output_shape = outputs[0].GetTensorTypeAndShapeInfo ().GetShape ();
+      if (output_shape.size () != 3 || output_shape[2] < 6) {
+         return core::fail (
+            core::Error::make (core::ErrorKind::Ocr, "tooltip_detector: unexpected output shape"));
+      }
 
-      std::vector<cv::Mat> outputs;
-      impl_->net->forward (outputs, impl_->net->getUnconnectedOutLayersNames ());
-
-      // YOLOv8 output: [1, 4+num_classes, 8400] — we transpose to [8400, 4+num_classes].
-      const int rows = outputs [0].size [2];
-      const int dim  = outputs [0].size [1];
-
-      outputs [0] = outputs [0].reshape (1, dim);
-      cv::transpose (outputs [0], outputs [0]);
-
-      const float* data    = reinterpret_cast<const float*> (outputs [0].data);
-      const float  x_scale = static_cast<float> (side) / k_model_size;
-      const float  y_scale = static_cast<float> (side) / k_model_size;
-
+      const auto rows = static_cast<int> (output_shape[1]);
+      const auto dimensions = static_cast<int> (output_shape[2]);
+      const float* values = outputs[0].GetTensorData<float> ();
       std::vector<cv::Rect> boxes;
-      std::vector<float>    scores;
-      std::vector<int>      class_ids;
+      std::vector<float> scores;
+      std::vector<int> class_ids;
 
-      const int num_classes = dim - 4;
+      for (int row_index = 0; row_index < rows; ++row_index) {
+         const float* row = values + row_index * dimensions;
+         const auto class_begin = row + 5;
+         const auto class_end = row + dimensions;
+         const auto class_at = std::max_element (class_begin, class_end);
+         const float score = row[4] * *class_at;
+         if (score < impl_->threshold) continue;
 
-      for (int i = 0; i < rows; ++i) {
-         const float* row     = data + i * dim;
-         const float* class_p = row + 4;
-
-         cv::Mat scores_mat (1, num_classes, CV_32FC1, const_cast<float*> (class_p));
-         cv::Point max_id;
-         double    max_score = 0;
-         cv::minMaxLoc (scores_mat, nullptr, &max_score, nullptr, &max_id);
-
-         if (max_score < impl_->threshold) continue;
-
-         const float cx = row [0], cy = row [1], w = row [2], h = row [3];
-         cv::Rect rect (
-            static_cast<int> ((cx - 0.5f * w) * x_scale),
-            static_cast<int> ((cy - 0.5f * h) * y_scale),
-            static_cast<int> (w * x_scale),
-            static_cast<int> (h * y_scale)
-         );
-
-         boxes.push_back (rect);
-         scores.push_back (static_cast<float> (max_score));
-         class_ids.push_back (max_id.x);
+         const float left = (row[0] - row[2] * 0.5f) / scale;
+         const float top = (row[1] - row[3] * 0.5f) / scale;
+         cv::Rect box {
+            static_cast<int> (left),
+            static_cast<int> (top),
+            static_cast<int> (row[2] / scale),
+            static_cast<int> (row[3] / scale),
+         };
+         box &= cv::Rect { 0, 0, frame.width, frame.height };
+         if (box.area () <= 0) continue;
+         boxes.push_back (box);
+         scores.push_back (score);
+         class_ids.push_back (static_cast<int> (class_at - class_begin));
       }
 
       std::vector<int> kept;
       cv::dnn::NMSBoxes (boxes, scores, impl_->threshold, k_nms_iou, kept);
-
-      std::vector<TooltipBox> out;
-      out.reserve (kept.size ());
-      for (int idx : kept) {
-         out.push_back (TooltipBox {
-            .rect       = { boxes [idx].x, boxes [idx].y, boxes [idx].width, boxes [idx].height },
-            .confidence = scores [idx],
-            .class_id   = class_ids [idx],
+      std::vector<TooltipBox> result;
+      result.reserve (kept.size ());
+      for (const int index : kept) {
+         const auto& box = boxes[index];
+         result.push_back ({
+            .rect = { box.x, box.y, box.width, box.height },
+            .confidence = scores[index],
+            .class_id = class_ids[index],
          });
       }
-
-      return out;
-   } catch (const cv::Exception& e) {
-      return core::fail (core::Error::make (core::ErrorKind::Ocr,
-         "tooltip_detector: cv::Exception during inference: {}", e.what ()));
+      return result;
+   } catch (const Ort::Exception& error) {
+      return core::fail (core::Error::make (
+         core::ErrorKind::Ocr, "tooltip_detector: inference failed: {}", error.what ()));
+   } catch (const cv::Exception& error) {
+      return core::fail (core::Error::make (
+         core::ErrorKind::Ocr, "tooltip_detector: preprocessing failed: {}", error.what ()));
    }
 }
 
