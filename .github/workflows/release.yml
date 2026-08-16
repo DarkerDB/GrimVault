@@ -318,7 +318,7 @@ jobs:
                  --installer "$installer" \
                  --output appcast.xml \
                  --public-key 'zqNoGIvc3ZHM3bzq59W7hUkseoIODaMd/nsXn42sXRU=' \
-                 --url "https://releases.katforge.com/$S3_PREFIX/$VERSION/$(basename "$installer")" \
+                 --url "https://releases.darkerdb.com/$S3_PREFIX/$VERSION/$(basename "$installer")" \
                  --version "$VERSION"
 
          - name: Publish artifacts and feed
