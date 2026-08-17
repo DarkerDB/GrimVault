@@ -2,6 +2,7 @@
 
 #include <gv/app/mode.h>
 #include <gv/capture/mode.h>
+#include <gv/ocr/game_locale.h>
 #include <gv/ui/augment_payload.h>
 #include <gv/ui/layout.h>
 
@@ -40,6 +41,7 @@ struct Preferences
    int  capture_fps       = 15;
 
    capture::CaptureMode capture_mode = capture::CaptureMode::Automatic;
+   std::string          language = "automatic";
 
    // hotkeys:force_refresh and hotkeys:toggle_overlay. Empty means the
    // server never sent one, so the client's local default stands.
@@ -249,6 +251,13 @@ inline bool apply (Preferences& out, std::string_view key, std::string_view valu
       out.capture_mode = erased || !mode.has_value ()
          ? fallback.capture_mode
          : *mode;
+      return true;
+   }
+   if (key == "behavior:language") {
+      const auto locale = gv::ocr::canonical_locale (value);
+      out.language = erased || value == "automatic" || !locale.has_value ()
+         ? fallback.language
+         : *locale;
       return true;
    }
 

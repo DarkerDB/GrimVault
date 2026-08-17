@@ -46,6 +46,7 @@ TEST (Preferences, DefaultsMatchTheServerSchema)
    EXPECT_EQ (prefs.options.currency_display, "absolute");
    EXPECT_EQ (prefs.capture_fps, 15);
    EXPECT_EQ (prefs.capture_mode, CaptureMode::Automatic);
+   EXPECT_EQ (prefs.language, "automatic");
 }
 
 TEST (Preferences, FoldsTheOverlayGroup)
@@ -270,6 +271,19 @@ TEST (Preferences, FoldsCaptureMode)
    apply (prefs, "behavior:capture_mode", "gdi");
    apply (prefs, "behavior:capture_mode", "");
    EXPECT_EQ (prefs.capture_mode, CaptureMode::Automatic);
+}
+
+TEST (Preferences, FoldsLanguage)
+{
+   EXPECT_EQ (folded ({ { "behavior:language", "ja" } }).language, "ja");
+   EXPECT_EQ (folded ({ { "behavior:language", "PT-br" } }).language, "pt-BR");
+   EXPECT_EQ (folded ({ { "behavior:language", "automatic" } }).language, "automatic");
+   EXPECT_EQ (folded ({ { "behavior:language", "it" } }).language, "automatic");
+
+   Preferences prefs;
+   apply (prefs, "behavior:language", "ko");
+   apply (prefs, "behavior:language", "");
+   EXPECT_EQ (prefs.language, "automatic");
 }
 
 TEST (Preferences, ReportsWhetherAKeyWasConsumed)

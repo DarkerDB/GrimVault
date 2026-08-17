@@ -164,9 +164,15 @@ struct Controller::Impl
    std::mutex  browse_lock;
    std::string last_item_id;
 
-   // Game locale for OCR model selection and the lookup `language` param
-   // (`game:language` setting; read at startup, applied to the pipeline).
+   std::mutex  language_lock;
+   std::string language_selection;
    std::string game_language { "en" };
+
+   std::string language ()
+   {
+      std::lock_guard lk { language_lock };
+      return game_language;
+   }
 
    // Latest anchor from the pipeline, Qt-thread only. Re-applied when the
    // game window moves so the Augment presenter gets fresh bounds.
@@ -203,6 +209,7 @@ struct Controller::Impl
 
    void start_session (std::string principal)
    {
+      const auto current_language = language ();
       std::lock_guard lk { session_lock };
       account_id = std::move (principal);
       if (!deps.db || account_id.empty () || session_id != 0) return;
@@ -211,7 +218,7 @@ struct Controller::Impl
             INSERT INTO session_runs (started_at, language, account_id)
             VALUES (unixepoch (), ?, ?)
          )sql" };
-         insert.bind (1, game_language);
+         insert.bind (1, current_language);
          insert.bind (2, account_id);
          insert.exec ();
          session_id = deps.db->sqlite ().getLastInsertRowid ();
@@ -290,6 +297,7 @@ struct Controller::Impl
    void enqueue_analysis (const ocr::RecognizedTooltip& rt)
    {
       if (deps.api) deps.api->cancel_analysis ();
+      const auto current_language = language ();
       std::vector<std::string> widgets;
       {
          std::lock_guard lk { widgets_lock };
@@ -297,7 +305,7 @@ struct Controller::Impl
       }
       {
          std::lock_guard lk { analysis_lock };
-         pending_analysis = AnalysisJob { rt, game_language, std::move (widgets) };
+         pending_analysis = AnalysisJob { rt, current_language, std::move (widgets) };
       }
       analysis_ready.notify_one ();
    }
@@ -520,38 +528,10 @@ Controller::Controller (Dependencies deps, QObject* parent)
       impl_->deps.debug->set_enabled (highlights_enabled);
    }
 
-   std::string language_source { "default" };
-   std::optional<std::string> configured_language;
-   if (impl_->deps.settings_repo) {
-      if (auto v = impl_->deps.settings_repo->get ("game:language");
-          v.has_value () && v->has_value () && !(*v)->empty ()) {
-         configured_language = **v;
-      }
-   }
-   if (configured_language && *configured_language != "auto") {
-      if (auto locale = ocr::canonical_locale (*configured_language)) {
-         impl_->game_language = std::move (*locale);
-         language_source = "setting";
-      } else {
-         core::Logger::warn ("controller: unsupported game language setting '{}'",
-            *configured_language);
-      }
-   }
-   if (language_source == "default") {
-      if (auto locale = ocr::detect_game_locale ()) {
-         impl_->game_language = std::move (*locale);
-         language_source = "game";
-      }
-   }
-
+   set_language ("automatic");
    if (impl_->deps.pipeline) {
-      impl_->deps.pipeline->set_language (ocr::family_of (impl_->game_language));
       impl_->sync_pipeline ();
    }
-   core::Logger::info ("controller: game language '{}' source={} (ocr family '{}')",
-      impl_->game_language,
-      language_source,
-      std::string { ocr::family_dir (ocr::family_of (impl_->game_language)) });
 
    // Anchor events -> Augment card and (debug mode) the region overlay.
    // Fired from the vision thread; marshalled to the Qt thread.
@@ -676,6 +656,38 @@ void Controller::set_performance_mode (bool on)
 {
    impl_->performance_mode.store (on, std::memory_order_relaxed);
    if (impl_->deps.pipeline) impl_->deps.pipeline->set_performance_mode (on);
+}
+
+void Controller::set_language (std::string selection)
+{
+   std::string source { "setting" };
+   std::string normalized { "automatic" };
+   std::optional<std::string> resolved;
+
+   if (selection == "automatic") {
+      resolved = ocr::detect_game_locale ();
+      source = resolved.has_value () ? "game" : "fallback";
+   } else if (auto locale = ocr::canonical_locale (selection)) {
+      normalized = *locale;
+      resolved = std::move (locale);
+   } else {
+      core::Logger::warn ("controller: unsupported game language setting '{}'", selection);
+      source = "fallback";
+   }
+
+   if (!resolved) resolved = "en";
+
+   {
+      std::lock_guard lk { impl_->language_lock };
+      if (impl_->language_selection == normalized && impl_->game_language == *resolved) return;
+      impl_->language_selection = std::move (normalized);
+      impl_->game_language = *resolved;
+   }
+
+   const auto family = ocr::family_of (*resolved);
+   if (impl_->deps.pipeline) impl_->deps.pipeline->set_language (family);
+   core::Logger::info ("controller: game language '{}' source={} (ocr family '{}')",
+      *resolved, source, std::string { ocr::family_dir (family) });
 }
 
 std::string Controller::accelerator_for (std::string_view action) const

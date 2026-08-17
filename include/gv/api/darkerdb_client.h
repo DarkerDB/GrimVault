@@ -375,6 +375,7 @@ struct SettingsBundle {
       bool is_performance_mode_enabled  = false;
       std::int32_t capture_fps          = 15;
       std::string capture_mode          = "automatic";
+      std::string language              = "automatic";
    };
 
    struct Hotkeys {

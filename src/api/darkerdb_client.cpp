@@ -765,6 +765,7 @@ namespace {
          b.behavior.is_performance_mode_enabled ? "true" : "false");
       put ("behavior:capture_fps", std::to_string (b.behavior.capture_fps));
       put ("behavior:capture_mode", b.behavior.capture_mode);
+      put ("behavior:language", b.behavior.language);
 
       put ("hotkeys:toggle_overlay",  b.hotkeys.toggle_overlay);
       put ("hotkeys:force_refresh",   b.hotkeys.force_refresh);
@@ -854,6 +855,7 @@ namespace {
          "is_performance_mode_enabled", out.is_performance_mode_enabled);
       out.capture_fps = j.value ("capture_fps", out.capture_fps);
       out.capture_mode = j.value ("capture_mode", out.capture_mode);
+      out.language = j.value ("language", out.language);
    }
 
    void parse_hotkeys (const nlohmann::json& j, SettingsBundle::Hotkeys& out)

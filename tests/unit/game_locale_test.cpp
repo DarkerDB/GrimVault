@@ -42,6 +42,12 @@ TEST_F (GameLocaleTest, ReadsCultureFromGameSettings)
    EXPECT_EQ (gv::ocr::read_game_locale (path), "fr");
 }
 
+TEST_F (GameLocaleTest, ReadsCultureCaseInsensitively)
+{
+   std::ofstream { path } << "Culture = \"ZH-hans\"\n";
+   EXPECT_EQ (gv::ocr::read_game_locale (path), "zh-Hans");
+}
+
 TEST_F (GameLocaleTest, RejectsMissingAndUnsupportedCulture)
 {
    std::ofstream { path } << "culture=\"it\"\n";

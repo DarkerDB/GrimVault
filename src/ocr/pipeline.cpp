@@ -864,7 +864,8 @@ struct Pipeline::Impl
             continue;
          }
 
-         auto rec = registry.acquire (language.load ());
+         const auto family = language.load (std::memory_order_relaxed);
+         auto rec = registry.acquire (family);
          if (!rec.has_value ()) {
             core::Logger::error ("pipeline: language acquire failed: {}", rec.error ().message);
             continue;
@@ -962,7 +963,7 @@ struct Pipeline::Impl
                const std::vector<cv::Range> whole_line {
                   cv::Range { 0, line.cols }
                };
-               if (language.load () == LanguageFamily::English && is_title) {
+               if (family == LanguageFamily::English && is_title) {
                   // The font-trained model learns spaces and punctuation as
                   // CTC classes. Feed the complete title once; geometric word
                   // splitting created false boundaries inside serif names.
@@ -975,7 +976,7 @@ struct Pipeline::Impl
                      ++conf_n;
                   }
                } else {
-                  const auto chunks = language.load () == LanguageFamily::English
+                  const auto chunks = family == LanguageFamily::English
                      ? whole_line : preprocess::col_chunks (line);
                   for (const auto& chunk : chunks) {
                      if (item.generation != generation.load (std::memory_order_relaxed)) break;
@@ -992,7 +993,7 @@ struct Pipeline::Impl
                }
 
                if (line_confidence_n > 1) line_confidence /= line_confidence_n;
-               if (language.load () == LanguageFamily::Latin)
+               if (family == LanguageFamily::Latin)
                   canonicalize_latin (line_text);
                if (!config.sample_inbox.empty ()) {
                   sample_lines.push_back (SampleLine {
@@ -1006,15 +1007,15 @@ struct Pipeline::Impl
                      line_text.begin (), line_text.end (), [] (char ch) {
                         return std::isdigit (static_cast<unsigned char> (ch)) != 0;
                      })) {
-                  if (auto family = vision::detect_gem_family (raw_line); family.has_value ()) {
-                     gems [line_text] = *family;
+                  if (auto gem_family = vision::detect_gem_family (raw_line); gem_family.has_value ()) {
+                     gems [line_text] = *gem_family;
                   }
                }
                if (!text.empty ()) text.push_back ('\n');
                text += line_text;
 
                if (!preliminary_sent && is_title
-                   && language.load () == LanguageFamily::English
+                   && family == LanguageFamily::English
                    && line_text.size () >= 2 && line_confidence >= 0.65f
                    && item.generation == generation.load (std::memory_order_relaxed)
                    && callback) {
@@ -1049,7 +1050,7 @@ struct Pipeline::Impl
                last_detect_ms.load (), ms, conf_n, bands.size ());
             core::log::ocr.event ("recognition", {
                { "generation", std::to_string (item.generation) },
-               { "family", std::string { family_dir (language.load ()) } },
+               { "family", std::string { family_dir (family) } },
                { "segment_us", std::to_string (segment_us) },
                { "total_ms", std::to_string (ms) },
                { "lines", std::to_string (conf_n) },
@@ -1060,7 +1061,7 @@ struct Pipeline::Impl
 
             if (item.generation != generation.load (std::memory_order_relaxed)) continue;
             if (!config.sample_inbox.empty ()) {
-               persist_sample (config.sample_inbox, item.generation, language.load (),
+               persist_sample (config.sample_inbox, item.generation, family,
                   box.rect, crop, std::move (sample_lines), text,
                   conf_n ? conf_sum / conf_n : 0.0f);
             }
@@ -1075,7 +1076,7 @@ struct Pipeline::Impl
             }
             core::Logger::info (
                "OCR result generation={} family={} confidence={:.3f} text=\"{}\"",
-               item.generation, family_dir (language.load ()),
+               item.generation, family_dir (family),
                conf_n ? conf_sum / conf_n : 0.0f, printable);
 
             if (callback) {
@@ -1153,7 +1154,14 @@ void Pipeline::set_performance_mode (bool on)
    impl_->reset_requested.store (true, std::memory_order_relaxed);
    core::Logger::info ("pipeline: performance mode {}", on ? "enabled" : "disabled");
 }
-void Pipeline::set_language (LanguageFamily f) { impl_->language.store (f); }
+void Pipeline::set_language (LanguageFamily f)
+{
+   if (impl_->language.exchange (f, std::memory_order_relaxed) == f) return;
+   impl_->force_scans.store (0, std::memory_order_relaxed);
+   impl_->generation.fetch_add (1, std::memory_order_relaxed);
+   impl_->reset_requested.store (true, std::memory_order_relaxed);
+   core::Logger::info ("pipeline: OCR language → {}", family_dir (f));
+}
 
 bool Pipeline::is_current (std::uint64_t value) const noexcept
 {

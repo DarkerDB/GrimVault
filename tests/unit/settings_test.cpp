@@ -2,7 +2,7 @@
 
 #include <gtest/gtest.h>
 
-TEST (Settings, ParsesCaptureMode)
+TEST (Settings, ParsesBehavior)
 {
    const auto settings = gv::api::parse_settings (R"({
       "body": {
@@ -10,6 +10,7 @@ TEST (Settings, ParsesCaptureMode)
             "capture_fps": 15,
             "capture_mode": "dxgi",
             "is_performance_mode_enabled": true,
+            "language": "zh-Hant",
             "is_auto_update_enabled": true,
             "is_launch_on_startup_enabled": true
          },
@@ -25,6 +26,8 @@ TEST (Settings, ParsesCaptureMode)
    EXPECT_TRUE (settings->behavior.is_performance_mode_enabled);
    EXPECT_EQ (settings->values.at ("behavior:capture_mode"), "dxgi");
    EXPECT_EQ (settings->values.at ("behavior:is_performance_mode_enabled"), "true");
+   EXPECT_EQ (settings->behavior.language, "zh-Hant");
+   EXPECT_EQ (settings->values.at ("behavior:language"), "zh-Hant");
 }
 
 TEST (Settings, ParsesIndicatorVisibility)

@@ -104,6 +104,8 @@ public:
 
    void set_performance_mode (bool on);
 
+   void set_language (std::string selection);
+
    // Enabled dashboard widgets sent as a computation hint. The API still
    // intersects these with the authenticated plan before doing less work.
    void set_enabled_widgets (std::vector<std::string> widgets);
@@ -152,3 +154,5 @@ private:
 } // namespace gv::app
 
 Q_DECLARE_METATYPE (gv::app::Mode)
+
+Both additions kept (no conflict in intent): `set_performance_mode` and `set_language`. Implementation for each still needs to exist in `controller.cpp`, worth checking.

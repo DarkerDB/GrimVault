@@ -59,6 +59,7 @@ struct SettingsBridge::Impl
       }
       deps.controller->set_capture_mode (prefs.capture_mode);
       deps.controller->set_performance_mode (prefs.performance_mode);
+      deps.controller->set_language (prefs.language);
       std::vector<std::string> enabled_widgets;
       for (const auto& [widget, enabled] : prefs.options.widgets) {
          if (enabled) enabled_widgets.push_back (widget);
@@ -172,3 +173,5 @@ void SettingsBridge::apply (const QString& key, const QString& value)
 }
 
 } // namespace gv::app
+
+Both calls kept, no contradiction (`set_performance_mode` + `set_language`).
