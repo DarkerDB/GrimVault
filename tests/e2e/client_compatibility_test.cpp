@@ -27,11 +27,11 @@ struct Model {
 };
 
 constexpr std::array models {
-   Model { LanguageFamily::English, "en",     "rec_font.onnx", "font_dict.txt" },
-   Model { LanguageFamily::Latin,   "latin",  "rec.onnx",      "dict.txt" },
-   Model { LanguageFamily::Eslav,   "eslav",  "rec.onnx",      "dict.txt" },
-   Model { LanguageFamily::Korean,  "korean", "rec.onnx",      "dict.txt" },
-   Model { LanguageFamily::Chinese, "ch",     "rec.onnx",      "dict.txt" },
+   Model { LanguageFamily::English, "en",     gv::ocr::model_files::rec_tooltip_body,  gv::ocr::model_files::rec_tooltip_dict },
+   Model { LanguageFamily::Latin,   "latin",  gv::ocr::model_files::rec_ppocr_narrow, gv::ocr::model_files::rec_ppocr_narrow_dict },
+   Model { LanguageFamily::Eslav,   "eslav",  gv::ocr::model_files::rec_ppocr_narrow, gv::ocr::model_files::rec_ppocr_narrow_dict },
+   Model { LanguageFamily::Korean,  "korean", gv::ocr::model_files::rec_ppocr_narrow, gv::ocr::model_files::rec_ppocr_narrow_dict },
+   Model { LanguageFamily::Chinese, "ch",     gv::ocr::model_files::rec_ppocr_narrow, gv::ocr::model_files::rec_ppocr_narrow_dict },
 };
 
 cv::Mat gem_line (const cv::Scalar& bgra, double scale)
@@ -92,8 +92,8 @@ TEST (ClientCompatibilityE2E, CapturedEnglishTooltipRunsAcrossDisplayScales)
    gv::ocr::PaddleRecognizer recognizer;
    recognizer.set_family (LanguageFamily::English);
    const auto initialized = recognizer.initialize (
-      root / "models/paddle/en/rec_font.onnx",
-      root / "models/paddle/en/font_dict.txt");
+      root / "models/paddle/en" / gv::ocr::model_files::rec_tooltip_body,
+      root / "models/paddle/en" / gv::ocr::model_files::rec_tooltip_dict);
    ASSERT_TRUE (initialized.has_value ()) << initialized.error ().message;
 
    for (const auto& bounds : lines) {

@@ -29,7 +29,7 @@ public:
    PaddleRecognizer (const PaddleRecognizer&)            = delete;
    PaddleRecognizer& operator= (const PaddleRecognizer&) = delete;
 
-   // model_path:  path to <family>/rec.onnx
+   // model_path:  path to the chosen <family>/rec-*.onnx
    // dict_path:   newline-separated character dictionary (CTC blank at last index)
    core::Result<void> initialize (
       const std::filesystem::path& model_path,

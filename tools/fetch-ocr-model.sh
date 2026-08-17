@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Fetch a PaddleOCR PP-OCRv5 recognizer for one language family into
-# models/paddle/<family>/{rec.onnx,dict.txt}, ready for the cv::dnn
+# models/paddle/<family>/rec-ppocr-48x320.{onnx,dict.txt}, ready for the cv::dnn
 # pipeline. Stock exports use dynamic shapes that OpenCV's ONNX importer
 # rejects, so the model is simplified to the fixed 1x3x48x320 input the
 # recognizer feeds (requires `uv` for a throwaway onnxsim venv).
@@ -57,12 +57,12 @@ width = 960 if family == 'en' else 320
 
 cfg = yaml.safe_load(open(f'/tmp/gv-{family}.yml'))
 chars = cfg['PostProcess']['character_dict']
-open(f'{dest}/dict.txt', 'w', encoding='utf-8').write('\n'.join(chars) + '\n')
+open(f'{dest}/rec-ppocr-48x320.dict.txt', 'w', encoding='utf-8').write('\n'.join(chars) + '\n')
 
 model = onnx.load(f'/tmp/gv-{family}.onnx')
 simplified, ok = simplify(model, overwrite_input_shapes={'x': [1, 3, 48, width]})
 assert ok, 'onnxsim check failed'
-onnx.save(simplified, f'{dest}/rec.onnx')
+onnx.save(simplified, f'{dest}/rec-ppocr-48x320.onnx')
 
 print(f'    dict: {len(chars)} chars; model simplified to 1x3x48x{width}')
 PY

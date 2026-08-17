@@ -97,7 +97,7 @@ TEST (FontOcrModel, LoadsAndRunsInOpenCvDnn)
 {
    namespace fs = std::filesystem;
    fs::path base = fs::path { GRIMVAULT_TEST_MODELS_DIR } / "paddle/en";
-   if (!fs::exists (base / "rec_font.onnx")) {
+   if (!fs::exists (base / gv::ocr::model_files::rec_tooltip_body)) {
       base.clear ();
    }
    for (const auto& candidate : {
@@ -105,16 +105,16 @@ TEST (FontOcrModel, LoadsAndRunsInOpenCvDnn)
       fs::current_path ().parent_path () / "models/paddle/en",
    }) {
       if (!base.empty ()) break;
-      if (fs::exists (candidate / "rec_font.onnx")) { base = candidate; break; }
+      if (fs::exists (candidate / gv::ocr::model_files::rec_tooltip_body)) { base = candidate; break; }
    }
    if (base.empty ()) GTEST_SKIP () << "staged font OCR model not present";
 
    gv::ocr::PaddleRecognizer rec;
    rec.set_family (gv::ocr::LanguageFamily::English);
    const auto initialized = rec.initialize (
-      base / "rec_font.onnx", base / "font_dict.txt");
+      base / gv::ocr::model_files::rec_tooltip_body, base / gv::ocr::model_files::rec_tooltip_dict);
    ASSERT_TRUE (initialized.has_value ()) << initialized.error ().message;
-   EXPECT_EQ (rec.has_title_model (), fs::exists (base / "rec_title.onnx"));
+   EXPECT_EQ (rec.has_title_model (), fs::exists (base / gv::ocr::model_files::rec_tooltip_title));
 
    cv::Mat line { 32, 180, CV_8UC4, cv::Scalar { 8, 8, 8, 255 } };
    cv::putText (line, "Spear", { 42, 25 }, cv::FONT_HERSHEY_SIMPLEX,
@@ -129,16 +129,33 @@ TEST (FontOcrModel, LocalCapturedCorpusMatchesProductionOpenCv)
 {
    namespace fs = std::filesystem;
    const fs::path root { GRIMVAULT_TEST_SOURCE_DIR };
-   const auto manifest = root / "tools/ocr-train/real-train.tsv";
-   const auto crops    = root / "tools/ocr-train/real-crops";
-   if (!fs::exists (manifest) || !fs::exists (crops))
+
+   // The labelled corpus lives with the training pipeline in the scry
+   // package, which is a sibling checkout rather than a dependency. Look
+   // beside GrimVault first so a self-contained tree still works, then in the
+   // workspace; skip when neither is present, as a release checkout will be.
+   const fs::path bases [] = {
+      root / "tools/ocr-train",
+      root / "../../packages/scry/training/ocr",
+   };
+   fs::path corpus;
+   for (const auto& base : bases) {
+      if (fs::exists (base / "real-train.tsv") && fs::exists (base / "real-crops")) {
+         corpus = base;
+         break;
+      }
+   }
+   if (corpus.empty ())
       GTEST_SKIP () << "local labelled OCR corpus not present";
+
+   const auto manifest = corpus / "real-train.tsv";
+   const auto crops    = corpus / "real-crops";
 
    const auto models = root / "models/paddle/en";
    gv::ocr::PaddleRecognizer rec;
    rec.set_family (gv::ocr::LanguageFamily::English);
    const auto initialized = rec.initialize (
-      models / "rec_font.onnx", models / "font_dict.txt");
+      models / gv::ocr::model_files::rec_tooltip_body, models / gv::ocr::model_files::rec_tooltip_dict);
    ASSERT_TRUE (initialized.has_value ()) << initialized.error ().message;
 
    std::ifstream rows { manifest };
@@ -179,7 +196,7 @@ TEST (FontOcrModel, LocalCapturedCorpusMatchesProductionOpenCv)
    }
    EXPECT_GE (checked, 100);
 
-   const auto title_manifest = root / "tools/ocr-train/real-live.tsv";
+   const auto title_manifest = corpus / "real-live.tsv";
    std::ifstream title_rows { title_manifest };
    while (std::getline (title_rows, row)) {
       const auto tab = row.find ('\t');

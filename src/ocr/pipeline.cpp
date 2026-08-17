@@ -210,9 +210,12 @@ struct Pipeline::Impl
       const bool bursting = tracking
          && std::chrono::steady_clock::now ().time_since_epoch ().count ()
             < burst_until.load (std::memory_order_relaxed);
+      const double idle_fps = performance_mode.load (std::memory_order_relaxed)
+         ? std::min (config.idle_fps, 1.0)
+         : config.idle_fps;
       const double desired_fps = std::max (1.0, tracking
          ? (bursting ? config.anchored_burst_fps : config.anchored_fps)
-         : (idle ? config.idle_fps : config.active_fps));
+         : (idle ? idle_fps : config.active_fps));
       const double fps = std::min (
          desired_fps,
          capture_fps.load (std::memory_order_relaxed));
@@ -255,7 +258,6 @@ struct Pipeline::Impl
          void* now_target = window.load ();
          const bool forced = force_scans.load (std::memory_order_relaxed) > 0;
          const bool auto_scan = automatic.load (std::memory_order_relaxed);
-         const bool conservative = performance_mode.load (std::memory_order_relaxed);
          const bool tracking = capture_tracking (
             auto_scan,
             anchored.load (std::memory_order_relaxed),
@@ -263,10 +265,8 @@ struct Pipeline::Impl
 
          if (!capture_active (
                enabled.load (std::memory_order_relaxed),
-               auto_scan,
                forced,
-               tracking,
-               conservative)) {
+               tracking)) {
             if (session_active) {
                capture.stop_continuous ();
                session_active = false;
@@ -364,7 +364,7 @@ struct Pipeline::Impl
 
    void vision_loop ()
    {
-      // Anchoring state machine (docs/architecture/anchoring.md §2):
+      // Anchoring state machine:
       //
       //    IDLE ──detector hit──> SETTLING ──2 agreeing refines──> ANCHORED
       //     ^                        │                                │
@@ -562,6 +562,8 @@ struct Pipeline::Impl
             fresh.fingerprint = vision::TooltipTracker::fingerprint (
                bgra, box, fresh.fp_dx, fresh.fp_dy);
             fresh.content_hash = vision::TooltipTracker::content_hash (bgra, box);
+            fresh.measured_h = vision::TooltipTracker::measure_height (bgra, box)
+               .value_or (0);
             fresh.detail_thumbnail = vision::TooltipTracker::detail_thumbnail (bgra, box);
             measure (fresh, box, frame.cursor, frame.width, frame.height);
             classify_pins (fresh, box, frame.width, frame.height);
@@ -653,14 +655,33 @@ struct Pipeline::Impl
                   metrics.max_hash_bits = std::max (metrics.max_hash_bits, hash_bits);
                   metrics.max_detail_pixels = std::max (
                      metrics.max_detail_pixels, detail_pixels);
+                  // Height is measured, not inherited: `locate` reports the
+                  // anchor's size at the matched position, so it cannot tell
+                  // a taller or shorter card from the one it anchored to.
+                  int measured_height = 0;
+                  bool size_changed = false;
+                  if (observed.has_value () && config.identity_size_px > 0
+                      && anchor.measured_h > 0) {
+                     if (const auto height = vision::TooltipTracker::measure_height (
+                            bgra, *observed)) {
+                        measured_height = *height;
+                        size_changed = std::abs (measured_height - anchor.measured_h)
+                           > config.identity_size_px;
+                     }
+                  }
+
                   const bool region_changed = hash_bits >= config.identity_bits
                      && detail_pixels >= config.identity_detail_px;
-                  identity_streak = region_changed ? identity_streak + 1 : 0;
+                  identity_streak = (region_changed || size_changed)
+                     ? identity_streak + 1 : 0;
                   if (identity_streak >= std::max (1, config.identity_frames)) {
                      core::log::vision.event ("replacement_candidate", {
                         { "hash_bits", std::to_string (hash_bits) },
                         { "detail_px", std::to_string (detail_pixels) },
                         { "located", observed.has_value () ? "1" : "0" },
+                        { "trigger", size_changed ? "size" : "identity" },
+                        { "anchor_h", std::to_string (anchor.measured_h) },
+                        { "measured_h", std::to_string (measured_height) },
                         { "frame_age_us", std::to_string (std::max<long long> (0, age_us)) },
                      });
                      dump_diagnostic ("replacement_candidate", bgra);
@@ -1144,7 +1165,11 @@ void Pipeline::request_immediate_scan ()
    if (!impl_->enabled.load (std::memory_order_relaxed)) return;
    // Wake from idle pacing too, or a forced scan waits up to 1/idle_fps.
    impl_->mark_activity ();
-   const int requested = impl_->performance_mode.load (std::memory_order_relaxed) ? 2 : 1;
+   // Two frames, not one: capture is settle-gated in every mode now, so
+   // there is no warm stream to fall back on. The first frame can land mid
+   // fade-in and refine to nothing; the second is what acquisition rides on.
+   constexpr int k_forced_burst = 2;
+   const int requested = k_forced_burst;
    int pending = impl_->force_scans.load (std::memory_order_relaxed);
    while (pending < requested && !impl_->force_scans.compare_exchange_weak (
       pending, requested, std::memory_order_relaxed)) {}

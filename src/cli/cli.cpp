@@ -11,6 +11,7 @@
 #include <gv/core/version.h>
 #include <gv/db/database.h>
 #include <gv/db/repos/user_settings_repo.h>
+#include <gv/vision/tooltip_detector.h>
 
 #include <QCoreApplication>
 #include <QStandardPaths>
@@ -418,6 +419,25 @@ namespace {
          doctor_step ("/v2/grimvault/ping returns 200 with user", ok, detail);
       } else {
          doctor_step ("/v2/grimvault/ping returns 200 with user", false, "skipped (no tokens)");
+      }
+
+      // 4. Detector execution provider. Not a pass/fail: CPU is a working
+      //    configuration, just a slower one. Reported because the DirectML
+      //    session downgrades itself on a single failed inference and the
+      //    startup log line is the only other place that shows up.
+      {
+         vision::TooltipDetector detector;
+         const auto resources = qEnvironmentVariable ("GRIMVAULT_DEV_RESOURCES");
+         const std::filesystem::path install_dir = resources.isEmpty ()
+            ? std::filesystem::path { QCoreApplication::applicationDirPath ().toStdWString () }
+            : std::filesystem::path { resources.toStdWString () };
+         auto ready = detector.initialize (
+            install_dir / "models" / vision::model_files::tooltip_full);
+         const bool gpu = ready.has_value () && detector.backend () == "DirectML";
+         const std::string detail = !ready.has_value ()
+            ? ready.error ().message
+            : gpu ? "" : "running on CPU; detection is slower but correct";
+         doctor_step ("tooltip detector on GPU (DirectML)", gpu, detail);
       }
 
       std::cout << "\n" << (failures == 0 ? "All checks passed." :

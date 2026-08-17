@@ -42,6 +42,7 @@ TEST (Preferences, DefaultsMatchTheServerSchema)
    EXPECT_EQ (prefs.layout.offset_x, 20);
    EXPECT_EQ (prefs.layout.offset_y, 20);
    EXPECT_TRUE (prefs.layout.enabled);
+   EXPECT_TRUE (prefs.indicator_visible);
    EXPECT_EQ (prefs.options.currency_display, "absolute");
    EXPECT_EQ (prefs.capture_fps, 15);
    EXPECT_EQ (prefs.capture_mode, CaptureMode::Automatic);
@@ -57,6 +58,7 @@ TEST (Preferences, FoldsTheOverlayGroup)
       { "overlay:offset_x",  "-40" },
       { "overlay:offset_y",  "12" },
       { "overlay:columns",   "2" },
+      { "overlay:is_indicator_visible", "false" },
    });
 
    EXPECT_EQ (prefs.overlay_mode, Mode::Manual);
@@ -67,6 +69,18 @@ TEST (Preferences, FoldsTheOverlayGroup)
    EXPECT_EQ (prefs.layout.offset_y, 12);
    EXPECT_EQ (prefs.layout.columns, Columns::Two);
    EXPECT_TRUE (prefs.layout.enabled);
+   EXPECT_FALSE (prefs.indicator_visible);
+}
+
+/* The card and the corner badge are separate windows and separate decisions:
+ * disabling the overlay is how a player stops the analysis card, not how they
+ * ask for no on-screen trace of GrimVault at all. */
+TEST (Preferences, IndicatorSurvivesADisabledOverlay)
+{
+   const auto prefs = folded ({ { "overlay:mode", "disabled" } });
+
+   EXPECT_FALSE (prefs.layout.enabled);
+   EXPECT_TRUE  (prefs.indicator_visible);
 }
 
 /* Auto is the default, and anything the server sends that isn't one of the
@@ -206,6 +220,7 @@ TEST (Preferences, ErasedKeysRevertToDefaults)
    apply (prefs, "overlay:alignment",                  "top_left");
    apply (prefs, "behavior:is_launch_on_startup_enabled", "false");
    apply (prefs, "behavior:is_performance_mode_enabled",  "true");
+   apply (prefs, "overlay:is_indicator_visible",       "false");
    apply (prefs, "behavior:capture_fps",                    "5");
    apply (prefs, "hotkeys:force_refresh",              "F9");
 
@@ -213,6 +228,7 @@ TEST (Preferences, ErasedKeysRevertToDefaults)
    apply (prefs, "overlay:alignment",                  "");
    apply (prefs, "behavior:is_launch_on_startup_enabled", "");
    apply (prefs, "behavior:is_performance_mode_enabled",  "");
+   apply (prefs, "overlay:is_indicator_visible",       "");
    apply (prefs, "behavior:capture_fps",                    "");
    apply (prefs, "hotkeys:force_refresh",              "");
 
@@ -221,6 +237,7 @@ TEST (Preferences, ErasedKeysRevertToDefaults)
    EXPECT_EQ (prefs.layout.align, Align::Attached);
    EXPECT_TRUE (prefs.launch_on_startup);
    EXPECT_FALSE (prefs.performance_mode);
+   EXPECT_TRUE (prefs.indicator_visible);
    EXPECT_EQ (prefs.capture_fps, 15);
    EXPECT_TRUE (prefs.hotkey_scan_now.empty ());
 }
@@ -228,7 +245,9 @@ TEST (Preferences, ErasedKeysRevertToDefaults)
 TEST (Preferences, RejectsUnsupportedCaptureRates)
 {
    EXPECT_EQ (folded ({ { "behavior:capture_fps", "30" } }).capture_fps, 30);
-   EXPECT_EQ (folded ({ { "behavior:capture_fps", "1" } }).capture_fps, 15);
+   // 1 is the rate performance mode pins to, and a standalone choice.
+   EXPECT_EQ (folded ({ { "behavior:capture_fps", "1" } }).capture_fps, 1);
+   EXPECT_EQ (folded ({ { "behavior:capture_fps", "2" } }).capture_fps, 15);
    EXPECT_EQ (folded ({ { "behavior:capture_fps", "12" } }).capture_fps, 15);
    EXPECT_EQ (folded ({ { "behavior:capture_fps", "60" } }).capture_fps, 15);
    EXPECT_EQ (folded ({ { "behavior:capture_fps", "fast" } }).capture_fps, 15);

@@ -173,6 +173,9 @@ target_link_libraries (gv_ocr PUBLIC
    opencv_imgcodecs
    opencv_imgproc
    nlohmann_json::nlohmann_json
+   PRIVATE
+   onnxruntime::onnxruntime
+   directml::directml
 )
 
 grimvault_add_module (update)

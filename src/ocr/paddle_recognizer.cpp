@@ -1,6 +1,9 @@
 #include <gv/ocr/paddle_recognizer.h>
 #include <gv/core/logger.h>
 
+#include <dml_provider_factory.h>
+#include <onnxruntime_cxx_api.h>
+
 #include <opencv2/dnn.hpp>
 #include <opencv2/imgproc.hpp>
 
@@ -16,27 +19,100 @@ namespace {
    // PaddleOCR v5 mobile_rec uses 48x320 CRNN input by default. The recognizer
    // is letterboxed to height 48 keeping aspect ratio, then padded to width 320.
    //
-   // Inference runs on OpenCV DNN — the same stack as the tooltip detector.
-   // ONNX Runtime is deliberately NOT used: vcpkg's onnxruntime build ships a
-   // broken operator-schema registry in this dependency mix ("0 schema were
-   // exposed ... 741 were expected"), so every Ort::Session fails to load any
-   // model. One inference stack also means one set of DLLs to stage.
+   // Inference runs on ONNX Runtime with the DirectML provider, the same
+   // stack as the tooltip detector, falling back to CPU exactly as it does.
+   //
+   // This used to be OpenCV DNN because vcpkg's onnxruntime shipped a broken
+   // operator-schema registry ("0 schema were exposed ... 741 were expected")
+   // and no Ort::Session could load a model. cmake/OnnxRuntime.cmake sidesteps
+   // that by fetching Microsoft's own DirectML build, so the constraint is
+   // gone — and recognition, not detection, is what actually costs CPU here:
+   // a median hover spends ~54 ms in this function against ~6 ms detecting.
    constexpr int k_model_height       = 48;
    constexpr int k_default_model_width = 320;
    constexpr int k_english_model_width = 960;
 
 } // namespace
 
+// One loaded recognizer graph. Input geometry is fixed by the export
+// (1x3x48xW); `run` hands OpenCV's NCHW blob straight to ORT, which wants the
+// same contiguous float layout blobFromImage already produces.
+struct Session
+{
+   std::unique_ptr<Ort::Session> session;
+   std::string input_name;
+   std::string output_name;
+   bool        directml = false;
+
+   explicit operator bool () const noexcept { return session != nullptr; }
+};
+
 struct PaddleRecognizer::Impl
 {
-   cv::dnn::Net             net;
-   cv::dnn::Net             title_net;
+   Ort::Env                 env { ORT_LOGGING_LEVEL_WARNING, "grimvault-ocr" };
+   Session                  net;
+   Session                  title_net;
+   std::filesystem::path    model_path;
    bool                     loaded = false;
    bool                     title_loaded = false;
    std::vector<std::string> dict;
    LanguageFamily           family = LanguageFamily::Latin;
    int                      model_width = k_default_model_width;
    std::mutex               lock;
+
+   Session load (const std::filesystem::path& path, bool gpu)
+   {
+      Ort::SessionOptions options;
+      options.SetGraphOptimizationLevel (GraphOptimizationLevel::ORT_ENABLE_ALL);
+      if (gpu) {
+         options.DisableMemPattern ();
+         options.SetExecutionMode (ExecutionMode::ORT_SEQUENTIAL);
+         const OrtDmlApi* api = nullptr;
+         Ort::ThrowOnError (Ort::GetApi ().GetExecutionProviderApi (
+            "DML", ORT_API_VERSION, reinterpret_cast<const void**> (&api)));
+         OrtDmlDeviceOptions device {
+            .Preference = OrtDmlPerformancePreference::HighPerformance,
+            .Filter = OrtDmlDeviceFilter::Gpu,
+         };
+         Ort::ThrowOnError (api->SessionOptionsAppendExecutionProvider_DML2 (options, &device));
+      }
+
+      Session out;
+      out.session = std::make_unique<Ort::Session> (env, path.c_str (), options);
+      Ort::AllocatorWithDefaultOptions allocator;
+      out.input_name  = out.session->GetInputNameAllocated (0, allocator).get ();
+      out.output_name = out.session->GetOutputNameAllocated (0, allocator).get ();
+      out.directml    = gpu;
+      return out;
+   }
+
+   // ORT wants the blob's floats as-is: blobFromImage already returns a
+   // contiguous NCHW buffer of exactly the shape the export declares.
+   cv::Mat run (Session& model, const cv::Mat& blob)
+   {
+      const std::array<std::int64_t, 4> shape {
+         1, blob.size [1], blob.size [2], blob.size [3] };
+      auto memory = Ort::MemoryInfo::CreateCpu (OrtArenaAllocator, OrtMemTypeDefault);
+      auto tensor = Ort::Value::CreateTensor<float> (
+         memory, const_cast<float*> (blob.ptr<float> ()),
+         static_cast<std::size_t> (blob.total ()), shape.data (), shape.size ());
+
+      const std::array<const char*, 1> inputs  { model.input_name.c_str () };
+      const std::array<const char*, 1> outputs { model.output_name.c_str () };
+
+      auto values = model.session->Run (
+         Ort::RunOptions { nullptr }, inputs.data (), &tensor, 1, outputs.data (), 1);
+
+      const auto dims = values [0].GetTensorTypeAndShapeInfo ().GetShape ();
+      if (dims.size () != 3) return {};
+
+      // Copied, not wrapped: the Ort::Value owning this buffer dies here.
+      const std::array<int, 3> sizes {
+         static_cast<int> (dims [0]), static_cast<int> (dims [1]),
+         static_cast<int> (dims [2]) };
+      return cv::Mat (3, sizes.data (), CV_32F,
+                      const_cast<float*> (values [0].GetTensorData<float> ())).clone ();
+   }
 };
 
 PaddleRecognizer::PaddleRecognizer ()  : impl_ (std::make_unique<Impl> ()) {}
@@ -56,19 +132,25 @@ core::Result<void> PaddleRecognizer::initialize (
    const std::filesystem::path& dict_path
 ) {
    try {
-      impl_->net = cv::dnn::readNetFromONNX (model_path.string ());
-      impl_->net.setPreferableBackend (cv::dnn::DNN_BACKEND_OPENCV);
-      impl_->net.setPreferableTarget  (cv::dnn::DNN_TARGET_CPU);
+      impl_->model_path = model_path;
+      try {
+         impl_->net = impl_->load (model_path, true);
+      } catch (const Ort::Exception& error) {
+         core::Logger::warn ("paddle_rec: DirectML unavailable: {}; using CPU", error.what ());
+         impl_->net = impl_->load (model_path, false);
+      }
       impl_->loaded = true;
       impl_->title_loaded = false;
 
-      const auto title_path = model_path.parent_path () / "rec_title.onnx";
+      const auto title_path = model_path.parent_path () / model_files::rec_tooltip_title;
       if (impl_->family == LanguageFamily::English
           && std::filesystem::exists (title_path)) {
-         impl_->title_net = cv::dnn::readNetFromONNX (title_path.string ());
-         impl_->title_net.setPreferableBackend (cv::dnn::DNN_BACKEND_OPENCV);
-         impl_->title_net.setPreferableTarget  (cv::dnn::DNN_TARGET_CPU);
-         impl_->title_loaded = true;
+         try {
+            impl_->title_net = impl_->load (title_path, impl_->net.directml);
+            impl_->title_loaded = true;
+         } catch (const Ort::Exception& error) {
+            core::Logger::warn ("paddle_rec: title model unusable: {}", error.what ());
+         }
       }
 
       std::ifstream df { dict_path };
@@ -84,14 +166,19 @@ core::Result<void> PaddleRecognizer::initialize (
          impl_->dict.push_back (line);
       }
 
-      core::Logger::info ("paddle_rec: loaded model {} ({} chars in dict)",
-         model_path.filename ().string (), impl_->dict.size ());
+      core::Logger::info ("paddle_rec: loaded model {} on {} ({} chars in dict)",
+         model_path.filename ().string (),
+         impl_->net.directml ? "DirectML" : "CPU", impl_->dict.size ());
       if (impl_->title_loaded) {
-         core::Logger::info ("paddle_rec: loaded title model rec_title.onnx");
+         core::Logger::info ("paddle_rec: loaded title model {}", model_files::rec_tooltip_title);
       }
 
       return {};
    } catch (const cv::Exception& e) {
+      impl_->loaded = false;
+      return core::fail (core::Error::make (core::ErrorKind::Ocr,
+         "paddle_rec: init failed: {}", e.what ()));
+   } catch (const Ort::Exception& e) {
       impl_->loaded = false;
       return core::fail (core::Error::make (core::ErrorKind::Ocr,
          "paddle_rec: init failed: {}", e.what ()));
@@ -229,11 +316,23 @@ core::Result<RecognizerResult> PaddleRecognizer::read (const cv::Mat& line, bool
 
    try {
       auto& net = title && impl_->title_loaded ? impl_->title_net : impl_->net;
-      net.setInput (preprocess (line, impl_->model_width));
-      cv::Mat out = net.forward ();
+      const cv::Mat blob = preprocess (line, impl_->model_width);
+
+      cv::Mat out;
+      try {
+         out = impl_->run (net, blob);
+      } catch (const Ort::Exception& error) {
+         if (!net.directml) throw;
+         core::Logger::warn (
+            "paddle_rec: DirectML inference failed: {}; using CPU", error.what ());
+         net = impl_->load (title && impl_->title_loaded
+            ? impl_->model_path.parent_path () / model_files::rec_tooltip_title
+            : impl_->model_path, false);
+         out = impl_->run (net, blob);
+      }
 
       // Output is [1, timesteps, classes].
-      if (out.dims != 3 || out.size [0] != 1) {
+      if (out.empty () || out.dims != 3 || out.size [0] != 1) {
          return core::fail (core::Error::make (core::ErrorKind::Ocr,
             "paddle_rec: unexpected output rank {} from model", out.dims));
       }
@@ -243,6 +342,9 @@ core::Result<RecognizerResult> PaddleRecognizer::read (const cv::Mat& line, bool
 
       return RecognizerResult { .text = std::move (text), .confidence = conf };
    } catch (const cv::Exception& e) {
+      return core::fail (core::Error::make (core::ErrorKind::Ocr,
+         "paddle_rec: inference failed: {}", e.what ()));
+   } catch (const Ort::Exception& e) {
       return core::fail (core::Error::make (core::ErrorKind::Ocr,
          "paddle_rec: inference failed: {}", e.what ()));
    }

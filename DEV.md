@@ -177,14 +177,9 @@ API calls log DNS, connect, TLS, first-byte, total, request id, and server
 phase timings. Repeated identical hovers use a short account-scoped memory
 cache, so the common second hover avoids another network round trip.
 
-Tooltip tracking is the anchoring system (docs/architecture/anchoring.md):
-detect once, refine to ~1px at full resolution, then draw from
+Tooltip tracking detects once, refines to ~1px at full resolution, then draws from
 clamp(cursor + offset) at 120 Hz with per-frame presence and identity checks
 for immediate disappearance and settled replacement.
-
-The next OCR work is specified in `docs/architecture/ocr.md`: generation-safe
-cancellation, recognizer leases, prewarmed language families, name-first
-lookup, multilingual fixtures, and explicit latency budgets.
 
 `run-dev.ps1` (and its original `dev-run.ps1` target) launches the full
 pipeline with `--debug` by default, with no red highlight borders (`-NoDebug`
@@ -229,9 +224,10 @@ do not include the source-only command.
 
 ## Bundled test data
 
-All tooltip and language ONNX models are committed under `models/`.
-Labelled OCR crops under `tools/ocr-train/real-crops/` drive compatibility
-tests across common Windows display scales.
+All tooltip and language ONNX models are committed under `models/`. GrimVault
+ships the trained artifacts only — the training pipelines, their corpora and
+the tooltip fonts live in the `scry` package (`packages/scry/training`), which
+is private because those fonts are not cleared for redistribution.
 
 ## Useful one-offs
 

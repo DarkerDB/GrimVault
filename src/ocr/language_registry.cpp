@@ -19,12 +19,21 @@ core::Result<LanguageRegistry::Lease> LanguageRegistry::acquire (LanguageFamily 
       return it->second->rec;
    }
 
-   const auto base    = models_root_ / "paddle" / std::string { family_dir (family) };
-   const bool font_model = family == LanguageFamily::English
-                        && std::filesystem::exists (base / "rec_font.onnx")
-                        && std::filesystem::exists (base / "font_dict.txt");
-   const auto model   = base / (font_model ? "rec_font.onnx" : "rec.onnx");
-   const auto dictpth = base / (font_model ? "font_dict.txt" : "dict.txt");
+   const auto base = models_root_ / "paddle" / std::string { family_dir (family) };
+
+   // English prefers our tooltip-trained recognizer and falls back to stock
+   // PaddleOCR; every other family only has stock. The wide 48x960 line is
+   // the English geometry either way.
+   const bool tooltip_model = family == LanguageFamily::English
+      && std::filesystem::exists (base / model_files::rec_tooltip_body)
+      && std::filesystem::exists (base / model_files::rec_tooltip_dict);
+
+   const auto stock = family == LanguageFamily::English
+      ? std::pair { model_files::rec_ppocr_wide, model_files::rec_ppocr_wide_dict }
+      : std::pair { model_files::rec_ppocr_narrow, model_files::rec_ppocr_narrow_dict };
+
+   const auto model   = base / (tooltip_model ? model_files::rec_tooltip_body : stock.first);
+   const auto dictpth = base / (tooltip_model ? model_files::rec_tooltip_dict : stock.second);
 
    auto rec = std::make_shared<PaddleRecognizer> ();
    rec->set_family (family);

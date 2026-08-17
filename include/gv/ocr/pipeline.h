@@ -59,6 +59,12 @@ public:
       int                         identity_bits      = 14;
       int                         identity_detail_px = 32;
       int                         identity_frames    = 2;
+      // A measured bottom edge this far from the anchor's height is a
+      // different card. Independent of the hash/detail pair and confirmed on
+      // one frame, because capture noise does not move frame art: the pair is
+      // tuned to survive dxgi churn on a static card, which is exactly the
+      // tuning that lets a same-size, same-border replacement slip through.
+      int                         identity_size_px   = 6;
       int                         search_free_px     = 16;
       int                         search_pinned_px   = 3;
       int                         cursor_reset_px    = 140;
@@ -68,7 +74,7 @@ public:
       std::filesystem::path       sample_inbox;
    };
 
-   // Anchoring (docs/architecture/anchoring.md): once a tooltip settles,
+   // Once a tooltip settles,
    // the pipeline emits its anchor — the cursor->tooltip offset and exact
    // size — and the UI draws from cursor math until the anchor is lost.
    struct AnchorEvent {

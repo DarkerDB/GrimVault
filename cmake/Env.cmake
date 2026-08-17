@@ -6,7 +6,7 @@
 # binary unless explicitly told otherwise (the dev-run.ps1 script passes
 # -DGRIMVAULT_ENV=dev for local development).
 #
-# Per GrimVault MVP contract (docs/architecture/grimvault-mvp.md §10):
+# Environment matrix:
 #
 #   env  | client_id  | API host                  | Auth host                  | SPA host
 #   -----+------------+---------------------------+----------------------------+--------------------

@@ -26,3 +26,39 @@ TEST (Settings, ParsesCaptureMode)
    EXPECT_EQ (settings->values.at ("behavior:capture_mode"), "dxgi");
    EXPECT_EQ (settings->values.at ("behavior:is_performance_mode_enabled"), "true");
 }
+
+TEST (Settings, ParsesIndicatorVisibility)
+{
+   const auto settings = gv::api::parse_settings (R"({
+      "body": {
+         "behavior": {},
+         "hotkeys":  {},
+         "overlay":  { "is_indicator_visible": false },
+         "pricing":  {},
+         "tooltip":  {}
+      }
+   })");
+
+   ASSERT_TRUE (settings.has_value ()) << settings.error ().message;
+   EXPECT_FALSE (settings->overlay.is_indicator_visible);
+   EXPECT_EQ (settings->values.at ("overlay:is_indicator_visible"), "false");
+}
+
+// A server that predates the key must not read as "hide it" — the flattened
+// map still carries the compiled default so SettingsSync stores a real value.
+TEST (Settings, IndicatorDefaultsToVisibleWhenAbsent)
+{
+   const auto settings = gv::api::parse_settings (R"({
+      "body": {
+         "behavior": {},
+         "hotkeys":  {},
+         "overlay":  {},
+         "pricing":  {},
+         "tooltip":  {}
+      }
+   })");
+
+   ASSERT_TRUE (settings.has_value ()) << settings.error ().message;
+   EXPECT_TRUE (settings->overlay.is_indicator_visible);
+   EXPECT_EQ (settings->values.at ("overlay:is_indicator_visible"), "true");
+}

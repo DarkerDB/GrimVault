@@ -16,23 +16,37 @@ namespace gv::vision {
 
 namespace {
 
-   constexpr int k_model_size = 416;
    constexpr float k_nms_iou = 0.45f;
 
 } // namespace
 
+// One loaded graph. `size` is read from the graph rather than hardcoded, so a
+// re-export at another input edge needs no code change: decoding is already
+// size-agnostic — YOLOX emits boxes in input-pixel space and the row count
+// comes from the output shape.
+struct Model
+{
+   std::unique_ptr<Ort::Session> session;
+   std::string input_name;
+   std::string output_name;
+   int  size     = 0;
+   bool directml = false;
+
+   explicit operator bool () const noexcept { return session != nullptr; }
+};
+
 struct TooltipDetector::Impl
 {
    Ort::Env env { ORT_LOGGING_LEVEL_WARNING, "grimvault" };
-   std::unique_ptr<Ort::Session> session;
-   std::filesystem::path model_path;
-   std::string input_name;
-   std::string output_name;
+   Model full;
+   std::filesystem::path full_path;
    std::mutex lock;
    float threshold = 0.45f;
-   bool directml = false;
 
-   void load (bool gpu)
+   Model& active () noexcept { return full; }
+   const Model& active () const noexcept { return full; }
+
+   Model load (const std::filesystem::path& path, bool gpu)
    {
       Ort::SessionOptions options;
       options.SetGraphOptimizationLevel (GraphOptimizationLevel::ORT_ENABLE_ALL);
@@ -49,12 +63,25 @@ struct TooltipDetector::Impl
          Ort::ThrowOnError (api->SessionOptionsAppendExecutionProvider_DML2 (options, &device));
       }
 
-      auto next = std::make_unique<Ort::Session> (env, model_path.c_str (), options);
+      Model model;
+      model.session = std::make_unique<Ort::Session> (env, path.c_str (), options);
       Ort::AllocatorWithDefaultOptions allocator;
-      input_name = next->GetInputNameAllocated (0, allocator).get ();
-      output_name = next->GetOutputNameAllocated (0, allocator).get ();
-      session = std::move (next);
-      directml = gpu;
+      model.input_name  = model.session->GetInputNameAllocated (0, allocator).get ();
+      model.output_name = model.session->GetOutputNameAllocated (0, allocator).get ();
+      model.directml    = gpu;
+
+      // NCHW, and this export pins both spatial dims. A dynamic-axis export
+      // would report -1; refuse it rather than guess a letterbox target.
+      const auto shape = model.session->GetInputTypeInfo (0)
+         .GetTensorTypeAndShapeInfo ().GetShape ();
+      if (shape.size () != 4 || shape[2] <= 0 || shape[2] != shape[3]) {
+         throw Ort::Exception (
+            "tooltip_detector: expected a square, statically-shaped NCHW input",
+            ORT_INVALID_GRAPH);
+      }
+      model.size = static_cast<int> (shape[2]);
+
+      return model;
    }
 };
 
@@ -71,23 +98,30 @@ core::Result<void> TooltipDetector::initialize (const std::filesystem::path& onn
          core::ErrorKind::Ocr, "tooltip_detector: model not found {}", onnx_path.string ()));
    }
 
-   impl_->model_path = onnx_path;
+   impl_->full_path = onnx_path;
+
+   const auto load_full = [&] (bool gpu) { impl_->full = impl_->load (onnx_path, gpu); };
+
+   bool loaded = false;
    try {
-      impl_->load (true);
-      core::Logger::info ("tooltip_detector: DirectML backend");
-      return { };
+      load_full (true);
+      core::Logger::info ("tooltip_detector: DirectML backend, {}px input", impl_->full.size);
+      loaded = true;
    } catch (const Ort::Exception& error) {
       core::Logger::warn ("tooltip_detector: DirectML unavailable: {}; using CPU", error.what ());
    }
 
-   try {
-      impl_->load (false);
-      core::Logger::info ("tooltip_detector: CPU fallback backend");
-      return { };
-   } catch (const Ort::Exception& error) {
-      return core::fail (
-         core::Error::make (core::ErrorKind::Ocr, "tooltip_detector: {}", error.what ()));
+   if (!loaded) {
+      try {
+         load_full (false);
+         core::Logger::info ("tooltip_detector: CPU fallback backend, {}px input", impl_->full.size);
+      } catch (const Ort::Exception& error) {
+         return core::fail (
+            core::Error::make (core::ErrorKind::Ocr, "tooltip_detector: {}", error.what ()));
+      }
    }
+
+   return { };
 }
 
 void TooltipDetector::set_threshold (float value) noexcept
@@ -99,9 +133,15 @@ float TooltipDetector::threshold () const noexcept
    return impl_->threshold;
 }
 
+std::string_view TooltipDetector::backend () const noexcept
+{
+   std::lock_guard lk { impl_->lock };
+   return impl_->active ().directml ? "DirectML" : "CPU";
+}
+
 core::Result<std::vector<TooltipBox>> TooltipDetector::detect (const capture::Frame& frame)
 {
-   if (!impl_->session) {
+   if (!impl_->full) {
       return core::fail (
          core::Error::make (core::ErrorKind::Ocr, "tooltip_detector: not initialized"));
    }
@@ -110,48 +150,53 @@ core::Result<std::vector<TooltipBox>> TooltipDetector::detect (const capture::Fr
    std::lock_guard lock { impl_->lock };
 
    try {
+      const int model_size = impl_->active ().size;
+
       cv::Mat bgra (frame.height, frame.width, CV_8UC4, frame.data.get (), frame.stride);
       cv::Mat bgr;
       cv::cvtColor (bgra, bgr, cv::COLOR_BGRA2BGR);
 
-      const float scale = std::min (static_cast<float> (k_model_size) / bgr.cols,
-         static_cast<float> (k_model_size) / bgr.rows);
+      const float scale = std::min (static_cast<float> (model_size) / bgr.cols,
+         static_cast<float> (model_size) / bgr.rows);
       cv::Mat resized;
       cv::resize (bgr, resized,
          cv::Size { static_cast<int> (bgr.cols * scale), static_cast<int> (bgr.rows * scale) });
-      cv::Mat padded (k_model_size, k_model_size, CV_8UC3, cv::Scalar { 114, 114, 114 });
+      cv::Mat padded (model_size, model_size, CV_8UC3, cv::Scalar { 114, 114, 114 });
       resized.copyTo (padded (cv::Rect { 0, 0, resized.cols, resized.rows }));
 
-      std::vector<float> input (3 * k_model_size * k_model_size);
-      const int plane = k_model_size * k_model_size;
-      for (int y = 0; y < k_model_size; ++y) {
+      std::vector<float> input (3 * model_size * model_size);
+      const int plane = model_size * model_size;
+      for (int y = 0; y < model_size; ++y) {
          const auto* pixels = padded.ptr<cv::Vec3b> (y);
-         for (int x = 0; x < k_model_size; ++x) {
-            const int index = y * k_model_size + x;
+         for (int x = 0; x < model_size; ++x) {
+            const int index = y * model_size + x;
             input[index] = pixels[x][0];
             input[plane + index] = pixels[x][1];
             input[2 * plane + index] = pixels[x][2];
          }
       }
 
-      const std::array<std::int64_t, 4> shape { 1, 3, k_model_size, k_model_size };
+      const std::array<std::int64_t, 4> shape { 1, 3, model_size, model_size };
       auto memory = Ort::MemoryInfo::CreateCpu (OrtArenaAllocator, OrtMemTypeDefault);
       auto tensor = Ort::Value::CreateTensor<float> (
          memory, input.data (), input.size (), shape.data (), shape.size ());
       const auto run = [&] {
-         const std::array<const char*, 1> input_names { impl_->input_name.c_str () };
-         const std::array<const char*, 1> output_names { impl_->output_name.c_str () };
-         return impl_->session->Run (
+         auto& model = impl_->active ();
+         const std::array<const char*, 1> input_names { model.input_name.c_str () };
+         const std::array<const char*, 1> output_names { model.output_name.c_str () };
+         return model.session->Run (
             Ort::RunOptions { nullptr }, input_names.data (), &tensor, 1, output_names.data (), 1);
       };
       std::vector<Ort::Value> outputs;
       try {
          outputs = run ();
       } catch (const Ort::Exception& error) {
-         if (!impl_->directml) throw;
+         if (!impl_->active ().directml) throw;
          core::Logger::warn (
             "tooltip_detector: DirectML inference failed: {}; using CPU", error.what ());
-         impl_->load (false);
+         // `backend ()` reports the live provider, so `doctor` cannot claim
+         // GPU after this.
+         impl_->full = impl_->load (impl_->full_path, false);
          outputs = run ();
       }
       const auto output_shape = outputs[0].GetTensorTypeAndShapeInfo ().GetShape ();

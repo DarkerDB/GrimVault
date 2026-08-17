@@ -161,6 +161,43 @@ std::optional<capture::Rect> TooltipTracker::locate (
    };
 }
 
+std::optional<int> TooltipTracker::measure_height (const cv::Mat& bgra,
+                                                   const capture::Rect& box,
+                                                   int search_px)
+{
+   if (box.w < k_min_side || box.h < k_min_side) return std::nullopt;
+
+   // Inset the horizontal span so the left and right frame edges, which run
+   // the full height, cannot contribute to a row projection looking for one
+   // horizontal ridge.
+   constexpr int k_inset = 4;
+
+   const int expected = box.y + box.h;
+   cv::Rect band {
+      box.x + k_inset,
+      expected - search_px,
+      box.w - 2 * k_inset,
+      2 * search_px };
+   band &= cv::Rect { 0, 0, bgra.cols, bgra.rows };
+
+   if (band.width < k_min_side || band.height < 3) return std::nullopt;
+
+   const cv::Mat gray = gray_of (bgra, band);
+
+   cv::Mat gy;
+   cv::Sobel (gray, gy, CV_32F, 0, 1, 3);
+   gy = cv::abs (gy);
+
+   cv::Mat rowsum;
+   cv::reduce (gy, rowsum, 1, cv::REDUCE_AVG, CV_32F);
+
+   const int bottom = ridge_peak (rowsum, 0, rowsum.rows);
+   if (bottom < 0) return std::nullopt;
+
+   const int measured = band.y + bottom - box.y;
+   return measured >= k_min_side ? std::optional<int> { measured } : std::nullopt;
+}
+
 std::uint64_t TooltipTracker::content_hash (const cv::Mat& bgra,
                                             const capture::Rect& box)
 {

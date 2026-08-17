@@ -40,9 +40,27 @@ void StatusBadge::set_signed_in (bool signed_in)
    if (auto* root = rootObject ()) root->setProperty ("isSignedIn", signed_in);
 }
 
+void StatusBadge::set_enabled (bool enabled)
+{
+   if (enabled == enabled_) return;
+   enabled_ = enabled;
+
+   if (!enabled_) {
+      hide ();
+      return;
+   }
+
+   set_game (game_, game_active_);
+}
+
 void StatusBadge::set_game (const QRect& bounds, bool active)
 {
-   if (!active) {
+   // Recorded even while hidden so set_enabled can replay the current game
+   // window instead of waiting for the next one.
+   game_        = bounds;
+   game_active_ = active;
+
+   if (!active || !enabled_) {
       hide ();
       return;
    }

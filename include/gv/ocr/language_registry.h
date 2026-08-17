@@ -18,7 +18,8 @@ namespace gv::ocr {
 //
 // Used by the OCR pipeline: when the active game language changes, call
 // `acquire(family)` to get an eviction-safe shared lease; if not resident, it is loaded
-// from <models_root>/paddle/<family-dir>/rec.onnx + dict.txt.
+// from <models_root>/paddle/<family-dir>/, resolved by the names in
+// gv::ocr::model_files (language.h).
 class LanguageRegistry
 {
 public:

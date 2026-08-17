@@ -36,6 +36,7 @@ struct Preferences
    bool auto_updates      = true;
    bool launch_on_startup = true;
    bool performance_mode  = false;
+   bool indicator_visible = true;
    int  capture_fps       = 15;
 
    capture::CaptureMode capture_mode = capture::CaptureMode::Automatic;
@@ -86,7 +87,7 @@ namespace detail {
       const auto* last  = v.data () + v.size ();
       const auto [ptr, ec] = std::from_chars (first, last, parsed);
       if (ec != std::errc {} || ptr != last) return fallback;
-      return parsed == 5 || parsed == 10 || parsed == 15 || parsed == 30
+      return parsed == 1 || parsed == 5 || parsed == 10 || parsed == 15 || parsed == 30
          ? parsed
          : fallback;
    }
@@ -174,6 +175,14 @@ inline bool apply (Preferences& out, std::string_view key, std::string_view valu
    if (key == "overlay:offset_y") {
       out.layout.offset_y = erased ? fallback.layout.offset_y
          : detail::parse_int (value, fallback.layout.offset_y, -4096, 4096);
+      return true;
+   }
+   // Not part of Layout: the corner badge is its own window and survives
+   // overlay:mode = disabled, which takes the card down but leaves the one
+   // affordance that says GrimVault is running.
+   if (key == "overlay:is_indicator_visible") {
+      out.indicator_visible = erased ? fallback.indicator_visible
+         : detail::parse_bool (value, fallback.indicator_visible);
       return true;
    }
 

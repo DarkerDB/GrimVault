@@ -15,6 +15,7 @@ namespace gv::app {
 namespace {
 
    constexpr const char* k_startup_name = "GrimVault";
+   constexpr int         k_performance_capture_fps = 1;
 
 } // namespace
 
@@ -49,7 +50,13 @@ struct SettingsBridge::Impl
       if (!deps.controller) return;
 
       deps.controller->set_configured_mode (prefs.overlay_mode);
-      if (!deps.capture_fps_locked) deps.controller->set_capture_fps (prefs.capture_fps);
+      // Performance mode owns the capture rate outright — the dashboard
+      // disables the control rather than letting it read a value that is not
+      // in effect. One frame per second is the floor the pipeline clamps to.
+      if (!deps.capture_fps_locked) {
+         deps.controller->set_capture_fps (
+            prefs.performance_mode ? k_performance_capture_fps : prefs.capture_fps);
+      }
       deps.controller->set_capture_mode (prefs.capture_mode);
       deps.controller->set_performance_mode (prefs.performance_mode);
       std::vector<std::string> enabled_widgets;

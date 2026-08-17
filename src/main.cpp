@@ -512,7 +512,9 @@ namespace {
       gv::api::DDBClient api_client { api_cfg, &session, db->get () };
 
       gv::vision::TooltipDetector detector;
-      if (auto r = detector.initialize (install_dir / "models" / "tooltip.onnx"); !r.has_value ()) {
+      if (auto r = detector.initialize (
+             install_dir / "models" / gv::vision::model_files::tooltip_full);
+          !r.has_value ()) {
          gv::core::Logger::warn ("vision: tooltip detector init failed: {}", r.error ().message);
       }
 
@@ -703,6 +705,15 @@ namespace {
          &badge, [&badge] (gv::app::Mode m) {
             badge.set_auto (m == gv::app::Mode::Auto);
          });
+
+      // overlay:is_indicator_visible. Re-read on every settings change so
+      // hiding the badge in the dashboard takes it down without a restart.
+      auto sync_badge = [&badge, &settings_bridge] {
+         badge.set_enabled (settings_bridge.preferences ().indicator_visible);
+      };
+      QObject::connect (&settings_bridge, &gv::app::SettingsBridge::applied,
+         &app, sync_badge);
+      sync_badge ();
 
       // ---- Settings sync ----
       // Dashboard-controlled settings polled from /v2/grimvault/settings and

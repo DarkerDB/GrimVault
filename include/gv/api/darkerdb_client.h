@@ -297,9 +297,10 @@ struct TooltipLookup {
 
 // Dashboard-controlled settings snapshot from /v2/grimvault/settings.
 //
-// Wire schema (per docs/architecture/grimvault-settings.md) is nested:
+// Wire schema is nested:
 //
-//    { "overlay":  { "mode", "alignment", "opacity", "scale", "offset_x", "offset_y" },
+//    { "overlay":  { "mode", "alignment", "opacity", "scale", "offset_x", "offset_y",
+//                    "is_indicator_visible" },
 //      "tooltip":  { "sections": { "header", ... }, "analysis": { "market_value", ... },
 //                    "is_price_history_sparkline_visible" },
 //      "pricing":  { "currency_display" },
@@ -324,6 +325,10 @@ struct SettingsBundle {
       double       scale     = 1.0;
       std::int32_t offset_x  = 20;
       std::int32_t offset_y  = 20;
+
+      // The bottom-right corner badge, not the augment card — a player who
+      // sets mode=disabled keeps it, so it carries its own toggle.
+      bool is_indicator_visible = true;
    };
 
    struct TooltipSections {

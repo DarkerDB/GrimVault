@@ -733,6 +733,8 @@ namespace {
       put ("overlay:scale",     std::to_string (b.overlay.scale));
       put ("overlay:offset_x",  std::to_string (b.overlay.offset_x));
       put ("overlay:offset_y",  std::to_string (b.overlay.offset_y));
+      put ("overlay:is_indicator_visible",
+         b.overlay.is_indicator_visible ? "true" : "false");
 
       put ("tooltip:sections:header",    b.tooltip.sections.header    ? "true" : "false");
       put ("tooltip:sections:primary",   b.tooltip.sections.primary   ? "true" : "false");
@@ -784,6 +786,8 @@ namespace {
       out.scale     = j.value ("scale",     out.scale);
       out.offset_x  = j.value ("offset_x",  out.offset_x);
       out.offset_y  = j.value ("offset_y",  out.offset_y);
+      out.is_indicator_visible =
+         j.value ("is_indicator_visible", out.is_indicator_visible);
    }
 
    void parse_sections (const nlohmann::json& j, SettingsBundle::TooltipSections& out)
