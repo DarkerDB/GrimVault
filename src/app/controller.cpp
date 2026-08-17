@@ -6,6 +6,7 @@
 #include <gv/db/database.h>
 #include <gv/db/repos/user_hotkeys_repo.h>
 #include <gv/db/repos/user_settings_repo.h>
+#include <gv/ocr/game_locale.h>
 #include <gv/ocr/pipeline.h>
 #include <gv/ui/debug_overlay.h>
 #include <gv/ui/overlay_window.h>
@@ -519,10 +520,27 @@ Controller::Controller (Dependencies deps, QObject* parent)
       impl_->deps.debug->set_enabled (highlights_enabled);
    }
 
+   std::string language_source { "default" };
+   std::optional<std::string> configured_language;
    if (impl_->deps.settings_repo) {
       if (auto v = impl_->deps.settings_repo->get ("game:language");
           v.has_value () && v->has_value () && !(*v)->empty ()) {
-         impl_->game_language = **v;
+         configured_language = **v;
+      }
+   }
+   if (configured_language && *configured_language != "auto") {
+      if (auto locale = ocr::canonical_locale (*configured_language)) {
+         impl_->game_language = std::move (*locale);
+         language_source = "setting";
+      } else {
+         core::Logger::warn ("controller: unsupported game language setting '{}'",
+            *configured_language);
+      }
+   }
+   if (language_source == "default") {
+      if (auto locale = ocr::detect_game_locale ()) {
+         impl_->game_language = std::move (*locale);
+         language_source = "game";
       }
    }
 
@@ -530,8 +548,9 @@ Controller::Controller (Dependencies deps, QObject* parent)
       impl_->deps.pipeline->set_language (ocr::family_of (impl_->game_language));
       impl_->sync_pipeline ();
    }
-   core::Logger::info ("controller: game language '{}' (ocr family '{}')",
+   core::Logger::info ("controller: game language '{}' source={} (ocr family '{}')",
       impl_->game_language,
+      language_source,
       std::string { ocr::family_dir (ocr::family_of (impl_->game_language)) });
 
    // Anchor events -> Augment card and (debug mode) the region overlay.

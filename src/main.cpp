@@ -289,6 +289,7 @@ namespace {
       bool   highlight_objects = false;
       bool   highlight_game    = false;
       bool   detect_only   = false;
+      bool   ocr_only      = false;
       double fcr           = 0.0;   // frames/s while active; 0 = default
    };
 
@@ -600,6 +601,8 @@ namespace {
          if (opts.detect_only) {
             pipeline->set_detect_only (true);
             gv::core::Logger::info ("pipeline: detect-only mode (OCR / lookup / augment disabled)");
+         } else if (opts.ocr_only) {
+            gv::core::Logger::info ("pipeline: OCR-only mode (lookup / augment disabled)");
          }
       }
 
@@ -616,7 +619,7 @@ namespace {
          .db            = db->get (),
          .hotkeys_repo  = &hotkeys_repo,
          .settings_repo = &settings_repo,
-         .api           = &api_client,
+         .api           = opts.ocr_only ? nullptr : &api_client,
          .pipeline      = pipeline.get (),
          .hotkeys       = hotkeys.get (),
          .overlay       = &overlay,
@@ -1104,7 +1107,8 @@ int main (int argc, char** argv)
       return a == "--hidden" || a == "--no-auto-login"
           || a == "--debug"  || a.rfind ("--debug=", 0) == 0
           || a == "--detached"
-          || a == "--detect-only";
+          || a == "--detect-only"
+          || a == "--ocr-only";
    };
 
    const bool all_gui_flags = !cli_args.empty () &&
@@ -1124,6 +1128,7 @@ int main (int argc, char** argv)
          if (a == "--no-auto-login") opts.no_auto_login = true;
          if (a == "--debug" || a.rfind ("--debug=", 0) == 0) apply_debug_option (opts, a);
          if (a == "--detect-only")   opts.detect_only   = true;
+         if (a == "--ocr-only")      opts.ocr_only      = true;
       }
       return run_gui (argc, argv, opts);
    }
