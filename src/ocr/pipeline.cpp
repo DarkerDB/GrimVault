@@ -363,7 +363,7 @@ struct Pipeline::Impl
 
    void vision_loop ()
    {
-      // Anchoring state machine (docs/architecture/anchoring.md §2):
+      // Anchoring state machine:
       //
       //    IDLE ──detector hit──> SETTLING ──2 agreeing refines──> ANCHORED
       //     ^                        │                                │

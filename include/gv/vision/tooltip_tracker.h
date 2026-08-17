@@ -11,7 +11,7 @@ namespace gv::vision {
 
 enum class AxisPin : std::uint8_t { Free, Low, High };
 
-// Anchoring's vision primitives (docs/architecture/anchoring.md). The
+// Anchoring's vision primitives. The
 // detector finds a tooltip coarsely; these run at full resolution:
 //
 //    refine       snap a coarse box to the tooltip's frame art, ~1 px

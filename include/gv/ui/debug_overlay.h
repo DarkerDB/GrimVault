@@ -13,8 +13,8 @@ namespace gv::ui {
 // covering the capture region (the game window). Draws a border around the
 // region itself and around the anchored tooltip.
 //
-// The tooltip box is the anchoring presenter (docs/architecture/anchoring.md
-// §3): given the pipeline's anchor (cursor->tooltip offset + exact size), a
+// The tooltip box is the anchoring presenter: given the pipeline's anchor
+// (cursor->tooltip offset + exact size), a
 // 120 Hz timer draws the box at clamp (cursor + offset) — pure cursor math,
 // pinned at the game's clamp edges exactly like the real tooltip, no
 // capture latency in the loop.

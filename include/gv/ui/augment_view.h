@@ -47,7 +47,7 @@ public:
 
    void clear ();
 
-   // Anchoring (docs/architecture/anchoring.md §7): show the card beside
+   // Show the card beside
    // the anchored tooltip and follow it at presenter rate; anchor-lost
    // hides after a short grace so transient losses never blink the card.
    void anchor_shown (const QRect& game, const QPoint& offset, const QSize& tip,

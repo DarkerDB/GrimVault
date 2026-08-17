@@ -297,7 +297,7 @@ struct TooltipLookup {
 
 // Dashboard-controlled settings snapshot from /v2/grimvault/settings.
 //
-// Wire schema (per docs/architecture/grimvault-settings.md) is nested:
+// Wire schema is nested:
 //
 //    { "overlay":  { "mode", "alignment", "opacity", "scale", "offset_x", "offset_y" },
 //      "tooltip":  { "sections": { "header", ... }, "analysis": { "market_value", ... },

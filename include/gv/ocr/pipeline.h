@@ -68,7 +68,7 @@ public:
       std::filesystem::path       sample_inbox;
    };
 
-   // Anchoring (docs/architecture/anchoring.md): once a tooltip settles,
+   // Once a tooltip settles,
    // the pipeline emits its anchor — the cursor->tooltip offset and exact
    // size — and the UI draws from cursor math until the anchor is lost.
    struct AnchorEvent {
