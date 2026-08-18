@@ -50,6 +50,16 @@ namespace {
 
 } // namespace
 
+TooltipSelection TooltipTracker::select (
+   const cv::Mat& bgra, const capture::Rect& coarse)
+{
+   const auto refined = refine (bgra, coarse);
+   return {
+      .rect = refined.value_or (coarse),
+      .refined = refined.has_value (),
+   };
+}
+
 std::optional<capture::Rect> TooltipTracker::refine (const cv::Mat& bgra,
                                                      const capture::Rect& coarse)
 {

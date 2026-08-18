@@ -414,17 +414,34 @@ struct Pipeline::Impl
 
          std::optional<capture::Rect> selected;
          std::optional<TooltipIdentity> identity;
+         bool refined = false;
          if (detected.has_value () && !detected->empty ()) {
             const auto* box = nearest_to_cursor (*detected, frame.cursor);
-            selected = vision::TooltipTracker::refine (image, box->rect);
-            if (selected.has_value ())
-               identity = TooltipIdentity::read (image, *selected);
+            const auto selection = vision::TooltipTracker::select (image, box->rect);
+            selected = selection.rect;
+            refined = selection.refined;
+            identity = TooltipIdentity::read (image, *selected);
          }
 
          const bool was_active = state.active ();
          const auto previous_identity = state.current ();
          const auto previous_generation = anchor_generation;
          const auto transition = state.observe (identity, forced);
+
+         if (!identity.has_value () || transition == TooltipTransition::Candidate) {
+            static const std::vector<vision::TooltipBox> empty;
+            std::string reason;
+            if (!detected.has_value ())
+               reason = "detector_error: " + detected.error ().message;
+            else if (detected->empty ())
+               reason = "no_detection";
+            else if (!identity.has_value ())
+               reason = "identity_failed";
+            else
+               reason = refined ? "candidate_refined" : "candidate_coarse";
+            evidence.observe (
+               frame, image, detected.has_value () ? *detected : empty, reason);
+         }
 
          if (transition == TooltipTransition::Lost) {
             static const std::vector<vision::TooltipBox> empty;
@@ -487,6 +504,7 @@ struct Pipeline::Impl
             { "w", std::to_string (selected->w) },
             { "h", std::to_string (selected->h) },
             { "detections", std::to_string (detected->size ()) },
+            { "refined", refined ? "1" : "0" },
             { "detect_ms", std::to_string (last_detect_ms.load ()) },
          });
 
@@ -508,7 +526,8 @@ struct Pipeline::Impl
             *selected,
             image (crop_rect),
             identity->image (),
-            identity->key ());
+            identity->key (),
+            refined);
 
          if (detect_only.load (std::memory_order_relaxed)) continue;
 

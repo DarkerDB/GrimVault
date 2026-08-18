@@ -77,7 +77,8 @@ TEST_F (EvidenceTest, WritesCorrelatedDetectionOcrAndLossEvidence)
       selected,
       image ({ 30, 20, 100, 80 }),
       cv::Mat { 32, 32, CV_8UC1, cv::Scalar { 255 } },
-      42);
+      42,
+      true);
    evidence.ocr (7, image ({ 30, 20, 100, 80 }), {}, "Low Boots", 0.95f);
    evidence.snapshot (7, "lost", image, {});
    evidence.event (7, "analysis_ready", { { "item_id", "low-boots" } });
@@ -99,4 +100,34 @@ TEST_F (EvidenceTest, WritesCorrelatedDetectionOcrAndLossEvidence)
    EXPECT_NE (events.find ("Low Boots"), std::string::npos);
    EXPECT_NE (events.find ("lost"), std::string::npos);
    EXPECT_NE (events.find ("analysis_ready"), std::string::npos);
+}
+
+TEST_F (EvidenceTest, WritesThrottledUnacceptedObservation)
+{
+   cv::Mat image { 120, 180, CV_8UC4, cv::Scalar { 18, 18, 18, 255 } };
+   gv::capture::Frame frame;
+   frame.width = image.cols;
+   frame.height = image.rows;
+   frame.stride = static_cast<int> (image.step);
+   const gv::capture::Rect selected { 30, 20, 100, 80 };
+   const std::vector<gv::vision::TooltipBox> boxes {{
+      .rect = selected,
+      .confidence = 0.9f,
+      .class_id = 0,
+   }};
+   gv::ocr::Evidence evidence { root, 1024 * 1024 };
+   evidence.observe (frame, image, boxes, "candidate_coarse");
+   evidence.observe (frame, image, boxes, "candidate_coarse");
+
+   std::vector<std::filesystem::path> bundles;
+   for (const auto& entry : std::filesystem::directory_iterator { root })
+      if (entry.is_directory ()) bundles.push_back (entry.path ());
+   ASSERT_EQ (bundles.size (), 1);
+   EXPECT_TRUE (std::filesystem::exists (bundles.front () / "frame.jpg"));
+   EXPECT_TRUE (std::filesystem::exists (bundles.front () / "detection-00.png"));
+
+   std::ifstream input { bundles.front () / "manifest.json", std::ios::binary };
+   const std::string manifest {
+      std::istreambuf_iterator<char> { input }, std::istreambuf_iterator<char> {} };
+   EXPECT_NE (manifest.find ("candidate_coarse"), std::string::npos);
 }

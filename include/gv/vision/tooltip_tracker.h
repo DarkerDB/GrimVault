@@ -44,9 +44,17 @@ struct Anchor {
    cv::Mat  detail_thumbnail;      // aligned 32x32 interior detail signature
 };
 
+struct TooltipSelection {
+   capture::Rect rect;
+   bool refined = false;
+};
+
 class TooltipTracker
 {
 public:
+   static TooltipSelection select (const cv::Mat& bgra,
+                                   const capture::Rect& coarse);
+
    // Snap each edge of `coarse` to the strongest gradient ridge within
    // the search margin. Returns nullopt when no convincing ridge exists
    // (mid fade-in, occlusion, detector ghost).

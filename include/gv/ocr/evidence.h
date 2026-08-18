@@ -5,6 +5,7 @@
 
 #include <opencv2/core.hpp>
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <mutex>
@@ -38,7 +39,13 @@ public:
       const capture::Rect& selected,
       const cv::Mat& tooltip,
       const cv::Mat& identity,
-      std::uint64_t identity_key);
+      std::uint64_t identity_key,
+      bool refined);
+   void observe (
+      const capture::Frame& frame,
+      const cv::Mat& image,
+      const std::vector<vision::TooltipBox>& boxes,
+      std::string reason);
    void ocr (
       std::uint64_t generation,
       const cv::Mat& tooltip,
@@ -62,6 +69,7 @@ private:
    std::uintmax_t max_bytes_;
    std::mutex mutex_;
    std::unordered_map<std::uint64_t, std::filesystem::path> bundles_;
+   std::chrono::steady_clock::time_point last_observation_;
 };
 
 }

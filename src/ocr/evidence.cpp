@@ -83,7 +83,8 @@ void Evidence::begin (
    const capture::Rect& selected,
    const cv::Mat& tooltip,
    const cv::Mat& identity,
-   std::uint64_t identity_key)
+   std::uint64_t identity_key,
+   bool refined)
 {
    if (!enabled () || image.empty () || tooltip.empty ()) return;
    std::lock_guard lock { mutex_ };
@@ -127,6 +128,7 @@ void Evidence::begin (
          } },
          { "detections", std::move (detections) },
          { "selected", rect_json (selected) },
+         { "refined", refined },
          { "tooltip_file", "tooltip.png" },
          { "identity_file", "identity.png" },
       };
@@ -135,6 +137,7 @@ void Evidence::begin (
       append (path, generation, "accepted", {
          { "identity", hex (identity_key) },
          { "detections", std::to_string (boxes.size ()) },
+         { "refined", refined ? "1" : "0" },
       });
       trim (root_, max_bytes_);
       std::erase_if (bundles_, [] (const auto& value) {
@@ -142,6 +145,75 @@ void Evidence::begin (
       });
    } catch (const std::exception& error) {
       core::Logger::warn ("evidence begin failed: {}", error.what ());
+   }
+}
+
+void Evidence::observe (
+   const capture::Frame& frame,
+   const cv::Mat& image,
+   const std::vector<vision::TooltipBox>& boxes,
+   std::string reason)
+{
+   if (!enabled () || image.empty ()) return;
+   std::lock_guard lock { mutex_ };
+   const auto now = std::chrono::steady_clock::now ();
+   if (last_observation_.time_since_epoch ().count () != 0
+       && now - last_observation_ < std::chrono::milliseconds { 250 }) return;
+   last_observation_ = now;
+   try {
+      std::error_code ec;
+      std::filesystem::create_directories (root_, ec);
+      const auto id = std::to_string (stamp ()) + "-observation";
+      const auto path = root_ / id;
+      if (!std::filesystem::create_directory (path, ec)) return;
+
+      cv::imwrite ((path / "frame.jpg").string (), image,
+         { cv::IMWRITE_JPEG_QUALITY, 75 });
+      nlohmann::json detections = nlohmann::json::array ();
+      for (std::size_t index = 0; index < boxes.size (); ++index) {
+         const auto file = "detection-" + (index < 10 ? std::string { "0" } : std::string {})
+            + std::to_string (index) + ".png";
+         cv::Rect crop {
+            boxes [index].rect.x,
+            boxes [index].rect.y,
+            boxes [index].rect.w,
+            boxes [index].rect.h,
+         };
+         crop &= cv::Rect { 0, 0, image.cols, image.rows };
+         if (crop.area () > 0) cv::imwrite ((path / file).string (), image (crop));
+         detections.push_back ({
+            { "rect", rect_json (boxes [index].rect) },
+            { "confidence", boxes [index].confidence },
+            { "class_id", boxes [index].class_id },
+            { "file", file },
+         });
+      }
+      nlohmann::json manifest {
+         { "schema", 1 },
+         { "id", id },
+         { "captured_unix_ms", stamp () },
+         { "reason", std::move (reason) },
+         { "frame", {
+            { "file", "frame.jpg" },
+            { "width", frame.width },
+            { "height", frame.height },
+            { "backend", std::string { capture::backend_name (frame.backend) } },
+            { "cursor", {
+               { "x", frame.cursor.x },
+               { "y", frame.cursor.y },
+               { "valid", frame.cursor.valid },
+            } },
+         } },
+         { "detections", std::move (detections) },
+      };
+      std::ofstream output { path / "manifest.json", std::ios::binary };
+      output << manifest.dump (2) << '\n';
+      trim (root_, max_bytes_);
+      std::erase_if (bundles_, [] (const auto& value) {
+         return !std::filesystem::exists (value.second);
+      });
+   } catch (const std::exception& error) {
+      core::Logger::warn ("evidence observation failed: {}", error.what ());
    }
 }
 
