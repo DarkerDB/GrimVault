@@ -89,7 +89,8 @@ namespace detail {
       const auto* last  = v.data () + v.size ();
       const auto [ptr, ec] = std::from_chars (first, last, parsed);
       if (ec != std::errc {} || ptr != last) return fallback;
-      return parsed == 1 || parsed == 5 || parsed == 10 || parsed == 15 || parsed == 30
+      if (parsed == 1) return 3;
+      return parsed == 3 || parsed == 5 || parsed == 10 || parsed == 15 || parsed == 30
          ? parsed
          : fallback;
    }

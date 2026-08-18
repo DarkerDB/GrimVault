@@ -20,6 +20,7 @@
 #include <gv/db/database.h>
 #include <gv/db/repos/user_hotkeys_repo.h>
 #include <gv/db/repos/user_settings_repo.h>
+#include <gv/ocr/capture_policy.h>
 #include <gv/ocr/language_registry.h>
 #include <gv/ocr/pipeline.h>
 #include <gv/ui/debug_overlay.h>
@@ -318,9 +319,6 @@ namespace {
       }
    }
 
-   // Consume `--fcr <n>` / `--fcr=<n>` from args; returns 0 when absent.
-   // Clamped to [1, 60] — below 1 the overlay feels dead, above 60 the
-   // detector can't keep up anyway and the capture thread just spins.
    double consume_fcr (std::vector<std::string>& args)
    {
       double fcr = 0.0;
@@ -344,7 +342,7 @@ namespace {
       }
 
       if (fcr <= 0.0) return 0.0;
-      return std::clamp (fcr, 1.0, 60.0);
+      return std::clamp (fcr, gv::ocr::minimum_capture_fps, 60.0);
    }
 
 #ifdef _WIN32

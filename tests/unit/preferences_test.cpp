@@ -246,8 +246,8 @@ TEST (Preferences, ErasedKeysRevertToDefaults)
 TEST (Preferences, RejectsUnsupportedCaptureRates)
 {
    EXPECT_EQ (folded ({ { "behavior:capture_fps", "30" } }).capture_fps, 30);
-   // 1 is the rate performance mode pins to, and a standalone choice.
-   EXPECT_EQ (folded ({ { "behavior:capture_fps", "1" } }).capture_fps, 1);
+   EXPECT_EQ (folded ({ { "behavior:capture_fps", "1" } }).capture_fps, 3);
+   EXPECT_EQ (folded ({ { "behavior:capture_fps", "3" } }).capture_fps, 3);
    EXPECT_EQ (folded ({ { "behavior:capture_fps", "2" } }).capture_fps, 15);
    EXPECT_EQ (folded ({ { "behavior:capture_fps", "12" } }).capture_fps, 15);
    EXPECT_EQ (folded ({ { "behavior:capture_fps", "60" } }).capture_fps, 15);

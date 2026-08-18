@@ -1,6 +1,10 @@
 #pragma once
 
+#include <algorithm>
+
 namespace gv::ocr {
+
+inline constexpr double minimum_capture_fps = 3.0;
 
 constexpr bool capture_active (
    bool enabled, bool automatic, bool tracking, bool forced) noexcept
@@ -16,9 +20,9 @@ constexpr bool capture_targeted (bool has_window, bool forced) noexcept
 constexpr double detector_fps (double capture_fps, double performance_fps,
                                bool performance) noexcept
 {
-   return performance && performance_fps < capture_fps
-      ? performance_fps
-      : capture_fps;
+   return std::max (
+      performance ? performance_fps : capture_fps,
+      minimum_capture_fps);
 }
 
 constexpr double frame_fps (

@@ -75,7 +75,7 @@ struct Pipeline::Impl
    Impl (capture::CaptureService& c, vision::TooltipDetector& d, LanguageRegistry& r, Config cfg)
       : capture (c), detector (d), registry (r), config (std::move (cfg)),
         evidence (config.evidence_dir, config.evidence_max_bytes),
-        capture_fps (std::clamp (config.capture_fps, 1.0, 60.0)),
+        capture_fps (std::clamp (config.capture_fps, minimum_capture_fps, 60.0)),
         capture_mode (c.mode ())
    {}
 
@@ -132,13 +132,13 @@ struct Pipeline::Impl
    std::chrono::milliseconds current_interval () const
    {
       const bool active = tracking.load (std::memory_order_relaxed);
-      const double fps = std::max (1.0, frame_fps (
+      const double fps = frame_fps (
          capture_fps.load (std::memory_order_relaxed),
          config.performance_fps,
          config.tracking_fps,
          config.performance_tracking_fps,
          performance_mode.load (std::memory_order_relaxed),
-         active));
+         active);
 
       return std::chrono::duration_cast<std::chrono::milliseconds> (
          std::chrono::duration<double> (1.0 / fps));
@@ -146,10 +146,10 @@ struct Pipeline::Impl
 
    std::chrono::milliseconds detection_interval () const
    {
-      const double fps = std::max (1.0, detector_fps (
+      const double fps = detector_fps (
          capture_fps.load (std::memory_order_relaxed),
          config.performance_fps,
-         performance_mode.load (std::memory_order_relaxed)));
+         performance_mode.load (std::memory_order_relaxed));
       return std::chrono::duration_cast<std::chrono::milliseconds> (
          std::chrono::duration<double> (1.0 / fps));
    }
@@ -960,7 +960,7 @@ void Pipeline::set_automatic (bool on)
 }
 void Pipeline::set_capture_fps (double fps)
 {
-   const double bounded = std::clamp (fps, 1.0, 60.0);
+   const double bounded = std::clamp (fps, minimum_capture_fps, 60.0);
    if (impl_->capture_fps.exchange (bounded, std::memory_order_relaxed) == bounded) return;
    core::Logger::info ("pipeline: capture rate → {:.0f} fps", bounded);
 }
