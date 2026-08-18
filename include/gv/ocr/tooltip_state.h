@@ -72,6 +72,7 @@ public:
    explicit TooltipState (Config config = {});
 
    TooltipUpdate observe (std::optional<TooltipObservation> observation, bool force = false);
+   void confirm () noexcept;
    void reset () noexcept;
    bool active () const noexcept;
    const std::optional<TooltipObservation>& current () const noexcept;

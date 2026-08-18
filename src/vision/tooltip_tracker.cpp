@@ -3,8 +3,6 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
-#include <array>
-#include <bit>
 
 namespace gv::vision {
 
@@ -14,9 +12,14 @@ namespace {
    constexpr int k_min_side    = 40;    // anything smaller is not a tooltip
    constexpr int k_fp_h        = 24;    // fingerprint corner-block size
    constexpr int k_fp_w        = 48;
+   constexpr int k_content_h   = 40;
+   constexpr int k_content_w   = 192;
+   constexpr int k_content_search = 8;
    constexpr double k_ridge    = 3.0;   // peak must be this x mean to count
    constexpr double k_verify   = 0.85;  // NCC acceptance
    constexpr double k_absent   = 0.45;
+   constexpr double k_content_present = 0.72;
+   constexpr double k_content_changed = 0.55;
 
    struct Match {
       capture::Rect box;
@@ -92,25 +95,23 @@ namespace {
       return result;
    }
 
-   cv::Mat tail_fingerprint (
-      const cv::Mat& bgra, const capture::Rect& box, int& dx, int& dy)
+   cv::Mat content_fingerprint (
+      const cv::Mat& bgra,
+      const capture::Rect& box,
+      std::size_t index,
+      int& dx,
+      int& dy)
    {
-      const int width = std::min (k_fp_w, box.w - 4);
-      const int height = std::min (k_fp_h, box.h - 4);
-      dx = box.w - width - 1;
-      dy = box.h - height - 1;
+      const int width = std::min (k_content_w, box.w - 16);
+      const int height = std::min (k_content_h, box.h - 16);
+      if (width < 32 || height < 16) return {};
+      dx = (box.w - width) / 2;
+      dy = index == 3
+         ? box.h - height - 1
+         : 8 + static_cast<int> (index) * (box.h - height - 16) / 3;
       cv::Rect patch { box.x + dx, box.y + dy, width, height };
       patch &= cv::Rect { 0, 0, bgra.cols, bgra.rows };
       return gray_of (bgra, patch).clone ();
-   }
-
-   int detail_distance (const cv::Mat& first, const cv::Mat& second)
-   {
-      if (first.empty () || second.empty () || first.size () != second.size ()) return 1024;
-      cv::Mat delta;
-      cv::absdiff (first, second, delta);
-      cv::threshold (delta, delta, 8, 255, cv::THRESH_BINARY);
-      return cv::countNonZero (delta);
    }
 
    AxisPin pin (int position, int size, int extent, int low, int high)
@@ -223,11 +224,10 @@ void TooltipTracker::remember (
    anchor.w = box.w;
    anchor.h = box.h;
    anchor.fingerprint = fingerprint (bgra, box, anchor.fp_dx, anchor.fp_dy);
-   anchor.tail_fingerprint = tail_fingerprint (
-      bgra, box, anchor.tail_dx, anchor.tail_dy);
-   anchor.measured_h = measure_height (bgra, box).value_or (box.h);
-   anchor.content_hash = content_hash (bgra, box);
-   anchor.detail_thumbnail = detail_thumbnail (bgra, box);
+   for (std::size_t index = 0; index < anchor.content_fingerprints.size (); ++index) {
+      anchor.content_fingerprints [index] = content_fingerprint (
+         bgra, box, index, anchor.content_dx [index], anchor.content_dy [index]);
+   }
 }
 
 TooltipTracking TooltipTracker::track (
@@ -251,28 +251,36 @@ TooltipTracking TooltipTracker::track (
    }
    if (frame.confidence < k_verify) return result;
 
-   const auto tail = match (
-      bgra, anchor.tail_fingerprint, anchor.tail_dx, anchor.tail_dy,
-      anchor.w, anchor.h, frame.box.x, frame.box.y, 8, 8);
-   result.tail_confidence = tail.confidence;
-   if (tail.confidence < k_absent) {
-      result.presence = TooltipPresence::Changed;
-      return result;
+   double total = 0.0;
+   double weakest = 1.0;
+   int count = 0;
+   for (std::size_t index = 0; index < anchor.content_fingerprints.size (); ++index) {
+      if (anchor.content_fingerprints [index].empty ()) continue;
+      const auto content = match (
+         bgra,
+         anchor.content_fingerprints [index],
+         anchor.content_dx [index],
+         anchor.content_dy [index],
+         anchor.w,
+         anchor.h,
+         frame.box.x,
+         frame.box.y,
+         k_content_search,
+         k_content_search);
+      total += content.confidence;
+      weakest = std::min (weakest, content.confidence);
+      ++count;
    }
-   if (tail.confidence < k_verify) {
-      const auto height = measure_height (bgra, frame.box);
-      if (height.has_value () && std::abs (*height - anchor.measured_h) > 8)
-         result.presence = TooltipPresence::Changed;
-      return result;
-   }
+   if (count == 0) return result;
 
-   result.hash_distance = std::popcount (
-      anchor.content_hash ^ content_hash (bgra, frame.box));
-   result.detail_distance = detail_distance (
-      anchor.detail_thumbnail, detail_thumbnail (bgra, frame.box));
-   result.presence = result.hash_distance >= 8 && result.detail_distance >= 8
-      ? TooltipPresence::Changed
-      : TooltipPresence::Present;
+   result.content_confidence = total / count;
+   if (result.content_confidence >= k_content_present && weakest >= k_content_present) {
+      result.presence = TooltipPresence::Present;
+      return result;
+   }
+   if (result.content_confidence < k_content_changed || weakest < k_absent) {
+      result.presence = TooltipPresence::Changed;
+   }
    return result;
 }
 
@@ -363,99 +371,6 @@ std::optional<capture::Rect> TooltipTracker::locate (
    return result.confidence >= k_verify
       ? std::optional<capture::Rect> { result.box }
       : std::nullopt;
-}
-
-std::optional<int> TooltipTracker::measure_height (const cv::Mat& bgra,
-                                                   const capture::Rect& box,
-                                                   int search_px)
-{
-   if (box.w < k_min_side || box.h < k_min_side) return std::nullopt;
-
-   // Inset the horizontal span so the left and right frame edges, which run
-   // the full height, cannot contribute to a row projection looking for one
-   // horizontal ridge.
-   constexpr int k_inset = 4;
-
-   const int expected = box.y + box.h;
-   cv::Rect band {
-      box.x + k_inset,
-      expected - search_px,
-      box.w - 2 * k_inset,
-      2 * search_px };
-   band &= cv::Rect { 0, 0, bgra.cols, bgra.rows };
-
-   if (band.width < k_min_side || band.height < 3) return std::nullopt;
-
-   const cv::Mat gray = gray_of (bgra, band);
-
-   cv::Mat gy;
-   cv::Sobel (gray, gy, CV_32F, 0, 1, 3);
-   gy = cv::abs (gy);
-
-   cv::Mat rowsum;
-   cv::reduce (gy, rowsum, 1, cv::REDUCE_AVG, CV_32F);
-
-   const int bottom = ridge_peak (rowsum, 0, rowsum.rows);
-   if (bottom < 0) return std::nullopt;
-
-   const int measured = band.y + bottom - box.y;
-   return measured >= k_min_side ? std::optional<int> { measured } : std::nullopt;
-}
-
-std::uint64_t TooltipTracker::content_hash (const cv::Mat& bgra,
-                                            const capture::Rect& box)
-{
-   cv::Rect roi { box.x + 8, box.y + 8,
-                  std::max (0, box.w - 16), std::max (0, box.h - 16) };
-   roi &= cv::Rect { 0, 0, bgra.cols, bgra.rows };
-   if (roi.width < 9 || roi.height < 8) return 0;
-
-   // Fixed-cost grid hash: 72 local samples regardless of tooltip area.
-   // A 3x3 average makes it insensitive to isolated raster noise.
-   const auto sample = [&bgra, &roi] (int gx, int gy) {
-      const int cx = roi.x + (gx * (roi.width  - 1)) / 8;
-      const int cy = roi.y + (gy * (roi.height - 1)) / 7;
-      int sum = 0, n = 0;
-      for (int y = std::max (roi.y, cy - 1);
-           y <= std::min (roi.y + roi.height - 1, cy + 1); ++y) {
-         for (int x = std::max (roi.x, cx - 1);
-              x <= std::min (roi.x + roi.width - 1, cx + 1); ++x) {
-            const auto& p = bgra.at<cv::Vec4b> (y, x);
-            sum += (29 * p [0] + 150 * p [1] + 77 * p [2]) >> 8;
-            ++n;
-         }
-      }
-      return n > 0 ? sum / n : 0;
-   };
-   std::array<int, 64> values {};
-   int total = 0;
-   for (int y = 0; y < 8; ++y) {
-      for (int x = 0; x < 8; ++x) {
-         const int value = sample (x, y);
-         values [y * 8 + x] = value;
-         total += value;
-      }
-   }
-   const int mean = total / static_cast<int> (values.size ());
-   std::uint64_t hash = 0;
-   for (const int value : values) {
-      hash <<= 1;
-      hash |= value > mean;
-   }
-   return hash;
-}
-
-cv::Mat TooltipTracker::detail_thumbnail (const cv::Mat& bgra,
-                                          const capture::Rect& box)
-{
-   cv::Rect roi { box.x + 8, box.y + 8,
-                  std::max (0, box.w - 16), std::max (0, box.h - 16) };
-   roi &= cv::Rect { 0, 0, bgra.cols, bgra.rows };
-   if (roi.width < 32 || roi.height < 32) return {};
-
-   cv::Mat detail;
-   cv::resize (gray_of (bgra, roi), detail, { 32, 32 }, 0.0, 0.0, cv::INTER_AREA);
-   return detail;
 }
 
 } // namespace gv::vision

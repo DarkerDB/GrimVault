@@ -185,6 +185,13 @@ TooltipUpdate TooltipState::observe (
    return update;
 }
 
+void TooltipState::confirm () noexcept
+{
+   candidate_.reset ();
+   stable_ = 0;
+   missing_ = 0;
+}
+
 void TooltipState::reset () noexcept
 {
    current_.reset ();

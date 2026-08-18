@@ -70,6 +70,25 @@ TEST (TooltipState, RequiresTwoMissesToLose)
    EXPECT_FALSE (state.active ());
 }
 
+TEST (TooltipState, ConfirmationClearsPendingLossAndReplacement)
+{
+   TooltipState state;
+   state.observe (observation (0));
+   state.observe (observation (0));
+
+   state.observe (std::nullopt);
+   state.confirm ();
+   EXPECT_EQ (state.observe (std::nullopt).transition, TooltipTransition::None);
+   EXPECT_TRUE (state.active ());
+
+   state.observe (observation (~0ull));
+   state.confirm ();
+   EXPECT_EQ (
+      state.observe (observation (~0ull)).transition,
+      TooltipTransition::Candidate);
+   EXPECT_TRUE (state.active ());
+}
+
 TEST (TooltipState, ForceAcceptsImmediately)
 {
    TooltipState state;

@@ -399,7 +399,6 @@ struct Pipeline::Impl
          const auto now = std::chrono::steady_clock::now ();
          bool detection_due = forced || !state.active ()
             || now - last_detection >= detection_interval ();
-         bool tracked_present = false;
 
          if (state.active () && !forced && !anchor.fingerprint.empty ()) {
             const int pred_x = anchor.axis_x != vision::AxisPin::Free
@@ -412,22 +411,19 @@ struct Pipeline::Impl
                image, anchor, pred_x, pred_y);
 
             if (tracked.presence == vision::TooltipPresence::Present) {
-               tracked_present = true;
+               state.confirm ();
                anchor.update (
                   tracked.box, frame.cursor, frame.width, frame.height,
                   config.pin_near_edge_px, config.pin_right_edge_px);
-               if (!detection_due) {
-                  emit_anchor (anchor);
-                  continue;
-               }
+               emit_anchor (anchor);
+               continue;
             } else {
                core::log::vision.event ("tooltip_tracking", {
                   { "generation", std::to_string (anchor_generation) },
                   { "presence", std::string (presence_name (tracked.presence)) },
                   { "frame_confidence", fmt::format ("{:.3f}", tracked.frame_confidence) },
-                  { "tail_confidence", fmt::format ("{:.3f}", tracked.tail_confidence) },
-                  { "hash_distance", std::to_string (tracked.hash_distance) },
-                  { "detail_distance", std::to_string (tracked.detail_distance) },
+                  { "content_confidence", fmt::format (
+                     "{:.3f}", tracked.content_confidence) },
                });
                detection_due = true;
             }
@@ -446,21 +442,31 @@ struct Pipeline::Impl
          bool refined = false;
          if (detected.has_value () && !detected->empty ()) {
             const auto* box = nearest_to_cursor (*detected, frame.cursor);
-            observation = TooltipObservation::read (image, box->rect, frame.cursor);
             const auto selection = vision::TooltipTracker::select (image, box->rect);
             selected = selection.rect;
             refined = selection.refined;
+            observation = TooltipObservation::read (image, *selected, frame.cursor);
          }
 
-         if (tracked_present && !observation.has_value ()) {
-            static const std::vector<vision::TooltipBox> empty;
-            evidence.observe (
-               frame,
-               image,
-               detected.has_value () ? *detected : empty,
-               "detector_miss_while_tracked");
-            emit_anchor (anchor);
-            continue;
+         if (!forced && state.active () && selected.has_value ()
+             && !anchor.fingerprint.empty ()) {
+            const auto recovered = vision::TooltipTracker::track (
+               image, anchor, selected->x, selected->y);
+            if (recovered.presence == vision::TooltipPresence::Present) {
+               state.confirm ();
+               anchor.update (
+                  recovered.box, frame.cursor, frame.width, frame.height,
+                  config.pin_near_edge_px, config.pin_right_edge_px);
+               core::log::vision.event ("tooltip_recovered", {
+                  { "generation", std::to_string (anchor_generation) },
+                  { "frame_confidence", fmt::format (
+                     "{:.3f}", recovered.frame_confidence) },
+                  { "content_confidence", fmt::format (
+                     "{:.3f}", recovered.content_confidence) },
+               });
+               emit_anchor (anchor);
+               continue;
+            }
          }
 
          const bool was_active = state.active ();
@@ -517,7 +523,7 @@ struct Pipeline::Impl
          }
 
          if (transition == TooltipTransition::Candidate) {
-            if (tracked_present) emit_anchor (anchor);
+            if (state.active ()) emit_anchor (anchor);
             continue;
          }
          if (transition != TooltipTransition::Acquired
