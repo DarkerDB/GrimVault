@@ -154,5 +154,3 @@ private:
 } // namespace gv::app
 
 Q_DECLARE_METATYPE (gv::app::Mode)
-
-Both additions kept (no conflict in intent): `set_performance_mode` and `set_language`. Implementation for each still needs to exist in `controller.cpp`, worth checking.

@@ -173,5 +173,3 @@ void SettingsBridge::apply (const QString& key, const QString& value)
 }
 
 } // namespace gv::app
-
-Both calls kept, no contradiction (`set_performance_mode` + `set_language`).
