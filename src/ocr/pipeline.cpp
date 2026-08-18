@@ -48,6 +48,16 @@ void canonicalize_latin (std::string& text)
    for (const auto& [from, to] : replacements) replace_all (text, from, to);
 }
 
+std::string_view relation_name (TooltipRelation relation)
+{
+   switch (relation) {
+      case TooltipRelation::Same: return "same";
+      case TooltipRelation::Ambiguous: return "ambiguous";
+      case TooltipRelation::Different: return "different";
+      default: return "missing";
+   }
+}
+
 } // namespace
 
 struct Pipeline::Impl
@@ -88,7 +98,7 @@ struct Pipeline::Impl
       capture::Frame                     frame;
       std::vector<vision::TooltipBox>    boxes;
       std::uint64_t                      generation = 0;
-      TooltipIdentity                    identity;
+      TooltipObservation                 observation;
       bool                               refresh = false;
    };
    std::mutex vision_lock;
@@ -260,7 +270,8 @@ struct Pipeline::Impl
          .stable_frames = config.stability_frames,
          .missing_frames = config.missing_frames,
          .identity_bits = config.identity_bits,
-         .identity_size_px = config.identity_size_px,
+         .position_px = config.identity_position_px,
+         .size_ratio = config.identity_size_ratio,
       }};
       vision::Anchor anchor;
       std::uint64_t anchor_generation = 0;
@@ -413,32 +424,32 @@ struct Pipeline::Impl
          };
 
          std::optional<capture::Rect> selected;
-         std::optional<TooltipIdentity> identity;
+         std::optional<TooltipObservation> observation;
          bool refined = false;
          if (detected.has_value () && !detected->empty ()) {
             const auto* box = nearest_to_cursor (*detected, frame.cursor);
+            observation = TooltipObservation::read (image, box->rect, frame.cursor);
             const auto selection = vision::TooltipTracker::select (image, box->rect);
             selected = selection.rect;
             refined = selection.refined;
-            identity = TooltipIdentity::read (image, *selected);
          }
 
          const bool was_active = state.active ();
-         const auto previous_identity = state.current ();
          const auto previous_generation = anchor_generation;
-         const auto transition = state.observe (identity, forced);
+         const auto update = state.observe (observation, forced);
+         const auto transition = update.transition;
 
-         if (!identity.has_value () || transition == TooltipTransition::Candidate) {
+         if (!observation.has_value () || transition == TooltipTransition::Candidate) {
             static const std::vector<vision::TooltipBox> empty;
             std::string reason;
             if (!detected.has_value ())
                reason = "detector_error: " + detected.error ().message;
             else if (detected->empty ())
                reason = "no_detection";
-            else if (!identity.has_value ())
+            else if (!observation.has_value ())
                reason = "identity_failed";
             else
-               reason = refined ? "candidate_refined" : "candidate_coarse";
+               reason = "candidate_" + std::string (relation_name (update.relation));
             evidence.observe (
                frame, image, detected.has_value () ? *detected : empty, reason);
          }
@@ -464,7 +475,7 @@ struct Pipeline::Impl
             continue;
          }
 
-         if (!identity.has_value () || !selected.has_value ()) continue;
+         if (!observation.has_value () || !selected.has_value ()) continue;
 
          if (transition == TooltipTransition::Same) {
             anchor = build_anchor (
@@ -480,9 +491,9 @@ struct Pipeline::Impl
          if (was_active) {
             evidence.event (previous_generation, "replaced", {
                { "identity_distance", std::to_string (
-                  previous_identity.has_value ()
-                     ? previous_identity->distance (*identity)
-                     : 0) },
+                  update.identity_distance) },
+               { "size_changed", update.size_changed ? "1" : "0" },
+               { "position_unexplained", update.position_unexplained ? "1" : "0" },
             });
             if (anchor_lost_cb) anchor_lost_cb (true);
          }
@@ -498,11 +509,19 @@ struct Pipeline::Impl
             { "transition", transition == TooltipTransition::Replaced
                ? "replaced"
                : "acquired" },
-            { "identity", std::to_string (identity->key ()) },
+            { "identity", std::to_string (observation->identity.key ()) },
+            { "relation", std::string (relation_name (update.relation)) },
+            { "identity_distance", std::to_string (update.identity_distance) },
+            { "size_changed", update.size_changed ? "1" : "0" },
+            { "position_unexplained", update.position_unexplained ? "1" : "0" },
             { "x", std::to_string (selected->x) },
             { "y", std::to_string (selected->y) },
             { "w", std::to_string (selected->w) },
             { "h", std::to_string (selected->h) },
+            { "detector_x", std::to_string (observation->box.x) },
+            { "detector_y", std::to_string (observation->box.y) },
+            { "detector_w", std::to_string (observation->box.w) },
+            { "detector_h", std::to_string (observation->box.h) },
             { "detections", std::to_string (detected->size ()) },
             { "refined", refined ? "1" : "0" },
             { "detect_ms", std::to_string (last_detect_ms.load ()) },
@@ -525,8 +544,8 @@ struct Pipeline::Impl
             *detected,
             *selected,
             image (crop_rect),
-            identity->image (),
-            identity->key (),
+            observation->identity.image (),
+            observation->identity.key (),
             refined);
 
          if (detect_only.load (std::memory_order_relaxed)) continue;
@@ -535,7 +554,7 @@ struct Pipeline::Impl
             std::move (frame),
             { vision::TooltipBox { .rect = *selected } },
             anchor_generation,
-            *identity,
+            *observation,
             forced,
          };
          {
@@ -548,7 +567,7 @@ struct Pipeline::Impl
    void ocr_loop ()
    {
       struct Cached {
-         TooltipIdentity identity;
+         TooltipObservation observation;
          LanguageFamily family = LanguageFamily::English;
          std::string text;
          std::unordered_map<std::string, std::string> gems;
@@ -579,11 +598,11 @@ struct Pipeline::Impl
          }
 
          const auto family = language.load (std::memory_order_relaxed);
-         const auto identity_key = item.identity.key ();
+         const auto identity_key = item.observation.identity.key ();
          if (!item.refresh) {
             const auto found = std::find_if (cache.begin (), cache.end (), [&] (const Cached& value) {
-               return value.family == family && value.identity.same (
-                  item.identity, config.identity_bits, config.identity_size_px);
+               return value.family == family && value.observation.cacheable (
+                  item.observation, config.identity_bits, config.identity_size_px);
             });
             if (found != cache.end ()) {
                evidence.event (item.generation, "ocr_cache_hit", {
@@ -832,7 +851,7 @@ struct Pipeline::Impl
 
             if (cache.size () == 128) cache.erase (cache.begin ());
             cache.push_back (Cached {
-               .identity = item.identity,
+               .observation = item.observation,
                .family = family,
                .text = text,
                .gems = gems,

@@ -39,6 +39,8 @@ public:
       int                         pin_right_edge_px  = 32;
       int                         identity_bits      = 16;
       int                         identity_size_px   = 8;
+      int                         identity_position_px = 24;
+      double                      identity_size_ratio = 1.2;
       LanguageFamily              language           = LanguageFamily::Latin;
       std::filesystem::path       evidence_dir;
       std::uintmax_t              evidence_max_bytes = 250ull * 1024ull * 1024ull;
