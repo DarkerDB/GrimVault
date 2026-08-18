@@ -58,6 +58,16 @@ std::string_view relation_name (TooltipRelation relation)
    }
 }
 
+std::string_view presence_name (vision::TooltipPresence presence)
+{
+   switch (presence) {
+      case vision::TooltipPresence::Present: return "present";
+      case vision::TooltipPresence::Changed: return "changed";
+      case vision::TooltipPresence::Absent: return "absent";
+      default: return "uncertain";
+   }
+}
+
 } // namespace
 
 struct Pipeline::Impl
@@ -121,11 +131,25 @@ struct Pipeline::Impl
 
    std::chrono::milliseconds current_interval () const
    {
+      const bool active = tracking.load (std::memory_order_relaxed);
+      const double fps = std::max (1.0, frame_fps (
+         capture_fps.load (std::memory_order_relaxed),
+         config.performance_fps,
+         config.tracking_fps,
+         config.performance_tracking_fps,
+         performance_mode.load (std::memory_order_relaxed),
+         active));
+
+      return std::chrono::duration_cast<std::chrono::milliseconds> (
+         std::chrono::duration<double> (1.0 / fps));
+   }
+
+   std::chrono::milliseconds detection_interval () const
+   {
       const double fps = std::max (1.0, detector_fps (
          capture_fps.load (std::memory_order_relaxed),
          config.performance_fps,
          performance_mode.load (std::memory_order_relaxed)));
-
       return std::chrono::duration_cast<std::chrono::milliseconds> (
          std::chrono::duration<double> (1.0 / fps));
    }
@@ -275,6 +299,8 @@ struct Pipeline::Impl
       }};
       vision::Anchor anchor;
       std::uint64_t anchor_generation = 0;
+      int uncertain_frames = 0;
+      auto last_detection = std::chrono::steady_clock::now () - detection_interval ();
 
       const auto emit_anchor = [this, &anchor_generation] (const vision::Anchor& value) {
          if (!anchor_cb) return;
@@ -291,55 +317,6 @@ struct Pipeline::Impl
             .w = value.w,
             .h = value.h,
          });
-      };
-
-      const auto measure = [] (
-         vision::Anchor& value,
-         const capture::Rect& box,
-         const capture::CursorPos& cursor,
-         int frame_width,
-         int frame_height) {
-         if (!cursor.valid) return;
-         if (box.x > 2 && box.x + box.w < frame_width - 2) {
-            value.offset_x = box.x - cursor.x;
-            value.locked_x = true;
-         }
-         if (box.y > 2 && box.y + box.h < frame_height - 2) {
-            value.offset_y = box.y - cursor.y;
-            value.locked_y = true;
-         }
-      };
-
-      const auto classify_pins = [this] (
-         vision::Anchor& value,
-         const capture::Rect& box,
-         int frame_width,
-         int frame_height) {
-         value.axis_x = box.x <= config.pin_near_edge_px
-            ? vision::AxisPin::Low
-            : frame_width - box.x - box.w <= config.pin_right_edge_px
-               ? vision::AxisPin::High
-               : vision::AxisPin::Free;
-         value.axis_y = box.y <= config.pin_near_edge_px
-            ? vision::AxisPin::Low
-            : frame_height - box.y - box.h <= config.pin_near_edge_px
-               ? vision::AxisPin::High
-               : vision::AxisPin::Free;
-         value.pin_x = box.x;
-         value.pin_y = box.y;
-      };
-
-      const auto build_anchor = [&] (
-         const capture::Rect& box,
-         const capture::CursorPos& cursor,
-         int frame_width,
-         int frame_height) {
-         vision::Anchor result;
-         result.w = box.w;
-         result.h = box.h;
-         measure (result, box, cursor, frame_width, frame_height);
-         classify_pins (result, box, frame_width, frame_height);
-         return result;
       };
 
       const auto nearest_to_cursor = [] (
@@ -370,18 +347,21 @@ struct Pipeline::Impl
 
       const auto lose = [&] (std::string reason) {
          if (!state.active ()) return;
-         core::log::vision.event ("tooltip_lost", {
-            { "generation", std::to_string (anchor_generation) },
-            { "reason", reason },
-         });
-         evidence.event (anchor_generation, "lost", {
-            { "reason", reason },
-         });
-         if (anchor_lost_cb) anchor_lost_cb (true);
+         const auto lost_generation = anchor_generation;
          state.reset ();
+         anchor = {};
+         uncertain_frames = 0;
          tracking.store (false, std::memory_order_relaxed);
          generation.fetch_add (1, std::memory_order_relaxed);
          anchor_generation = 0;
+         if (anchor_lost_cb) anchor_lost_cb (true);
+         core::log::vision.event ("tooltip_lost", {
+            { "generation", std::to_string (lost_generation) },
+            { "reason", reason },
+         });
+         evidence.event (lost_generation, "lost", {
+            { "reason", reason },
+         });
       };
 
       while (running.load (std::memory_order_relaxed)) {
@@ -410,11 +390,6 @@ struct Pipeline::Impl
             pending, pending - 1, std::memory_order_relaxed)) {}
          const bool forced = pending > 0;
 
-         const auto started = std::chrono::steady_clock::now ();
-         auto detected = detector.detect (frame);
-         last_detect_ms.store (std::chrono::duration_cast<std::chrono::milliseconds> (
-            std::chrono::steady_clock::now () - started).count ());
-
          cv::Mat image {
             frame.height,
             frame.width,
@@ -422,6 +397,67 @@ struct Pipeline::Impl
             frame.data.get (),
             static_cast<std::size_t> (frame.stride),
          };
+
+         const auto now = std::chrono::steady_clock::now ();
+         bool detection_due = forced || !state.active ()
+            || now - last_detection >= detection_interval ();
+         bool tracked_present = false;
+
+         if (state.active () && !forced && !anchor.fingerprint.empty ()) {
+            const int pred_x = anchor.axis_x != vision::AxisPin::Free
+               ? anchor.pin_x
+               : frame.cursor.valid ? frame.cursor.x + anchor.offset_x : anchor.pin_x;
+            const int pred_y = anchor.axis_y != vision::AxisPin::Free
+               ? anchor.pin_y
+               : frame.cursor.valid ? frame.cursor.y + anchor.offset_y : anchor.pin_y;
+            const auto tracked = vision::TooltipTracker::track (
+               image, anchor, pred_x, pred_y);
+
+            if (tracked.presence == vision::TooltipPresence::Present) {
+               uncertain_frames = 0;
+               tracked_present = true;
+               anchor.update (
+                  tracked.box, frame.cursor, frame.width, frame.height,
+                  config.pin_near_edge_px, config.pin_right_edge_px);
+               if (!detection_due) {
+                  emit_anchor (anchor);
+                  continue;
+               }
+            } else {
+               core::log::vision.event ("tooltip_tracking", {
+                  { "generation", std::to_string (anchor_generation) },
+                  { "presence", std::string (presence_name (tracked.presence)) },
+                  { "frame_confidence", fmt::format ("{:.3f}", tracked.frame_confidence) },
+                  { "tail_confidence", fmt::format ("{:.3f}", tracked.tail_confidence) },
+                  { "hash_distance", std::to_string (tracked.hash_distance) },
+                  { "detail_distance", std::to_string (tracked.detail_distance) },
+               });
+
+               const bool strong = tracked.presence != vision::TooltipPresence::Uncertain;
+               uncertain_frames = strong ? 0 : uncertain_frames + 1;
+               if (strong || uncertain_frames >= 2) {
+                  static const std::vector<vision::TooltipBox> empty;
+                  const auto lost_generation = anchor_generation;
+                  const auto reason = "tracker_" + std::string (
+                     presence_name (tracked.presence));
+                  lose (reason);
+                  evidence.snapshot (
+                     lost_generation,
+                     reason,
+                     image,
+                     empty);
+               }
+               detection_due = true;
+            }
+         }
+
+         if (!detection_due) continue;
+
+         const auto started = std::chrono::steady_clock::now ();
+         auto detected = detector.detect (frame);
+         last_detection = now;
+         last_detect_ms.store (std::chrono::duration_cast<std::chrono::milliseconds> (
+            std::chrono::steady_clock::now () - started).count ());
 
          std::optional<capture::Rect> selected;
          std::optional<TooltipObservation> observation;
@@ -432,6 +468,17 @@ struct Pipeline::Impl
             const auto selection = vision::TooltipTracker::select (image, box->rect);
             selected = selection.rect;
             refined = selection.refined;
+         }
+
+         if (tracked_present && !observation.has_value ()) {
+            static const std::vector<vision::TooltipBox> empty;
+            evidence.observe (
+               frame,
+               image,
+               detected.has_value () ? *detected : empty,
+               "detector_miss_while_tracked");
+            emit_anchor (anchor);
+            continue;
          }
 
          const bool was_active = state.active ();
@@ -456,6 +503,12 @@ struct Pipeline::Impl
 
          if (transition == TooltipTransition::Lost) {
             static const std::vector<vision::TooltipBox> empty;
+            anchor = {};
+            uncertain_frames = 0;
+            tracking.store (false, std::memory_order_relaxed);
+            generation.fetch_add (1, std::memory_order_relaxed);
+            anchor_generation = 0;
+            if (anchor_lost_cb) anchor_lost_cb (true);
             evidence.snapshot (
                previous_generation,
                "lost",
@@ -468,40 +521,45 @@ struct Pipeline::Impl
             evidence.event (previous_generation, "lost", {
                { "reason", "detector_misses" },
             });
-            if (anchor_lost_cb) anchor_lost_cb (true);
-            tracking.store (false, std::memory_order_relaxed);
-            generation.fetch_add (1, std::memory_order_relaxed);
-            anchor_generation = 0;
             continue;
          }
 
          if (!observation.has_value () || !selected.has_value ()) continue;
 
          if (transition == TooltipTransition::Same) {
-            anchor = build_anchor (
-               *selected, frame.cursor, frame.width, frame.height);
+            anchor.update (
+               *selected, frame.cursor, frame.width, frame.height,
+               config.pin_near_edge_px, config.pin_right_edge_px);
+            vision::TooltipTracker::remember (image, *selected, anchor);
+            uncertain_frames = 0;
             emit_anchor (anchor);
             continue;
          }
 
-         if (transition == TooltipTransition::Candidate) continue;
+         if (transition == TooltipTransition::Candidate) {
+            if (tracked_present) emit_anchor (anchor);
+            continue;
+         }
          if (transition != TooltipTransition::Acquired
              && transition != TooltipTransition::Replaced) continue;
 
          if (was_active) {
+            if (anchor_lost_cb) anchor_lost_cb (true);
             evidence.event (previous_generation, "replaced", {
                { "identity_distance", std::to_string (
                   update.identity_distance) },
                { "size_changed", update.size_changed ? "1" : "0" },
                { "position_unexplained", update.position_unexplained ? "1" : "0" },
             });
-            if (anchor_lost_cb) anchor_lost_cb (true);
          }
 
          anchor_generation = generation.fetch_add (1, std::memory_order_relaxed) + 1;
          tracking.store (true, std::memory_order_relaxed);
-         anchor = build_anchor (
-            *selected, frame.cursor, frame.width, frame.height);
+         anchor.acquire (
+            *selected, frame.cursor, frame.width, frame.height,
+            config.pin_near_edge_px, config.pin_right_edge_px);
+         uncertain_frames = 0;
+         vision::TooltipTracker::remember (image, *selected, anchor);
          force_scans.store (0, std::memory_order_relaxed);
 
          core::log::vision.event ("tooltip_accepted", {
@@ -987,9 +1045,12 @@ core::Result<void> Pipeline::start (TooltipCallback on_tooltip)
    impl_->ocr_thread     = std::thread { [this] { impl_->ocr_loop ();     } };
 
    core::Logger::info (
-      "pipeline: started (detector_fps={:.1f}, performance_fps={:.1f})",
+      "pipeline: started (detector_fps={:.1f}, performance_fps={:.1f}, "
+      "tracking_fps={:.1f}, performance_tracking_fps={:.1f})",
       impl_->capture_fps.load (std::memory_order_relaxed),
-      impl_->config.performance_fps);
+      impl_->config.performance_fps,
+      impl_->config.tracking_fps,
+      impl_->config.performance_tracking_fps);
    return {};
 }
 

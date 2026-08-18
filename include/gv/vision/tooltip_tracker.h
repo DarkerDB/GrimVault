@@ -42,6 +42,29 @@ struct Anchor {
    int      measured_h = 0;
    std::uint64_t content_hash = 0; // coarse interior dHash for change detection
    cv::Mat  detail_thumbnail;      // aligned 32x32 interior detail signature
+   cv::Mat  tail_fingerprint;
+   int      tail_dx = 0;
+   int      tail_dy = 0;
+   int      release_x = 0;
+   int      release_y = 0;
+
+   void acquire (const capture::Rect& box, const capture::CursorPos& cursor,
+                 int frame_width, int frame_height,
+                 int near_edge_px = 48, int right_edge_px = 32);
+   void update (const capture::Rect& box, const capture::CursorPos& cursor,
+                int frame_width, int frame_height,
+                int near_edge_px = 48, int right_edge_px = 32);
+};
+
+enum class TooltipPresence : std::uint8_t { Present, Changed, Absent, Uncertain };
+
+struct TooltipTracking {
+   TooltipPresence presence = TooltipPresence::Uncertain;
+   capture::Rect box;
+   double frame_confidence = 0.0;
+   double tail_confidence = 0.0;
+   int hash_distance = 0;
+   int detail_distance = 0;
 };
 
 struct TooltipSelection {
@@ -54,6 +77,9 @@ class TooltipTracker
 public:
    static TooltipSelection select (const cv::Mat& bgra,
                                    const capture::Rect& coarse);
+   static void remember (const cv::Mat& bgra, const capture::Rect& box, Anchor& anchor);
+   static TooltipTracking track (const cv::Mat& bgra, const Anchor& anchor,
+                                 int pred_x, int pred_y, int search_px = 24);
 
    // Snap each edge of `coarse` to the strongest gradient ridge within
    // the search margin. Returns nullopt when no convincing ridge exists

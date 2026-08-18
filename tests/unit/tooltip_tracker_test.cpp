@@ -9,6 +9,7 @@
 
 using gv::capture::Rect;
 using gv::vision::Anchor;
+using gv::vision::TooltipPresence;
 using gv::vision::TooltipTracker;
 
 namespace {
@@ -124,6 +125,98 @@ TEST (TooltipTracker, LocateAbsorbsPresentationErrorWithoutChangingBoxSize)
    EXPECT_NEAR (found->y, k_truth.y, 1);
    EXPECT_EQ (found->w, k_truth.w);
    EXPECT_EQ (found->h, k_truth.h);
+}
+
+TEST (TooltipTracker, TrackPreservesTranslatedTooltip)
+{
+   const cv::Mat first = scene_with_tooltip (k_truth);
+   const Rect shifted { 80, 90, k_truth.w, k_truth.h };
+   const cv::Mat second = scene_with_tooltip (shifted);
+   Anchor anchor;
+   TooltipTracker::remember (first, k_truth, anchor);
+
+   const auto tracked = TooltipTracker::track (
+      second, anchor, shifted.x + 10, shifted.y - 8);
+
+   EXPECT_EQ (tracked.presence, TooltipPresence::Present);
+   EXPECT_NEAR (tracked.box.x, shifted.x, 1);
+   EXPECT_NEAR (tracked.box.y, shifted.y, 1);
+}
+
+TEST (TooltipTracker, TrackRejectsMissingTooltip)
+{
+   const cv::Mat first = scene_with_tooltip (k_truth);
+   const cv::Mat gone = scene_with_tooltip ({ 40, 40, 220, 340 });
+   Anchor anchor;
+   TooltipTracker::remember (first, k_truth, anchor);
+
+   const auto tracked = TooltipTracker::track (
+      gone, anchor, k_truth.x, k_truth.y);
+
+   EXPECT_EQ (tracked.presence, TooltipPresence::Absent);
+}
+
+TEST (TooltipTracker, TrackDetectsContentReplacement)
+{
+   const cv::Mat first = scene_with_tooltip (k_truth);
+   cv::Mat changed = first.clone ();
+   cv::RNG rng { 0xDDB };
+   rng.fill (
+      changed (cv::Rect { k_truth.x + 8, k_truth.y + 32,
+                          k_truth.w - 16, k_truth.h - 64 }),
+      cv::RNG::UNIFORM,
+      cv::Scalar { 0, 0, 0, 255 },
+      cv::Scalar { 255, 255, 255, 255 });
+   Anchor anchor;
+   TooltipTracker::remember (first, k_truth, anchor);
+
+   const auto tracked = TooltipTracker::track (
+      changed, anchor, k_truth.x, k_truth.y);
+
+   EXPECT_EQ (tracked.presence, TooltipPresence::Changed);
+}
+
+TEST (TooltipTracker, TrackDetectsSizeReplacement)
+{
+   const cv::Mat first = scene_with_tooltip (k_truth);
+   const Rect taller { k_truth.x, k_truth.y, k_truth.w, k_truth.h + 50 };
+   const cv::Mat changed = scene_with_tooltip (taller);
+   Anchor anchor;
+   TooltipTracker::remember (first, k_truth, anchor);
+
+   const auto tracked = TooltipTracker::track (
+      changed, anchor, k_truth.x, k_truth.y);
+
+   EXPECT_EQ (tracked.presence, TooltipPresence::Changed);
+}
+
+TEST (Anchor, RightPinSurvivesCursorMotion)
+{
+   Anchor anchor;
+   anchor.acquire (
+      { 570, 100, 220, 340 }, { 700, 200, true }, 800, 600);
+
+   anchor.update (
+      { 570, 100, 220, 340 }, { 400, 200, true }, 800, 600);
+
+   EXPECT_EQ (anchor.axis_x, gv::vision::AxisPin::High);
+   EXPECT_EQ (anchor.pin_x, 570);
+}
+
+TEST (Anchor, RightPinReleasesAfterTwoObservedMoves)
+{
+   Anchor anchor;
+   anchor.acquire (
+      { 570, 100, 220, 340 }, { 700, 200, true }, 800, 600);
+
+   anchor.update (
+      { 400, 100, 220, 340 }, { 350, 200, true }, 800, 600);
+   EXPECT_EQ (anchor.axis_x, gv::vision::AxisPin::High);
+   anchor.update (
+      { 400, 100, 220, 340 }, { 350, 200, true }, 800, 600);
+
+   EXPECT_EQ (anchor.axis_x, gv::vision::AxisPin::Free);
+   EXPECT_EQ (anchor.offset_x, 50);
 }
 
 TEST (TooltipTracker, ContentHashIsTranslationInvariantAndContentSensitive)

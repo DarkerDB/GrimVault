@@ -140,7 +140,6 @@ bool TooltipState::agrees (
 {
    const auto update = compare (current, next);
    return !update.size_changed
-      && !update.position_unexplained
       && update.identity_distance <= config_.identity_bits;
 }
 
@@ -162,7 +161,7 @@ TooltipUpdate TooltipState::observe (
    missing_ = 0;
    update.relation = TooltipRelation::Different;
    if (current_.has_value ()) update = compare (*current_, *observation);
-   if (!force && update.relation == TooltipRelation::Same) {
+   if (!force && update.relation != TooltipRelation::Different) {
       current_ = std::move (observation);
       candidate_.reset ();
       stable_ = 0;

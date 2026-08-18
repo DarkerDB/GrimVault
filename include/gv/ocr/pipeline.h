@@ -33,6 +33,8 @@ public:
    struct Config {
       double                      capture_fps        = 15.0;
       double                      performance_fps    = 3.0;
+      double                      tracking_fps       = 60.0;
+      double                      performance_tracking_fps = 30.0;
       int                         stability_frames   = 2;
       int                         missing_frames     = 2;
       int                         pin_near_edge_px   = 48;

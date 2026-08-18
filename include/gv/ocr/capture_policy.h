@@ -21,4 +21,18 @@ constexpr double detector_fps (double capture_fps, double performance_fps,
       : capture_fps;
 }
 
+constexpr double frame_fps (
+   double detector,
+   double performance_detector,
+   double tracker,
+   double performance_tracker,
+   bool performance,
+   bool tracking) noexcept
+{
+   return detector_fps (
+      tracking ? tracker : detector,
+      tracking ? performance_tracker : performance_detector,
+      performance);
+}
+
 }

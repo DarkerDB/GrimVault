@@ -99,7 +99,7 @@ TEST (TooltipState, PinnedTooltipExplainsCursorMotion)
    EXPECT_FALSE (update.position_unexplained);
 }
 
-TEST (TooltipState, UnexplainedPositionRequiresReplacement)
+TEST (TooltipState, UnexplainedPositionPreservesIdentity)
 {
    TooltipState state;
    state.observe (observation (0));
@@ -109,8 +109,8 @@ TEST (TooltipState, UnexplainedPositionRequiresReplacement)
    const auto second = state.observe (moved);
    EXPECT_EQ (first.relation, TooltipRelation::Ambiguous);
    EXPECT_TRUE (first.position_unexplained);
-   EXPECT_EQ (first.transition, TooltipTransition::Candidate);
-   EXPECT_EQ (second.transition, TooltipTransition::Replaced);
+   EXPECT_EQ (first.transition, TooltipTransition::Same);
+   EXPECT_EQ (second.transition, TooltipTransition::Same);
 }
 
 TEST (TooltipState, DramaticSizeChangeRequiresReplacement)
