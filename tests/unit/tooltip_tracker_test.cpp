@@ -204,6 +204,52 @@ TEST (TooltipTracker, TrackEscalatesSizeReplacement)
    EXPECT_EQ (tracked.presence, TooltipPresence::Changed);
 }
 
+TEST (TooltipTracker, RebasePreservesDetectorCropJitter)
+{
+   const cv::Mat img = scene_with_tooltip (k_truth);
+   const Rect first {
+      k_truth.x - 8, k_truth.y - 18, k_truth.w + 15, k_truth.h + 22 };
+   const Rect second {
+      k_truth.x + 3, k_truth.y - 2, k_truth.w - 5, k_truth.h + 4 };
+   Anchor anchor;
+   TooltipTracker::remember (img, first, anchor);
+
+   const auto tracked = TooltipTracker::rebase (img, anchor, second);
+
+   EXPECT_EQ (tracked.presence, TooltipPresence::Present);
+}
+
+TEST (TooltipTracker, RebaseRejectsContentReplacement)
+{
+   const cv::Mat first = scene_with_tooltip (k_truth);
+   cv::Mat changed = first.clone ();
+   cv::RNG rng { 0xDDB };
+   rng.fill (
+      changed (cv::Rect { k_truth.x + 8, k_truth.y + 32,
+                          k_truth.w - 16, k_truth.h - 64 }),
+      cv::RNG::UNIFORM,
+      cv::Scalar { 0, 0, 0, 255 },
+      cv::Scalar { 255, 255, 255, 255 });
+   Anchor anchor;
+   TooltipTracker::remember (first, k_truth, anchor);
+
+   const auto tracked = TooltipTracker::rebase (changed, anchor, k_truth);
+
+   EXPECT_NE (tracked.presence, TooltipPresence::Present);
+}
+
+TEST (TooltipTracker, RebaseRejectsSizeReplacement)
+{
+   const cv::Mat img = scene_with_tooltip (k_truth);
+   Anchor anchor;
+   TooltipTracker::remember (img, k_truth, anchor);
+
+   const auto tracked = TooltipTracker::rebase (
+      img, anchor, { k_truth.x, k_truth.y, k_truth.w, k_truth.h + 80 });
+
+   EXPECT_EQ (tracked.presence, TooltipPresence::Changed);
+}
+
 TEST (Anchor, RightPinSurvivesCursorMotion)
 {
    Anchor anchor;

@@ -71,6 +71,8 @@ public:
    static void remember (const cv::Mat& bgra, const capture::Rect& box, Anchor& anchor);
    static TooltipTracking track (const cv::Mat& bgra, const Anchor& anchor,
                                  int pred_x, int pred_y, int search_px = 24);
+   static TooltipTracking rebase (const cv::Mat& bgra, const Anchor& anchor,
+                                  const capture::Rect& box, int search_px = 32);
 
    // Snap each edge of `coarse` to the strongest gradient ridge within
    // the search margin. Returns nullopt when no convincing ridge exists

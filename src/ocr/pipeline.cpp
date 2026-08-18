@@ -450,13 +450,14 @@ struct Pipeline::Impl
 
          if (!forced && state.active () && selected.has_value ()
              && !anchor.fingerprint.empty ()) {
-            const auto recovered = vision::TooltipTracker::track (
-               image, anchor, selected->x, selected->y);
+            const auto recovered = vision::TooltipTracker::rebase (
+               image, anchor, *selected);
             if (recovered.presence == vision::TooltipPresence::Present) {
                state.confirm ();
                anchor.update (
-                  recovered.box, frame.cursor, frame.width, frame.height,
+                  *selected, frame.cursor, frame.width, frame.height,
                   config.pin_near_edge_px, config.pin_right_edge_px);
+               vision::TooltipTracker::remember (image, *selected, anchor);
                core::log::vision.event ("tooltip_recovered", {
                   { "generation", std::to_string (anchor_generation) },
                   { "frame_confidence", fmt::format (

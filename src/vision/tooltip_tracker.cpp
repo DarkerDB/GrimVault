@@ -20,6 +20,8 @@ namespace {
    constexpr double k_absent   = 0.45;
    constexpr double k_content_present = 0.72;
    constexpr double k_content_changed = 0.55;
+   constexpr double k_rebase_content_present = 0.80;
+   constexpr double k_rebase_size_ratio = 1.2;
 
    struct Match {
       capture::Rect box;
@@ -106,12 +108,18 @@ namespace {
       const int height = std::min (k_content_h, box.h - 16);
       if (width < 32 || height < 16) return {};
       dx = (box.w - width) / 2;
-      dy = index == 3
-         ? box.h - height - 1
+      dy = index == 3 ? box.h - height - 1
          : 8 + static_cast<int> (index) * (box.h - height - 16) / 3;
       cv::Rect patch { box.x + dx, box.y + dy, width, height };
       patch &= cv::Rect { 0, 0, bgra.cols, bgra.rows };
       return gray_of (bgra, patch).clone ();
+   }
+
+   bool size_changed (int first, int second)
+   {
+      const auto smaller = std::min (first, second);
+      const auto larger = std::max (first, second);
+      return smaller <= 0 || static_cast<double> (larger) / smaller >= k_rebase_size_ratio;
    }
 
    AxisPin pin (int position, int size, int extent, int low, int high)
@@ -281,6 +289,49 @@ TooltipTracking TooltipTracker::track (
    if (result.content_confidence < k_content_changed || weakest < k_absent) {
       result.presence = TooltipPresence::Changed;
    }
+   return result;
+}
+
+TooltipTracking TooltipTracker::rebase (
+   const cv::Mat& bgra,
+   const Anchor& anchor,
+   const capture::Rect& box,
+   int search_px)
+{
+   TooltipTracking result { .box = box };
+   if (size_changed (anchor.w, box.w) || size_changed (anchor.h, box.h)) {
+      result.presence = TooltipPresence::Changed;
+      return result;
+   }
+
+   const auto frame = match (
+      bgra, anchor.fingerprint, anchor.fp_dx, anchor.fp_dy,
+      box.w, box.h, box.x, box.y, search_px, search_px);
+   result.frame_confidence = frame.confidence;
+
+   double total = 0.0;
+   double weakest = 1.0;
+   int count = 0;
+   for (std::size_t index = 0; index < anchor.content_fingerprints.size (); ++index) {
+      const auto& fingerprint = anchor.content_fingerprints [index];
+      if (fingerprint.empty ()) continue;
+      const int dx = (box.w - fingerprint.cols) / 2;
+      const int dy = index == 3 ? box.h - fingerprint.rows - 1
+         : 8 + static_cast<int> (index) * (box.h - fingerprint.rows - 16) / 3;
+      const auto content = match (
+         bgra, fingerprint, dx, dy, box.w, box.h,
+         box.x, box.y, search_px, search_px);
+      total += content.confidence;
+      weakest = std::min (weakest, content.confidence);
+      ++count;
+   }
+   if (count == 0) return result;
+
+   result.content_confidence = total / count;
+   if (result.content_confidence >= k_rebase_content_present && weakest >= k_absent)
+      result.presence = TooltipPresence::Present;
+   else if (result.content_confidence < k_content_changed || weakest < k_absent)
+      result.presence = TooltipPresence::Changed;
    return result;
 }
 
