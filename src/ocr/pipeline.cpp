@@ -299,7 +299,6 @@ struct Pipeline::Impl
       }};
       vision::Anchor anchor;
       std::uint64_t anchor_generation = 0;
-      int uncertain_frames = 0;
       auto last_detection = std::chrono::steady_clock::now () - detection_interval ();
 
       const auto emit_anchor = [this, &anchor_generation] (const vision::Anchor& value) {
@@ -350,7 +349,6 @@ struct Pipeline::Impl
          const auto lost_generation = anchor_generation;
          state.reset ();
          anchor = {};
-         uncertain_frames = 0;
          tracking.store (false, std::memory_order_relaxed);
          generation.fetch_add (1, std::memory_order_relaxed);
          anchor_generation = 0;
@@ -414,7 +412,6 @@ struct Pipeline::Impl
                image, anchor, pred_x, pred_y);
 
             if (tracked.presence == vision::TooltipPresence::Present) {
-               uncertain_frames = 0;
                tracked_present = true;
                anchor.update (
                   tracked.box, frame.cursor, frame.width, frame.height,
@@ -432,21 +429,6 @@ struct Pipeline::Impl
                   { "hash_distance", std::to_string (tracked.hash_distance) },
                   { "detail_distance", std::to_string (tracked.detail_distance) },
                });
-
-               const bool strong = tracked.presence != vision::TooltipPresence::Uncertain;
-               uncertain_frames = strong ? 0 : uncertain_frames + 1;
-               if (strong || uncertain_frames >= 2) {
-                  static const std::vector<vision::TooltipBox> empty;
-                  const auto lost_generation = anchor_generation;
-                  const auto reason = "tracker_" + std::string (
-                     presence_name (tracked.presence));
-                  lose (reason);
-                  evidence.snapshot (
-                     lost_generation,
-                     reason,
-                     image,
-                     empty);
-               }
                detection_due = true;
             }
          }
@@ -504,7 +486,6 @@ struct Pipeline::Impl
          if (transition == TooltipTransition::Lost) {
             static const std::vector<vision::TooltipBox> empty;
             anchor = {};
-            uncertain_frames = 0;
             tracking.store (false, std::memory_order_relaxed);
             generation.fetch_add (1, std::memory_order_relaxed);
             anchor_generation = 0;
@@ -531,7 +512,6 @@ struct Pipeline::Impl
                *selected, frame.cursor, frame.width, frame.height,
                config.pin_near_edge_px, config.pin_right_edge_px);
             vision::TooltipTracker::remember (image, *selected, anchor);
-            uncertain_frames = 0;
             emit_anchor (anchor);
             continue;
          }
@@ -558,7 +538,6 @@ struct Pipeline::Impl
          anchor.acquire (
             *selected, frame.cursor, frame.width, frame.height,
             config.pin_near_edge_px, config.pin_right_edge_px);
-         uncertain_frames = 0;
          vision::TooltipTracker::remember (image, *selected, anchor);
          force_scans.store (0, std::memory_order_relaxed);
 

@@ -68,7 +68,7 @@ public:
    using TooltipCallback    = std::function<void (const RecognizedTooltip&)>;
    using AnchorCallback     = std::function<void (const AnchorEvent&)>;
 
-   // immediate = vision confirmed disappearance (or cursor jump), so
+   // immediate = vision confirmed disappearance, so
    // hide now. False remains available for future soft-loss sources.
    using AnchorLostCallback = std::function<void (bool immediate)>;
 
