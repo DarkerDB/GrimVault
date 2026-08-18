@@ -18,14 +18,14 @@ presets keep the default in-tree `build/` layout).
 One-shot from any Windows PowerShell:
 
 ```powershell
-pwsh W:\home\ethan\.katforge\realms\grimvault\tools\run-dev.ps1
+wsl.exe bash -lc 'cd ~/.katforge/realms/grimvault && pwsh.exe -File "$(wslpath -w tools/run-dev.ps1)"'
 ```
 
 or from a WSL shell:
 
 ```bash
-cmd.exe /c "W:\\home\\ethan\\.katforge\\realms\\grimvault\\tools\\build\\wsl-build.bat"   # configure + build
-cmd.exe /c "W:\\home\\ethan\\.katforge\\realms\\grimvault\\tools\\build\\wsl-test.bat"    # + unit tests
+cmd.exe /c "$(wslpath -w tools/build/wsl-build.bat)"   # configure + build
+cmd.exe /c "$(wslpath -w tools/build/wsl-test.bat)"    # + unit tests
 ```
 
 That's it. The script configures with `windows-msvc-test`, builds, installs

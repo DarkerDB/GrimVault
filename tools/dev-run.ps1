@@ -143,7 +143,7 @@ if ($remote) {
 Run from the W: drive mapping, not the raw UNC path. Qt's build tooling
 (cmd-wrapped qmlimportscanner) needs a drive-lettered source directory:
    net use W: \\wsl.localhost\Ubuntu /persistent:yes
-   pwsh W:\home\ethan\.katforge\realms\grimvault\tools\dev-run.ps1
+   Run this script again through its W: path.
 "@
    }
    Inf "source on network drive ($root); build tree -> $out"
