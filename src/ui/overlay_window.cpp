@@ -234,6 +234,7 @@ struct OverlayWindow::Impl
    std::unique_ptr<AugmentView> augment;
    std::unique_ptr<QmlTooltip>  qml;
    std::optional<LastPresentation> last;
+   bool active = true;
 
    QmlTooltip& qml_renderer ()
    {
@@ -290,7 +291,7 @@ void OverlayWindow::fall_back_to_qml ()
       core::Logger::warn ("overlay: WebView2 renderer failed; falling back to QML");
       impl_->augment.reset ();
       auto& qml = impl_->qml_renderer ();
-      if (impl_->last.has_value ()) {
+      if (impl_->active && impl_->last.has_value ()) {
          qml.present (impl_->last->lookup, impl_->last->game, impl_->last->anchor);
       }
    }, Qt::QueuedConnection);
@@ -300,6 +301,8 @@ void OverlayWindow::present (const gv::api::TooltipLookup& lookup,
                              const QRect& game, const QRect& anchor, bool animate)
 {
    impl_->last = Impl::LastPresentation { lookup, game, anchor };
+   if (!impl_->active) return;
+
    if (impl_->augment) {
       impl_->augment->present (lookup, game, anchor, animate);
       return;
@@ -317,6 +320,28 @@ void OverlayWindow::clear ()
    }
 
    if (impl_->qml) impl_->qml->clear ();
+}
+
+bool OverlayWindow::set_active (bool active)
+{
+   if (impl_->active == active) return false;
+   impl_->active = active;
+
+   if (!active) {
+      if (impl_->augment) impl_->augment->clear ();
+      if (impl_->qml) impl_->qml->clear ();
+      return false;
+   }
+
+   if (!impl_->last.has_value ()) return false;
+
+   const auto& last = *impl_->last;
+   if (impl_->augment) {
+      impl_->augment->present (last.lookup, last.game, last.anchor, false);
+   } else {
+      impl_->qml_renderer ().present (last.lookup, last.game, last.anchor);
+   }
+   return true;
 }
 
 void OverlayWindow::set_layout (const Layout& layout)

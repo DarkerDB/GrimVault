@@ -6,10 +6,6 @@
 
 namespace gv::ui {
 
-// Tiny frameless click-through badge pinned to the bottom-right corner of
-// the game window. Shows sign-in state (dot color), scan mode (label) and
-// pulses on pipeline activity so the player can tell GrimVault is alive
-// without leaving the game.
 class StatusBadge : public QQuickView
 {
    Q_OBJECT

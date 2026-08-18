@@ -27,51 +27,21 @@ struct RecognizedTooltip {
    std::chrono::steady_clock::time_point captured_at;
 };
 
-// Real-time OCR pipeline:
-//
-//    [capture thread]    FrameSource ---SpscQueue<Frame>--->
-//    [vision worker]     TooltipDetector ---SpscQueue<Boxes>--->
-//    [ocr workers]       Recognizer ---SpscQueue<Recognized>--->
-//    [callback]          on_tooltip (called on the OCR worker thread)
-//
-// Stability gate: a tooltip box must persist for N consecutive vision
-// frames at IoU >= 0.9 before triggering recognition (configurable).
-//
-// Idle policy: if no tooltips are detected for `idle_window`, vision fps
-// drops to `idle_fps`. Motion or focus change resumes `active_fps`.
-//
-// The pipeline owns all worker threads. start() spawns them; stop() joins.
 class Pipeline
 {
 public:
    struct Config {
-      double                      active_fps         = 15.0;
-      double                      anchored_fps       = 60.0;
-      double                      anchored_burst_fps = 120.0;
       double                      capture_fps        = 15.0;
-      std::chrono::milliseconds   anchored_burst     { 150 };
-      double                      idle_fps           = 3.0;
-      std::chrono::milliseconds   idle_window        { 2000 };
+      double                      performance_fps    = 3.0;
       int                         stability_frames   = 2;
-      float                       stability_iou      = 0.9f;
+      int                         missing_frames     = 2;
       int                         pin_near_edge_px   = 48;
       int                         pin_right_edge_px  = 32;
-      int                         identity_bits      = 14;
-      int                         identity_detail_px = 32;
-      int                         identity_frames    = 2;
-      // A measured bottom edge this far from the anchor's height is a
-      // different card. Independent of the hash/detail pair and confirmed on
-      // one frame, because capture noise does not move frame art: the pair is
-      // tuned to survive dxgi churn on a static card, which is exactly the
-      // tuning that lets a same-size, same-border replacement slip through.
-      int                         identity_size_px   = 6;
-      int                         search_free_px     = 16;
-      int                         search_pinned_px   = 3;
-      int                         cursor_reset_px    = 140;
+      int                         identity_bits      = 16;
+      int                         identity_size_px   = 8;
       LanguageFamily              language           = LanguageFamily::Latin;
-      // When non-empty, persist only detector-selected tooltip crops and
-      // their segmented OCR lines for later, human-verified model training.
-      std::filesystem::path       sample_inbox;
+      std::filesystem::path       evidence_dir;
+      std::uintmax_t              evidence_max_bytes = 250ull * 1024ull * 1024ull;
    };
 
    // Once a tooltip settles,
@@ -92,7 +62,6 @@ public:
    };
 
    using TooltipCallback    = std::function<void (const RecognizedTooltip&)>;
-   using ActivityCallback   = std::function<void ()>;
    using AnchorCallback     = std::function<void (const AnchorEvent&)>;
 
    // immediate = vision confirmed disappearance (or cursor jump), so
@@ -110,11 +79,6 @@ public:
 
    core::Result<void> start (TooltipCallback on_tooltip);
    void               stop  () noexcept;
-
-   // Fired from the vision thread the moment a tooltip box is detected —
-   // well before OCR + lookup finish — so the UI can signal "scanning" with
-   // no perceived lag. Set before start().
-   void on_activity (ActivityCallback cb);
 
    // Anchor established / updated (offsets lock as the tooltip unpins) and
    // anchor lost, fired from the vision thread. Set before start().
@@ -143,16 +107,13 @@ public:
    // True only while `generation` still belongs to the current tooltip.
    bool is_current (std::uint64_t generation) const noexcept;
 
-   // Stop after detection: boxes still flow to on_debug_boxes / on_activity,
-   // but nothing is dispatched to OCR (no recognition, no lookup, no
-   // overlay). Dev aid for tuning the detector in isolation.
    void set_detect_only (bool on);
 
-   // Bypass the stability gate for one OCR cycle. The next frame with any
-   // detected tooltip box is forwarded to OCR regardless of accumulated
-   // stability count. Used by the manual-scan hotkey and the mouse-still
-   // trigger.
    void request_immediate_scan ();
+   void record_evidence (
+      std::uint64_t generation,
+      std::string event,
+      std::unordered_map<std::string, std::string> fields = {});
 
 private:
    struct Impl;

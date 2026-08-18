@@ -6,6 +6,12 @@ using gv::ocr::LanguageFamily;
 using gv::ocr::family_dir;
 using gv::ocr::family_of;
 
+TEST (Language, ActiveLocaleUsesEnglishRecognizer)
+{
+   EXPECT_EQ (gv::ocr::active_locale, "en");
+   EXPECT_EQ (family_of (gv::ocr::active_locale), LanguageFamily::English);
+}
+
 TEST (Language, AllTenLocalesResolve)
 {
    EXPECT_EQ (family_of ("de"),      LanguageFamily::Latin);

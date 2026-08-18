@@ -585,14 +585,13 @@ namespace {
       if (capture) {
          gv::ocr::Pipeline::Config pipe_cfg;
          if (opts.fcr > 0.0) {
-            pipe_cfg.active_fps = opts.fcr;
             pipe_cfg.capture_fps = opts.fcr;
             gv::core::Logger::info ("pipeline: frame capture rate {} fps (--fcr)", opts.fcr);
          }
          if (opts.debug) {
-            pipe_cfg.sample_inbox = data_dir / "ocr-samples" / "inbox";
-            gv::core::Logger::info ("OCR sample inbox: {}",
-               pipe_cfg.sample_inbox.string ());
+            pipe_cfg.evidence_dir = data_dir / "evidence";
+            gv::core::Logger::info ("Evidence directory: {}",
+               pipe_cfg.evidence_dir.string ());
          }
 
          pipeline = std::make_unique<gv::ocr::Pipeline> (
@@ -643,15 +642,6 @@ namespace {
       }
 
       if (pipeline) {
-         // Badge pulse at detection time (vision thread) — OCR + lookup can
-         // take seconds in debug builds; without this the badge sits idle
-         // while visibly "nothing happens".
-         pipeline->on_activity ([&controller] {
-            QMetaObject::invokeMethod (&controller, [&controller] {
-               emit controller.scanActivity ();
-            }, Qt::QueuedConnection);
-         });
-
          auto start_r = pipeline->start ([&controller] (const gv::ocr::RecognizedTooltip& rt) {
             controller.on_tooltip (rt);
          });
@@ -696,13 +686,11 @@ namespace {
          ? gv::ui::ConnectionState::Syncing
          : gv::ui::ConnectionState::SignedOut);
 
-      // In-game corner badge: pinned bottom-right of the game window, shows
-      // sign-in dot + scan mode, pulses on pipeline activity.
       gv::ui::StatusBadge badge;
       badge.set_signed_in (session.signed_in ());
       QObject::connect (&controller, &gv::app::Controller::gameWindowChanged,
          &badge, &gv::ui::StatusBadge::set_game);
-      QObject::connect (&controller, &gv::app::Controller::scanActivity,
+      QObject::connect (&controller, &gv::app::Controller::overlayPresented,
          &badge, &gv::ui::StatusBadge::pulse);
       QObject::connect (&controller, &gv::app::Controller::modeChanged,
          &badge, [&badge] (gv::app::Mode m) {

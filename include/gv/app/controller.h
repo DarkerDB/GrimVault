@@ -142,10 +142,6 @@ signals:
    // focused; consumers (status badge) hide themselves when it drops.
    void gameWindowChanged (QRect bounds, bool active);
 
-   // A tooltip made it through detection + OCR (whether or not the lookup
-   // then succeeded) — UI feedback that the pipeline is alive.
-   void scanActivity      ();
-
 private:
    struct Impl;
    std::unique_ptr<Impl> impl_;

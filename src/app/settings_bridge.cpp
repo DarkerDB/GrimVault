@@ -4,6 +4,7 @@
 #include <gv/core/logger.h>
 #include <gv/core/startup_link.h>
 #include <gv/db/repos/user_settings_repo.h>
+#include <gv/ocr/language.h>
 #include <gv/ui/overlay_window.h>
 
 #include <map>
@@ -15,7 +16,6 @@ namespace gv::app {
 namespace {
 
    constexpr const char* k_startup_name = "GrimVault";
-   constexpr int         k_performance_capture_fps = 1;
 
 } // namespace
 
@@ -50,16 +50,11 @@ struct SettingsBridge::Impl
       if (!deps.controller) return;
 
       deps.controller->set_configured_mode (prefs.overlay_mode);
-      // Performance mode owns the capture rate outright — the dashboard
-      // disables the control rather than letting it read a value that is not
-      // in effect. One frame per second is the floor the pipeline clamps to.
-      if (!deps.capture_fps_locked) {
-         deps.controller->set_capture_fps (
-            prefs.performance_mode ? k_performance_capture_fps : prefs.capture_fps);
-      }
+      if (!deps.capture_fps_locked)
+         deps.controller->set_capture_fps (prefs.capture_fps);
       deps.controller->set_capture_mode (prefs.capture_mode);
       deps.controller->set_performance_mode (prefs.performance_mode);
-      deps.controller->set_language (prefs.language);
+      deps.controller->set_language (std::string { ocr::active_locale });
       std::vector<std::string> enabled_widgets;
       for (const auto& [widget, enabled] : prefs.options.widgets) {
          if (enabled) enabled_widgets.push_back (widget);

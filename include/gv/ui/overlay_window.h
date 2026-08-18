@@ -46,6 +46,7 @@ public:
    void present (const gv::api::TooltipLookup& lookup,
                  const QRect& game, const QRect& anchor, bool animate = true);
    void clear ();
+   bool set_active (bool active);
 
    // Live settings. Both are cheap and idempotent — SettingsBridge calls
    // them whenever the dashboard changes, including mid-hover.

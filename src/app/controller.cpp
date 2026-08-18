@@ -18,8 +18,6 @@
 #include <QTimer>
 #include <QUrl>
 
-#include <Windows.h>
-
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -36,10 +34,6 @@ namespace gv::app {
 
 namespace {
 
-   constexpr int k_mouse_still_ms = 100;
-   constexpr int k_performance_mouse_still_ms = 250;
-   constexpr int k_mouse_poll_ms  = 16;     // ~60 Hz
-
    struct DefaultRow { const char* action; const char* accelerator; };
 
    constexpr std::array<DefaultRow, 6> k_defaults = {{
@@ -50,12 +44,6 @@ namespace {
       { Actions::k_toggle_overlay,  DefaultAccelerators::toggle_overlay  },
       { Actions::k_open_in_browser, DefaultAccelerators::open_in_browser },
    }};
-
-   bool point_in_rect (const POINT& p, const core::WindowRect& r)
-   {
-      return p.x >= r.x && p.x < r.x + r.w
-          && p.y >= r.y && p.y < r.y + r.h;
-   }
 
    const char* mode_name (Mode m)
    {
@@ -134,10 +122,6 @@ struct Controller::Impl
    // mouse watcher + main thread).
    std::mutex             state_lock;
    core::WindowEvent      last_event {};
-
-   // Mouse-still watcher thread.
-   std::thread            mouse_thread;
-   std::atomic<bool>      mouse_running { false };
 
    // Network analysis never blocks an OCR worker. A single latest-only slot
    // coalesces rapid hover changes while an older request is in flight; the
@@ -274,7 +258,6 @@ struct Controller::Impl
    ~Impl ()
    {
       stop_analysis_worker ();
-      stop_mouse_watcher ();
    }
 
    void start_analysis_worker ()
@@ -327,7 +310,12 @@ struct Controller::Impl
          if (!authenticated.load (std::memory_order_relaxed)
              || mode.load (std::memory_order_relaxed) == Mode::Disabled) continue;
          if (!deps.api) continue;
-         if (deps.pipeline && !deps.pipeline->is_current (job.tooltip.generation)) continue;
+         if (deps.pipeline && !deps.pipeline->is_current (job.tooltip.generation)) {
+            deps.pipeline->record_evidence (job.tooltip.generation, "analysis_discarded", {
+               { "reason", "stale_before_request" },
+            });
+            continue;
+         }
 
          const auto analysis_started = std::chrono::steady_clock::now ();
          auto result = deps.api->analyze_tooltip (
@@ -344,10 +332,18 @@ struct Controller::Impl
                { "reason", "stale_generation" },
                { "generation", std::to_string (job.tooltip.generation) },
             });
+            deps.pipeline->record_evidence (job.tooltip.generation, "analysis_discarded", {
+               { "reason", "stale_after_request" },
+            });
             continue;
          }
          if (!result.has_value ()) {
             core::Logger::debug ("controller: analysis failed: {}", result.error ().message);
+            if (deps.pipeline) deps.pipeline->record_evidence (
+               job.tooltip.generation, "analysis_failed", {
+                  { "message", result.error ().message },
+                  { "elapsed_ms", std::to_string (analysis_ms) },
+               });
             continue;
          }
 
@@ -361,6 +357,13 @@ struct Controller::Impl
             { "confidence", lookup.pricing.confidence },
             { "elapsed_ms", std::to_string (analysis_ms) },
          });
+         if (deps.pipeline) deps.pipeline->record_evidence (
+            job.tooltip.generation, "analysis_ready", {
+               { "item_id", lookup.item_id },
+               { "request_id", lookup.request_id },
+               { "confidence", lookup.pricing.confidence },
+               { "elapsed_ms", std::to_string (analysis_ms) },
+            });
          persist_find (lookup);
          {
             std::lock_guard lk { browse_lock };
@@ -400,72 +403,12 @@ struct Controller::Impl
                // complete API data has arrived and the hidden renderer will
                // still wait for its final size + bitmap before revealing it.
                guard->impl_->deps.overlay->present (lookup, game, anchor, true);
+               if (guard->impl_->deps.pipeline) guard->impl_->deps.pipeline->record_evidence (
+                  generation, "overlay_presented", {
+                     { "item_id", lookup.item_id },
+                  });
                emit guard->overlayPresented ();
             }, Qt::QueuedConnection);
-      }
-   }
-
-   void start_mouse_watcher ()
-   {
-      mouse_running.store (true);
-      mouse_thread = std::thread { [this] { mouse_loop (); } };
-   }
-
-   void stop_mouse_watcher ()
-   {
-      mouse_running.store (false);
-      if (mouse_thread.joinable ()) mouse_thread.join ();
-   }
-
-   void mouse_loop ()
-   {
-      POINT last_p {};
-      auto  last_change = std::chrono::steady_clock::now ();
-      bool  already_fired = false;
-
-      while (mouse_running.load (std::memory_order_relaxed)) {
-         std::this_thread::sleep_for (std::chrono::milliseconds (k_mouse_poll_ms));
-
-         if (!authenticated.load (std::memory_order_relaxed)
-             || mode.load () != Mode::Auto) {
-            already_fired = false;
-            continue;
-         }
-
-         POINT p {};
-         if (!::GetCursorPos (&p)) continue;
-
-         if (p.x != last_p.x || p.y != last_p.y) {
-            last_p = p;
-            last_change = std::chrono::steady_clock::now ();
-            already_fired = false;
-            continue;
-         }
-
-         if (already_fired) continue;
-
-         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds> (
-            std::chrono::steady_clock::now () - last_change).count ();
-
-         const int settle_ms = performance_mode.load (std::memory_order_relaxed)
-            ? k_performance_mouse_still_ms
-            : k_mouse_still_ms;
-         if (elapsed < settle_ms) continue;
-
-         // Check the cursor is inside the game window.
-         core::WindowRect bounds;
-         bool             visible_and_focused;
-         {
-            std::lock_guard lk { state_lock };
-            bounds = last_event.bounds;
-            visible_and_focused = last_event.visible && last_event.focused;
-         }
-
-         if (!visible_and_focused)      { already_fired = true; continue; }
-         if (!point_in_rect (p, bounds)) { already_fired = true; continue; }
-
-         already_fired = true;
-         if (deps.pipeline) deps.pipeline->request_immediate_scan ();
       }
    }
 
@@ -528,7 +471,7 @@ Controller::Controller (Dependencies deps, QObject* parent)
       impl_->deps.debug->set_enabled (highlights_enabled);
    }
 
-   set_language ("automatic");
+   set_language (std::string { ocr::active_locale });
    if (impl_->deps.pipeline) {
       impl_->sync_pipeline ();
    }
@@ -560,7 +503,6 @@ Controller::Controller (Dependencies deps, QObject* parent)
       });
    }
 
-   impl_->start_mouse_watcher ();
    impl_->start_analysis_worker ();
 }
 
@@ -617,7 +559,6 @@ void Controller::stop ()
    impl_->authenticated.store (false, std::memory_order_relaxed);
    impl_->sync_pipeline ();
    impl_->stop_analysis_worker ();
-   impl_->stop_mouse_watcher ();
    impl_->end_session ();
 }
 
@@ -892,9 +833,11 @@ void Controller::action_clear_overlay ()
 void Controller::on_window_event (const core::WindowEvent& ev)
 {
    core::WindowRect prev;
+   bool was_active;
    {
       std::lock_guard lk { impl_->state_lock };
       prev = impl_->last_event.bounds;
+      was_active = impl_->last_event.visible && impl_->last_event.focused;
       impl_->last_event = ev;
    }
 
@@ -905,19 +848,20 @@ void Controller::on_window_event (const core::WindowEvent& ev)
    // Marshal to main thread; pipeline.set_active_window is safe to call here
    // (atomic), but overlay reposition / hide must be on the Qt thread.
    QPointer<Controller> self { this };
-   QMetaObject::invokeMethod (this, [self, ev, active, moved] {
+   QMetaObject::invokeMethod (this, [self, ev, active, moved, was_active] {
       if (!self) return;
       if (self->impl_->deps.pipeline) {
-         self->impl_->deps.pipeline->set_active_window (active ? ev.hwnd : nullptr);
+         self->impl_->deps.pipeline->set_active_window (ev.visible ? ev.hwnd : nullptr);
       }
 
-      // Hide the card when the game loses focus/visibility. A moved or
-      // resized window keeps the anchor: re-apply it so the presenter gets
-      // the fresh bounds.
-      if (!active && self->impl_->deps.overlay) {
-         self->impl_->deps.overlay->clear ();
-      } else if (moved && self->impl_->has_live_anchor) {
+      if (active && (moved || !was_active) && self->impl_->has_live_anchor) {
          self->impl_->apply_anchor ();
+      }
+      if (self->impl_->deps.overlay) {
+         if (!ev.visible) self->impl_->deps.overlay->clear ();
+         if (self->impl_->deps.overlay->set_active (active)) {
+            emit self->overlayPresented ();
+         }
       }
 
       // Debug overlay tracks the capture region: visible whenever the game
@@ -937,13 +881,6 @@ void Controller::on_tooltip (const ocr::RecognizedTooltip& rt)
 {
    if (!impl_->authenticated.load (std::memory_order_relaxed)
        || impl_->mode.load (std::memory_order_relaxed) == Mode::Disabled) return;
-
-   {
-      QPointer<Controller> self { this };
-      QMetaObject::invokeMethod (this, [self] {
-         if (self) emit self->scanActivity ();
-      }, Qt::QueuedConnection);
-   }
 
    if (!impl_->deps.api || rt.preliminary) return;
    if (impl_->deps.pipeline && !impl_->deps.pipeline->is_current (rt.generation)) return;
