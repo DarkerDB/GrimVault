@@ -338,7 +338,11 @@ struct Controller::Impl
             continue;
          }
          if (!result.has_value ()) {
-            core::Logger::debug ("controller: analysis failed: {}", result.error ().message);
+            core::log::api.event ("analysis.failed", {
+               { "generation", std::to_string (job.tooltip.generation) },
+               { "elapsed_ms", std::to_string (analysis_ms) },
+               { "kind", std::string { core::kind_name (result.error ().kind) } },
+            });
             if (deps.pipeline) deps.pipeline->record_evidence (
                job.tooltip.generation, "analysis_failed", {
                   { "message", result.error ().message },
@@ -403,6 +407,10 @@ struct Controller::Impl
                // complete API data has arrived and the hidden renderer will
                // still wait for its final size + bitmap before revealing it.
                guard->impl_->deps.overlay->present (lookup, game, anchor, true);
+               core::log::ui.event ("overlay.presented", {
+                  { "generation", std::to_string (generation) },
+                  { "item_id", lookup.item_id },
+               });
                if (guard->impl_->deps.pipeline) guard->impl_->deps.pipeline->record_evidence (
                   generation, "overlay_presented", {
                      { "item_id", lookup.item_id },

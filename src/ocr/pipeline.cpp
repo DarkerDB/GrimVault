@@ -68,6 +68,61 @@ std::string_view presence_name (vision::TooltipPresence presence)
    }
 }
 
+struct VisionHealth
+{
+   std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now ();
+   std::uint64_t frames = 0;
+   std::uint64_t scans = 0;
+   std::uint64_t boxes = 0;
+   std::uint64_t empty = 0;
+   std::uint64_t errors = 0;
+   std::uint64_t identity_failures = 0;
+   std::uint64_t tracked = 0;
+   std::uint64_t accepted = 0;
+   std::uint64_t cursor_valid = 0;
+   long long detect_ms_total = 0;
+   long long detect_ms_max = 0;
+   capture::CaptureBackend backend = capture::CaptureBackend::Unknown;
+   std::string latest_error;
+
+   void record (const capture::Frame& frame)
+   {
+      ++frames;
+      cursor_valid += frame.cursor.valid ? 1 : 0;
+      backend = frame.backend;
+   }
+
+   void record_detection (long long detect_ms)
+   {
+      ++scans;
+      detect_ms_total += detect_ms;
+      detect_ms_max = std::max (detect_ms_max, detect_ms);
+   }
+
+   void report_if_due (bool active)
+   {
+      const auto now = std::chrono::steady_clock::now ();
+      if (now - started < std::chrono::seconds { 10 }) return;
+      core::log::vision.event ("pipeline_health", {
+         { "active", active ? "1" : "0" },
+         { "frames", std::to_string (frames) },
+         { "scans", std::to_string (scans) },
+         { "boxes", std::to_string (boxes) },
+         { "empty", std::to_string (empty) },
+         { "errors", std::to_string (errors) },
+         { "identity_failures", std::to_string (identity_failures) },
+         { "tracked", std::to_string (tracked) },
+         { "accepted", std::to_string (accepted) },
+         { "cursor_valid", std::to_string (cursor_valid) },
+         { "backend", std::string { capture::backend_name (backend) } },
+         { "detect_ms_avg", std::to_string (scans ? detect_ms_total / scans : 0) },
+         { "detect_ms_max", std::to_string (detect_ms_max) },
+         { "latest_error", latest_error.empty () ? "none" : latest_error },
+      });
+      *this = VisionHealth {};
+   }
+};
+
 } // namespace
 
 struct Pipeline::Impl
@@ -300,6 +355,7 @@ struct Pipeline::Impl
       vision::Anchor anchor;
       std::uint64_t anchor_generation = 0;
       auto last_detection = std::chrono::steady_clock::now () - detection_interval ();
+      VisionHealth health;
 
       const auto emit_anchor = [this, &anchor_generation] (const vision::Anchor& value) {
          if (!anchor_cb) return;
@@ -376,6 +432,8 @@ struct Pipeline::Impl
 
          capture::Frame frame = std::move (*next);
          frame.cursor = frame.local_cursor ();
+         health.report_if_due (state.active ());
+         health.record (frame);
 
          if (reset_requested.exchange (false, std::memory_order_relaxed)) {
             lose ("runtime_policy");
@@ -411,6 +469,7 @@ struct Pipeline::Impl
                image, anchor, pred_x, pred_y);
 
             if (tracked.presence == vision::TooltipPresence::Present) {
+               ++health.tracked;
                state.confirm ();
                anchor.update (
                   tracked.box, frame.cursor, frame.width, frame.height,
@@ -434,18 +493,29 @@ struct Pipeline::Impl
          const auto started = std::chrono::steady_clock::now ();
          auto detected = detector.detect (frame);
          last_detection = now;
-         last_detect_ms.store (std::chrono::duration_cast<std::chrono::milliseconds> (
-            std::chrono::steady_clock::now () - started).count ());
+         const auto detect_ms = std::chrono::duration_cast<std::chrono::milliseconds> (
+            std::chrono::steady_clock::now () - started).count ();
+         last_detect_ms.store (detect_ms);
+         health.record_detection (detect_ms);
 
          std::optional<capture::Rect> selected;
          std::optional<TooltipObservation> observation;
          bool refined = false;
+         if (!detected.has_value ()) {
+            ++health.errors;
+            health.latest_error = detected.error ().message;
+         } else if (detected->empty ()) {
+            ++health.empty;
+         } else {
+            health.boxes += detected->size ();
+         }
          if (detected.has_value () && !detected->empty ()) {
             const auto* box = nearest_to_cursor (*detected, frame.cursor);
             const auto selection = vision::TooltipTracker::select (image, box->rect);
             selected = selection.rect;
             refined = selection.refined;
             observation = TooltipObservation::read (image, *selected, frame.cursor);
+            if (!observation.has_value ()) ++health.identity_failures;
          }
 
          if (!forced && state.active () && selected.has_value ()
@@ -541,6 +611,7 @@ struct Pipeline::Impl
          }
 
          anchor_generation = generation.fetch_add (1, std::memory_order_relaxed) + 1;
+         ++health.accepted;
          tracking.store (true, std::memory_order_relaxed);
          anchor.acquire (
             *selected, frame.cursor, frame.width, frame.height,
@@ -941,6 +1012,9 @@ void Pipeline::on_anchor_lost (AnchorLostCallback cb) { impl_->anchor_lost_cb = 
 void Pipeline::set_active_window (void* hwnd)
 {
    if (impl_->window.exchange (hwnd) != hwnd) {
+      core::log::vision.event ("capture_target", {
+         { "state", hwnd ? "acquired" : "released" },
+      });
       impl_->reset_requested.store (true, std::memory_order_relaxed);
    }
 }
