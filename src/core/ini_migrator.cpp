@@ -78,11 +78,22 @@ namespace {
    };
 
    constexpr struct { std::string_view action_id; std::string_view accelerator; } k_default_hotkeys [] = {
-      { "scan_now",      "F5" },
-      { "toggle_mode",   "F6" },
-      { "debug_toggle",  "F7" },
-      { "clear_overlay", "F8" },
+      { "scan_now", "F5" },
    };
+
+   constexpr std::string_view k_retired_hotkeys [] = {
+      "toggle_mode",
+      "debug_toggle",
+      "clear_overlay",
+   };
+
+   bool retired_hotkey (std::string_view action)
+   {
+      for (const auto retired : k_retired_hotkeys) {
+         if (action == retired) return true;
+      }
+      return false;
+   }
 
 } // namespace
 
@@ -125,6 +136,7 @@ Result<bool> IniMigrator::run (
          auto r = settings.set ("general:" + e.key, e.value);
          if (!r.has_value ()) return fail (r.error ());
       } else if (e.section == "hotkeys") {
+         if (retired_hotkey (e.key)) continue;
          auto r = hotkeys.set (e.key, e.value);
          if (!r.has_value ()) return fail (r.error ());
       } else {

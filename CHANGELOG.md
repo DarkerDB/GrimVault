@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+- Fixed dashboard hotkeys using F6 through F8
+
 ## [0.0.5] - 2026-08-15
 
 - Fixed make gdi capture an explicit compatibility mode

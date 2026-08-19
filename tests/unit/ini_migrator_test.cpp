@@ -4,6 +4,7 @@
 #include <gv/db/repos/user_hotkeys_repo.h>
 #include <gv/db/repos/user_settings_repo.h>
 
+#include <SQLiteCpp/SQLiteCpp.h>
 #include <gtest/gtest.h>
 
 #include <filesystem>
@@ -38,6 +39,7 @@ namespace {
              "\n"
              "[hotkeys]\n"
              "toggle_mode     = Ctrl+F6\n"
+             "scan_now        = Ctrl+F5\n"
              "run_price_check = Ctrl+F5\n";
    }
 
@@ -92,8 +94,12 @@ TEST (IniMigratorTest, MigratesIniFromExistingInstall)
 
    auto hk_toggle = hotkeys.get ("toggle_mode");
    ASSERT_TRUE (hk_toggle.has_value ());
-   ASSERT_TRUE (hk_toggle->has_value ());
-   EXPECT_EQ (**hk_toggle, "Ctrl+F6");
+   EXPECT_FALSE (hk_toggle->has_value ());
+
+   auto hk_scan = hotkeys.get ("scan_now");
+   ASSERT_TRUE (hk_scan.has_value ());
+   ASSERT_TRUE (hk_scan->has_value ());
+   EXPECT_EQ (**hk_scan, "Ctrl+F5");
 
    auto hk_run = hotkeys.get ("run_price_check");
    ASSERT_TRUE (hk_run.has_value ());
@@ -140,8 +146,57 @@ TEST (IniMigratorTest, WritesDefaultsWhenNoIniPresent)
    ASSERT_TRUE (v->has_value ());
    EXPECT_EQ (**v, "true");
 
-   auto hk = hotkeys.get ("toggle_mode");
-   ASSERT_TRUE (hk.has_value ());
-   ASSERT_TRUE (hk->has_value ());
-   EXPECT_EQ (**hk, "F6");
+   auto hk_scan = hotkeys.get ("scan_now");
+   ASSERT_TRUE (hk_scan.has_value ());
+   ASSERT_TRUE (hk_scan->has_value ());
+   EXPECT_EQ (**hk_scan, "F5");
+
+   for (const auto action : { "toggle_mode", "debug_toggle", "clear_overlay" }) {
+      auto hk = hotkeys.get (action);
+      ASSERT_TRUE (hk.has_value ());
+      EXPECT_FALSE (hk->has_value ());
+   }
+}
+
+TEST (DatabaseMigrationTest, RetiresLocalHotkeys)
+{
+   const auto dir  = make_tmp_dir ();
+   const auto path = dir / "grimvault.db";
+   core::Logger::init (dir / "logs");
+
+   {
+      SQLite::Database database {
+         path.string (), SQLite::OPEN_READWRITE | SQLite::OPEN_CREATE
+      };
+      database.exec (R"sql(
+         CREATE TABLE user_hotkeys (action_id TEXT PRIMARY KEY, accelerator TEXT NOT NULL);
+         CREATE TABLE pricing_cache (cache_key TEXT);
+         CREATE TABLE item_finds (find_id INTEGER, found_at INTEGER, session_id INTEGER);
+         CREATE TABLE session_runs (session_id INTEGER, ended_at INTEGER);
+         INSERT INTO user_hotkeys VALUES ('scan_now', 'F5');
+         INSERT INTO user_hotkeys VALUES ('toggle_mode', 'F6');
+         INSERT INTO user_hotkeys VALUES ('debug_toggle', 'F7');
+         INSERT INTO user_hotkeys VALUES ('clear_overlay', 'F8');
+         PRAGMA user_version = 2;
+      )sql");
+   }
+
+   auto database = db::Database::open (path);
+   ASSERT_TRUE (database.has_value ());
+   db::UserHotkeysRepo hotkeys { **database };
+
+   auto scan = hotkeys.get ("scan_now");
+   ASSERT_TRUE (scan.has_value ());
+   ASSERT_TRUE (scan->has_value ());
+   EXPECT_EQ (**scan, "F5");
+
+   for (const auto action : { "toggle_mode", "debug_toggle", "clear_overlay" }) {
+      auto hotkey = hotkeys.get (action);
+      ASSERT_TRUE (hotkey.has_value ());
+      EXPECT_FALSE (hotkey->has_value ());
+   }
+
+   database->reset ();
+   std::error_code ec;
+   std::filesystem::remove_all (dir, ec);
 }

@@ -97,14 +97,14 @@ augment sections       the tooltip:analysis:* widget toggles
 currency display       absolute / compact
 launch on startup      rewrites the HKCU\...\Run entry
 auto-update            starts / stops the checker (GRIMVAULT_DISABLE_UPDATES wins)
-hotkeys                toggle_overlay + force_refresh rebind live
+hotkeys                toggle_overlay + force_refresh + open_in_browser rebind live
 ```
 
-Two of the five hotkey actions are dashboard-bindable — `force_refresh`
-drives `scan_now` and `toggle_overlay` shows/hides the card. `toggle_mode`
-(F6), `debug_toggle` (F7) and `clear_overlay` (F8) keep their local
-defaults. A widget the plan doesn't grant is forced off in the payload
-regardless of the toggle, because the API already stripped its data.
+Dashboard hotkeys are the only global bindings. `force_refresh` drives
+`scan_now`, `toggle_overlay` shows or hides the card and `open_in_browser`
+opens the last analysed item. A widget the plan doesn't grant is forced off
+in the payload regardless of the toggle, because the API already stripped
+its data.
 
 Pass `--no-auto-login` to skip the on-launch OAuth prompt (the tray's
 "Sign In" menu item still works on demand):
@@ -138,7 +138,7 @@ grimvault --debug=highlight:objects
 grimvault --debug=highlight:game
                           # + red border around the game/capture region
 grimvault --debug=highlight:objects,highlight:game
-                          # enable both borders (F7 toggles configured borders)
+                          # enable both borders
 grimvault --detect-only   # stop after detection: hover -> box, no OCR/lookup/augment
 grimvault --fcr 10        # active frame capture rate, 1-60 fps (default 15;
                           # idle drops to 3 until something is detected)

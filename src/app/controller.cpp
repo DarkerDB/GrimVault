@@ -36,11 +36,8 @@ namespace {
 
    struct DefaultRow { const char* action; const char* accelerator; };
 
-   constexpr std::array<DefaultRow, 6> k_defaults = {{
+   constexpr std::array<DefaultRow, 3> k_defaults = {{
       { Actions::k_scan_now,       DefaultAccelerators::scan_now       },
-      { Actions::k_toggle_mode,    DefaultAccelerators::toggle_mode    },
-      { Actions::k_debug_toggle,   DefaultAccelerators::debug_toggle   },
-      { Actions::k_clear_overlay,  DefaultAccelerators::clear_overlay  },
       { Actions::k_toggle_overlay,  DefaultAccelerators::toggle_overlay  },
       { Actions::k_open_in_browser, DefaultAccelerators::open_in_browser },
    }};
@@ -84,12 +81,6 @@ namespace {
    {
       if (action == Actions::k_scan_now)
          return [self] { if (self) self->action_scan_now       (); };
-      if (action == Actions::k_toggle_mode)
-         return [self] { if (self) self->action_toggle_mode    (); };
-      if (action == Actions::k_debug_toggle)
-         return [self] { if (self) self->action_debug_toggle   (); };
-      if (action == Actions::k_clear_overlay)
-         return [self] { if (self) self->action_clear_overlay  (); };
       if (action == Actions::k_toggle_overlay)
          return [self] { if (self) self->action_toggle_overlay (); };
       if (action == Actions::k_open_in_browser)
@@ -743,17 +734,6 @@ void Controller::action_scan_now ()
    }, Qt::QueuedConnection);
 }
 
-void Controller::action_toggle_mode ()
-{
-   QMetaObject::invokeMethod (this, [this] {
-      const Mode next = (impl_->mode.load () == Mode::Auto) ? Mode::Manual : Mode::Auto;
-      impl_->mode.store (next);
-      impl_->sync_pipeline ();
-      core::Logger::info ("hotkey: mode → {}", mode_name (next));
-      emit modeChanged (next);
-   }, Qt::QueuedConnection);
-}
-
 void Controller::set_browse_base (std::string url)
 {
    std::lock_guard lk { impl_->browse_lock };
@@ -799,42 +779,6 @@ void Controller::action_toggle_overlay ()
 
       if (next == Mode::Disabled && impl_->deps.overlay) impl_->deps.overlay->clear ();
       emit modeChanged (next);
-   }, Qt::QueuedConnection);
-}
-
-void Controller::action_debug_toggle ()
-{
-   QMetaObject::invokeMethod (this, [this] {
-      if (!impl_->deps.highlight_game && !impl_->deps.highlight_objects) {
-         core::Logger::info (
-            "hotkey: debug highlights unavailable (start with --debug=highlight:...)");
-         return;
-      }
-      const bool next = !impl_->debug_overlay.load ();
-      impl_->debug_overlay.store (next);
-      core::Logger::info ("hotkey: debug overlay {}", next ? "on" : "off");
-
-      if (impl_->deps.debug) {
-         core::WindowEvent ev;
-         {
-            std::lock_guard lk { impl_->state_lock };
-            ev = impl_->last_event;
-         }
-         impl_->deps.debug->set_enabled (next);
-         impl_->deps.debug->set_region (
-            QRect { ev.bounds.x, ev.bounds.y, ev.bounds.w, ev.bounds.h },
-            ev.visible);
-
-         if (next && impl_->has_live_anchor) impl_->apply_anchor ();
-      }
-   }, Qt::QueuedConnection);
-}
-
-void Controller::action_clear_overlay ()
-{
-   QMetaObject::invokeMethod (this, [this] {
-      if (impl_->deps.overlay) impl_->deps.overlay->clear ();
-      emit overlayCleared ();
    }, Qt::QueuedConnection);
 }
 

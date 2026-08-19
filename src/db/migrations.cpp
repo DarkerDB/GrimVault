@@ -20,9 +20,14 @@ namespace {
 #include "migrations/0002_account_sessions.sql.inc"
    ;
 
-   constexpr std::array<Migration, 2> k_table {{
+   constexpr std::string_view k_migration_0003 =
+#include "migrations/0003_retire_local_hotkeys.sql.inc"
+   ;
+
+   constexpr std::array<Migration, 3> k_table {{
       { 1, k_migration_0001 },
       { 2, k_migration_0002 },
+      { 3, k_migration_0003 },
    }};
 
 } // namespace
