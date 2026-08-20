@@ -10,7 +10,6 @@
 #include <unknwn.h>
 
 #include <WebView2.h>
-#include <dcomp.h>
 #include <wil/com.h>
 #include <wrl.h>
 
@@ -89,32 +88,18 @@ struct WebviewHost::Impl : std::enable_shared_from_this<WebviewHost::Impl>
 
    HWND hwnd = nullptr;
 
-   wil::com_ptr<IDCompositionDevice>       dcomp_device;
-   wil::com_ptr<IDCompositionTarget>       dcomp_target;
-   wil::com_ptr<IDCompositionVisual>       dcomp_visual;
+   wil::com_ptr<ICoreWebView2Environment> environment;
+   wil::com_ptr<ICoreWebView2Controller>  controller;
+   wil::com_ptr<ICoreWebView2>            webview;
 
-   wil::com_ptr<ICoreWebView2Environment>           environment;
-   wil::com_ptr<ICoreWebView2CompositionController> composition;
-   wil::com_ptr<ICoreWebView2Controller>            controller;
-   wil::com_ptr<ICoreWebView2>                      webview;
-
-   bool ready   = false;
-   bool visible = false;
+   bool ready = false;
 
    HRESULT on_environment (ICoreWebView2Environment* env);
-   HRESULT on_composition_controller (ICoreWebView2CompositionController* comp);
+   HRESULT on_controller (ICoreWebView2Controller* value);
    void    on_navigation_completed ();
    void    fail (const char* stage, HRESULT hr);
    void    teardown ();
 };
-
-// ---- Creation chain ----
-//
-// create() -> CreateCoreWebView2EnvironmentWithOptions
-//          -> on_environment: CreateCoreWebView2CompositionController
-//          -> on_composition_controller: wire visual target, background,
-//             raw-pixel bounds, virtual host, message handler; Navigate
-//          -> NavigationCompleted: ready
 
 core::Result<std::string> WebviewHost::runtime_version ()
 {
@@ -158,45 +143,19 @@ core::Result<std::unique_ptr<WebviewHost>> WebviewHost::create (Config config,
    impl->config    = std::move (config);
    impl->callbacks = std::move (callbacks);
 
-   // WS_EX_NOREDIRECTIONBITMAP: content arrives via DComp only, no GDI
-   // redirection surface (the HWND-mode flicker source over games).
-   //
-   // WS_DISABLED is intentional. NOACTIVATE prevents focus changes but still
-   // leaves a top-level window eligible for mouse hit selection; that is
-   // enough to interrupt the game's hover state. Disabled windows are skipped
-   // by Windows point selection and cannot receive mouse/keyboard input, while
-   // their DirectComposition visual tree remains visible.
    impl->hwnd = ::CreateWindowExW (
-      WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_TOOLWINDOW
-    | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
-      k_window_class, L"", WS_POPUP | WS_DISABLED,
-      0, 0, 1, 1,
+      WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
+      k_window_class, L"", WS_POPUP | WS_DISABLED | WS_VISIBLE,
+      -32000, -32000, 800, 1600,
       nullptr, nullptr, ::GetModuleHandleW (nullptr), nullptr);
 
    if (!impl->hwnd) {
       return core::fail (core::Error { core::ErrorKind::Internal, "CreateWindowExW failed" });
    }
 
-   HRESULT hr = ::DCompositionCreateDevice2 (
-      nullptr, IID_PPV_ARGS (impl->dcomp_device.put ()));
-   if (SUCCEEDED (hr)) {
-      hr = impl->dcomp_device->CreateTargetForHwnd (
-         impl->hwnd, TRUE, impl->dcomp_target.put ());
-   }
-   if (SUCCEEDED (hr)) {
-      hr = impl->dcomp_device->CreateVisual (impl->dcomp_visual.put ());
-   }
-   if (SUCCEEDED (hr)) {
-      hr = impl->dcomp_target->SetRoot (impl->dcomp_visual.get ());
-   }
-   if (FAILED (hr)) {
-      impl->teardown ();
-      return core::fail (core::Error { core::ErrorKind::Internal, "DirectComposition setup failed" });
-   }
-
    const auto user_data = impl->config.user_data_dir.wstring ();
 
-   hr = ::CreateCoreWebView2EnvironmentWithOptions (
+   const HRESULT hr = ::CreateCoreWebView2EnvironmentWithOptions (
       nullptr, user_data.c_str (), nullptr,
       Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler> (
          [impl] (HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
@@ -219,59 +178,24 @@ HRESULT WebviewHost::Impl::on_environment (ICoreWebView2Environment* env)
 {
    environment = env;
 
-   auto env10 = environment.try_query<ICoreWebView2Environment10> ();
-   if (!env10) {
-      fail ("environment10 (runtime too old for host input processing)", E_NOINTERFACE);
-      return E_NOINTERFACE;
-   }
-
-   wil::com_ptr<ICoreWebView2ControllerOptions> options;
-   HRESULT hr = env10->CreateCoreWebView2ControllerOptions (options.put ());
-   if (FAILED (hr) || !options) {
-      fail ("CreateCoreWebView2ControllerOptions", hr);
-      return FAILED (hr) ? hr : E_FAIL;
-   }
-
-   auto options4 = options.try_query<ICoreWebView2ControllerOptions4> ();
-   if (!options4) {
-      fail ("controller options4 (AllowHostInputProcessing unavailable)", E_NOINTERFACE);
-      return E_NOINTERFACE;
-   }
-   hr = options4->put_AllowHostInputProcessing (TRUE);
-   if (FAILED (hr)) {
-      fail ("put_AllowHostInputProcessing", hr);
-      return hr;
-   }
-
    const auto self = shared_from_this ();
-   return env10->CreateCoreWebView2CompositionControllerWithOptions (
-      hwnd, options.get (),
-      Callback<ICoreWebView2CreateCoreWebView2CompositionControllerCompletedHandler> (
-         [self] (HRESULT result, ICoreWebView2CompositionController* comp) -> HRESULT {
-            if (FAILED (result) || !comp) {
-               self->fail ("composition controller", result);
+   return environment->CreateCoreWebView2Controller (
+      hwnd,
+      Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler> (
+         [self] (HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
+            if (FAILED (result) || !controller) {
+               self->fail ("controller", result);
                return result;
             }
-            return self->on_composition_controller (comp);
+            return self->on_controller (controller);
          }).Get ());
 }
 
-HRESULT WebviewHost::Impl::on_composition_controller (ICoreWebView2CompositionController* comp)
+HRESULT WebviewHost::Impl::on_controller (ICoreWebView2Controller* value)
 {
    const std::weak_ptr<Impl> weak = shared_from_this ();
-   composition = comp;
-   controller  = composition.query<ICoreWebView2Controller> ();
-
-   HRESULT hr = composition->put_RootVisualTarget (dcomp_visual.get ());
-   if (FAILED (hr)) {
-      fail ("put_RootVisualTarget", hr);
-      return hr;
-   }
-
-   // DirectComposition batches tree changes; without a Commit the visual
-   // (now bound to WebView2's content) never reaches the screen. The page
-   // renders and measures, but nothing is ever presented.
-   dcomp_device->Commit ();
+   controller = value;
+   core::Logger::info ("webview: standard snapshot controller ready");
 
    if (auto c2 = controller.try_query<ICoreWebView2Controller2> ()) {
       // Alpha 0: the page background composes fully transparent; only the
@@ -297,7 +221,7 @@ HRESULT WebviewHost::Impl::on_composition_controller (ICoreWebView2CompositionCo
    // regardless.
    controller->put_IsVisible (TRUE);
 
-   hr = controller->get_CoreWebView2 (webview.put ());
+   HRESULT hr = controller->get_CoreWebView2 (webview.put ());
    if (FAILED (hr) || !webview) {
       fail ("get_CoreWebView2", hr);
       return hr;
@@ -383,17 +307,12 @@ void WebviewHost::Impl::fail (const char* stage, HRESULT hr)
 
 void WebviewHost::Impl::teardown ()
 {
-   ready   = false;
-   visible = false;
+   ready = false;
 
    if (controller) controller->Close ();
-   webview      = nullptr;
-   controller   = nullptr;
-   composition  = nullptr;
-   environment  = nullptr;
-   dcomp_visual = nullptr;
-   dcomp_target = nullptr;
-   dcomp_device = nullptr;
+   webview     = nullptr;
+   controller  = nullptr;
+   environment = nullptr;
 
    if (hwnd) {
       ::DestroyWindow (hwnd);
@@ -418,29 +337,16 @@ void WebviewHost::post_json (const std::string& json)
    impl_->webview->PostWebMessageAsJson (widen (json).c_str ());
 }
 
-void WebviewHost::place (const QRect& physical, double scale)
-{
-   if (!impl_->hwnd || !impl_->controller) return;
-
-   if (auto c3 = impl_->controller.try_query<ICoreWebView2Controller3> ()) {
-      c3->put_RasterizationScale (scale);
-   }
-
-   ::SetWindowPos (impl_->hwnd, HWND_TOPMOST,
-      physical.x (), physical.y (), physical.width (), physical.height (),
-      SWP_NOACTIVATE);
-
-   impl_->controller->put_Bounds (
-      RECT { 0, 0, physical.width (), physical.height () });
-}
-
 void WebviewHost::resize (const QSize& physical, double scale)
 {
-   if (!impl_->controller || physical.isEmpty ()) return;
+   if (!impl_->hwnd || !impl_->controller || physical.isEmpty ()) return;
 
    if (auto c3 = impl_->controller.try_query<ICoreWebView2Controller3> ()) {
       c3->put_RasterizationScale (scale);
    }
+   ::SetWindowPos (impl_->hwnd, nullptr,
+      0, 0, physical.width (), physical.height (),
+      SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER);
    impl_->controller->put_Bounds (
       RECT { 0, 0, physical.width (), physical.height () });
 }
@@ -493,39 +399,6 @@ void WebviewHost::capture_png (
          }).Get ());
 
    if (FAILED (hr)) (*done) ({});
-}
-
-void WebviewHost::move (const QPoint& physical)
-{
-   if (!impl_->hwnd) return;
-
-   ::SetWindowPos (impl_->hwnd, HWND_TOPMOST,
-      physical.x (), physical.y (), 0, 0,
-      SWP_NOSIZE | SWP_NOACTIVATE);
-}
-
-void WebviewHost::show ()
-{
-   if (!impl_->hwnd || impl_->visible) return;
-
-   // SetWindowPos over ShowWindow: a WS_EX_NOREDIRECTIONBITMAP tool window
-   // does not reliably take WS_VISIBLE from ShowWindow (SW_SHOWNOACTIVATE
-   // reports success but IsWindowVisible stays false). SWP_SHOWWINDOW sets
-   // the style bit directly and keeps the topmost band.
-   ::SetWindowPos (impl_->hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-      SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-   impl_->visible = true;
-}
-
-void WebviewHost::hide ()
-{
-   if (!impl_->hwnd || !impl_->visible) return;
-
-   // Window only: the controller stays visible so layout keeps running
-   // and the page can re-measure while off-screen.
-   ::SetWindowPos (impl_->hwnd, nullptr, 0, 0, 0, 0,
-      SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER | SWP_HIDEWINDOW);
-   impl_->visible = false;
 }
 
 } // namespace gv::ui

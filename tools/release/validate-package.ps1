@@ -61,6 +61,7 @@ $required = @(
    (Join-Path $destination 'z.dll'),
    (Join-Path $destination 'msvcp140.dll'),
    (Join-Path $destination 'vcruntime140.dll'),
+   (Join-Path $destination 'Qt6QuickLayouts.dll'),
    (Join-Path $destination 'models\tooltip-yolox-nano-416.onnx'),
    (Join-Path $destination 'plugins\platforms\qwindows.dll'),
    (Join-Path $destination 'web\augment.html')

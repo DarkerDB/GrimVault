@@ -162,8 +162,12 @@ jobs:
               $opencvBin = Join-Path (Split-Path $env:OpenCV_DIR -Parent) 'bin'
               $vcpkgBin = Join-Path $build 'vcpkg_installed\x64-windows-release\bin'
               $env:PATH = "$qtBin;$opencvBin;$vcpkgBin;$env:PATH"
+              $webview = Start-Process tools\build\MicrosoftEdgeWebView2Setup.exe `
+                 -ArgumentList '/silent', '/install' -Wait -PassThru
+              if ($webview.ExitCode -ne 0) { throw "WebView2 install failed: $($webview.ExitCode)" }
               ctest --test-dir $build --output-on-failure -L unit
               ctest --test-dir $build --output-on-failure -L e2e
+              ctest --test-dir $build --output-on-failure -L integration
 
          - name: Sign application
            shell: pwsh

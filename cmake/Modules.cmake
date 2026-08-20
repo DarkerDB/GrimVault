@@ -112,6 +112,7 @@ function (grimvault_stage_qt_plugins target)
    # fails to load at runtime with "module could not be found". Stage every
    # Qt6Quick*.dll so any staged QML module finds its runtime.
    file (GLOB qml_runtime "${qt_bin_dir}/Qt6Quick*.dll")
+   file (GLOB qml_layout_runtime "${qt_bin_dir}/Qt6QuickLayouts*.dll")
 
    if (qml_runtime)
       add_custom_command (TARGET ${target} POST_BUILD
@@ -122,6 +123,12 @@ function (grimvault_stage_qt_plugins target)
          VERBATIM
          COMMAND_EXPAND_LISTS
       )
+      if (qml_layout_runtime)
+         install (FILES ${qml_layout_runtime}
+            DESTINATION .
+            COMPONENT application
+         )
+      endif ()
    endif ()
 endfunction ()
 

@@ -262,13 +262,12 @@ target_link_libraries (gv_ui PUBLIC
 )
 if (WIN32)
    # gv/ui/screen.cpp: GetDpiForMonitor (Shcore), SetWindowPos (User32).
-   # gv/ui/webview_host.cpp: WebView2 loader + DirectComposition (dcomp).
+   # gv/ui/webview_host.cpp: WebView2 loader.
    find_package (unofficial-webview2 CONFIG REQUIRED)
    find_package (wil                 CONFIG REQUIRED)
    target_link_libraries (gv_ui PRIVATE
       unofficial::webview2::webview2
       WIL::WIL
-      dcomp
       Shcore
       User32
    )

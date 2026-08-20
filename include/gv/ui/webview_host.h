@@ -2,7 +2,6 @@
 
 #include <gv/core/result.h>
 
-#include <QRect>
 #include <QSize>
 
 #include <filesystem>
@@ -13,23 +12,6 @@
 
 namespace gv::ui {
 
-// Composition-hosted WebView2 in a transparent, click-through, topmost
-// Win32 popup window. Web content never receives input (composition mode
-// only forwards what we send — nothing) and the wndproc answers
-// WM_NCHITTEST with HTTRANSPARENT, so clicks land in the game underneath.
-//
-// Rendering goes through DirectComposition (WS_EX_NOREDIRECTIONBITMAP), so
-// alpha from the page composes cleanly over the game with no redirection-
-// surface flicker. All geometry is physical pixels: bounds mode is
-// COREWEBVIEW2_BOUNDS_MODE_USE_RAW_PIXELS and the caller drives
-// rasterization scale per monitor.
-//
-// Native <-> page messages are single-line JSON over PostWebMessageAsJson /
-// window.chrome.webview. Creation is async; post_json() before ready() is
-// dropped with a log line, so callers gate on on_ready.
-//
-// Must be created and used on the Qt GUI thread (STA; Qt's Windows event
-// dispatcher pumps the messages WebView2 needs).
 class WebviewHost
 {
 public:
@@ -68,24 +50,11 @@ public:
 
    void post_json (const std::string& json);
 
-   // Position + size the window in physical screen pixels and update the
-   // WebView2 rasterization scale for the target monitor.
-   void place (const QRect& physical, double scale);
-
-   // Resize the hidden renderer without placing its HWND on the desktop.
-   // Used by snapshot mode before CapturePreview.
    void resize (const QSize& physical, double scale);
 
    // Capture the current WebView viewport as PNG bytes. Callback runs on the
    // GUI/COM apartment thread. An empty vector indicates capture failure.
    void capture_png (std::function<void (std::vector<std::uint8_t>)> callback);
-
-   // Reposition only (presenter ticks): one SetWindowPos, no resize, no
-   // rescale, no web round-trip.
-   void move (const QPoint& physical);
-
-   void show ();
-   void hide ();
 
 private:
    WebviewHost ();

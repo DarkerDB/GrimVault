@@ -37,6 +37,37 @@ if (unit_sources)
    set_tests_properties (grimvault_unit_tests PROPERTIES LABELS "unit")
 endif ()
 
+if (WIN32)
+   add_executable (grimvault_renderer_tests
+      integration/renderer_test.cpp
+      "${CMAKE_SOURCE_DIR}/qml/qml.qrc"
+   )
+
+   target_link_libraries (grimvault_renderer_tests PRIVATE
+      gv::core
+      gv::ui
+      Qt6::Core
+      Qt6::Gui
+      Qt6::Quick
+      Qt6::Qml
+      Qt6::Widgets
+      GTest::gtest
+   )
+
+   target_compile_definitions (grimvault_renderer_tests PRIVATE
+      GRIMVAULT_TEST_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+   )
+
+   set_target_properties (grimvault_renderer_tests PROPERTIES
+      AUTOMOC ON
+      CXX_STANDARD 23
+      CXX_STANDARD_REQUIRED ON
+   )
+
+   add_test (NAME grimvault_renderer_tests COMMAND grimvault_renderer_tests)
+   set_tests_properties (grimvault_renderer_tests PROPERTIES LABELS "integration")
+endif ()
+
 # E2E tests: pipeline against PNG fixtures. Built when GRIMVAULT_BUILD_E2E=ON.
 # Item canonicalization happens server-side now (see darkerdb_client.lookup_tooltip);
 # the e2e tests that exercised the local locres pipeline have been removed.
