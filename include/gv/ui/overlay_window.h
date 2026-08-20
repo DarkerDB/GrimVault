@@ -44,7 +44,6 @@ public:
    void clear ();
    bool set_active (bool active);
    void set_renderer (std::string renderer);
-   const std::string& renderer () const noexcept;
 
    // Live settings. Both are cheap and idempotent — SettingsBridge calls
    // them whenever the dashboard changes, including mid-hover.

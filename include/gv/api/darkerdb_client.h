@@ -319,6 +319,7 @@ struct TooltipLookup {
 struct SettingsBundle {
    struct Overlay {
       std::string  mode      = "automatic";
+      std::string  renderer  = "automatic";
       std::string  alignment = "attached";
       std::string  columns   = "auto";
       double       opacity   = 0.9;

@@ -43,6 +43,7 @@ struct SettingsBridge::Impl
 
       deps.overlay->set_layout  (prefs.layout);
       deps.overlay->set_options (options);
+      deps.overlay->set_renderer (prefs.renderer);
    }
 
    void push_controller ()

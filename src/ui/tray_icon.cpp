@@ -23,7 +23,6 @@ TrayIcon::TrayIcon (QObject* parent)
    connect (menu_.get (), &TrayMenu::settings_requested,       this, &TrayIcon::settings_requested);
    connect (menu_.get (), &TrayMenu::logs_requested,           this, &TrayIcon::logs_requested);
    connect (menu_.get (), &TrayMenu::check_updates_requested,  this, &TrayIcon::check_updates_requested);
-   connect (menu_.get (), &TrayMenu::renderer_requested,       this, &TrayIcon::renderer_requested);
    connect (menu_.get (), &TrayMenu::quit_requested,           this, &TrayIcon::quit_requested);
 
    // No setContextMenu (...) — leaving it unset means right-click on
@@ -51,11 +50,6 @@ void TrayIcon::set_signed_in (bool signed_in)
 void TrayIcon::set_connection_state (ConnectionState state)
 {
    if (menu_) menu_->set_connection_state (state);
-}
-
-void TrayIcon::set_renderer (const QString& renderer)
-{
-   if (menu_) menu_->set_renderer (renderer);
 }
 
 } // namespace gv::ui

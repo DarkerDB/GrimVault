@@ -5,13 +5,10 @@
 #include <gv/core/version.h>
 
 #include <QColor>
-#include <QAction>
-#include <QActionGroup>
 #include <QFont>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QMenu>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPushButton>
@@ -218,65 +215,6 @@ TrayMenu::TrayMenu (QWidget* parent)
 
    body->addWidget (make_separator ());
 
-   renderer_btn_ = add_item (body, QStringLiteral ("Overlay renderer: Automatic"));
-   auto* renderer_menu = new QMenu (renderer_btn_);
-   renderer_menu->setFont (QFont (QString::fromLatin1 (k_font_body)));
-   renderer_menu->setStyleSheet (QStringLiteral (R"qss(
-      QMenu {
-         border: 1px solid %1;
-         border-radius: 6px;
-         padding: 5px;
-         color: %2;
-         background: %3;
-         font-size: 12px;
-      }
-      QMenu::item {
-         border-radius: 4px;
-         padding: 5px 26px 5px 10px;
-      }
-      QMenu::item:selected {
-         color: %4;
-         background: %5;
-      }
-      QMenu::indicator:checked {
-         image: none;
-         background: %6;
-         border-radius: 3px;
-         width: 6px;
-         height: 6px;
-      }
-   )qss")
-      .arg (k_border)
-      .arg (k_text_body)
-      .arg (k_bg)
-      .arg (k_hover_text)
-      .arg (k_accent_bg)
-      .arg (k_accent));
-   renderer_group_ = new QActionGroup (renderer_menu);
-   renderer_group_->setExclusive (true);
-
-   const auto add_renderer = [renderer_menu, this] (const QString& label,
-                                                     const QString& value) {
-      auto* action = renderer_menu->addAction (label);
-      action->setCheckable (true);
-      action->setData (value);
-      renderer_group_->addAction (action);
-   };
-   add_renderer (QStringLiteral ("Automatic"), QStringLiteral ("automatic"));
-   add_renderer (QStringLiteral ("WebView2"), QStringLiteral ("webview"));
-   add_renderer (QStringLiteral ("QML fallback"), QStringLiteral ("qml"));
-
-   connect (renderer_group_, &QActionGroup::triggered, this, [this] (QAction* action) {
-      const auto renderer = action->data ().toString ();
-      set_renderer (renderer);
-      hide ();
-      emit renderer_requested (renderer);
-   });
-   renderer_btn_->setMenu (renderer_menu);
-   set_renderer (QStringLiteral ("automatic"));
-
-   body->addWidget (make_separator ());
-
    // --- Account / exit (last section) ----------------------------------
    auth_btn_ = add_item (body, QStringLiteral ("Sign In"));
    connect (auth_btn_, &QPushButton::clicked, this, [this] {
@@ -355,23 +293,6 @@ void TrayMenu::set_connection_state (ConnectionState state)
    refresh_dot  ();
    refresh_auth ();
    refresh_status ();
-}
-
-void TrayMenu::set_renderer (const QString& renderer)
-{
-   const auto value = renderer == QStringLiteral ("webview")
-      || renderer == QStringLiteral ("qml") ? renderer : QStringLiteral ("automatic");
-   const auto label = value == QStringLiteral ("webview")
-      ? QStringLiteral ("WebView2")
-      : value == QStringLiteral ("qml")
-         ? QStringLiteral ("QML fallback") : QStringLiteral ("Automatic");
-
-   if (renderer_btn_) renderer_btn_->setText (
-      QStringLiteral ("Overlay renderer: %1").arg (label));
-   if (!renderer_group_) return;
-   for (auto* action : renderer_group_->actions ()) {
-      action->setChecked (action->data ().toString () == value);
-   }
 }
 
 void TrayMenu::refresh_dot ()

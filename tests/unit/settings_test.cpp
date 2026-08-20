@@ -15,7 +15,7 @@ TEST (Settings, ParsesBehavior)
             "is_launch_on_startup_enabled": true
          },
          "hotkeys": {},
-         "overlay": {},
+         "overlay": { "renderer": "qml" },
          "pricing": {},
          "tooltip": {}
       }
@@ -28,6 +28,8 @@ TEST (Settings, ParsesBehavior)
    EXPECT_EQ (settings->values.at ("behavior:is_performance_mode_enabled"), "true");
    EXPECT_EQ (settings->behavior.language, "zh-Hant");
    EXPECT_EQ (settings->values.at ("behavior:language"), "zh-Hant");
+   EXPECT_EQ (settings->overlay.renderer, "qml");
+   EXPECT_EQ (settings->values.at ("overlay:renderer"), "qml");
 }
 
 TEST (Settings, ParsesIndicatorVisibility)
@@ -63,5 +65,7 @@ TEST (Settings, IndicatorDefaultsToVisibleWhenAbsent)
 
    ASSERT_TRUE (settings.has_value ()) << settings.error ().message;
    EXPECT_TRUE (settings->overlay.is_indicator_visible);
+   EXPECT_EQ (settings->overlay.renderer, "automatic");
    EXPECT_EQ (settings->values.at ("overlay:is_indicator_visible"), "true");
+   EXPECT_EQ (settings->values.at ("overlay:renderer"), "automatic");
 }

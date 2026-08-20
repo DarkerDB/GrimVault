@@ -24,7 +24,6 @@ public:
    // the header status dot green (signed in) / red (signed out).
    void set_signed_in (bool signed_in);
    void set_connection_state (ConnectionState state);
-   void set_renderer (const QString& renderer);
 
 signals:
    void sign_in_requested        ();
@@ -32,7 +31,6 @@ signals:
    void settings_requested       ();
    void logs_requested           ();
    void check_updates_requested  ();
-   void renderer_requested       (const QString& renderer);
    void quit_requested           ();
 
 private:

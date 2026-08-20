@@ -297,10 +297,7 @@ OverlayWindow::~OverlayWindow () = default;
 void OverlayWindow::set_renderer (std::string renderer)
 {
    renderer = normalize_renderer (std::move (renderer));
-   if (renderer == impl_->config.renderer
-       && ((renderer == "qml" && impl_->qml) || (renderer != "qml" && impl_->augment))) {
-      return;
-   }
+   if (renderer == impl_->config.renderer) return;
 
    ++impl_->generation;
    const auto generation = impl_->generation;
@@ -346,11 +343,6 @@ void OverlayWindow::set_renderer (std::string renderer)
       impl_->augment->present (
          impl_->last->lookup, impl_->last->game, impl_->last->anchor, false);
    }
-}
-
-const std::string& OverlayWindow::renderer () const noexcept
-{
-   return impl_->config.renderer;
 }
 
 void OverlayWindow::fall_back_to_qml (std::uint64_t generation)

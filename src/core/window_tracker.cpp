@@ -377,9 +377,9 @@ struct WindowTracker::Impl
          WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
 
       if (!h_location || !h_foreground || !h_min_start || !h_min_end || !h_destroy) {
-         Logger::error ("window_tracker: failed to install one or more hooks");
+         Logger::error ("window_tracker: failed to activate one or more event listeners");
       } else {
-         Logger::info ("window_tracker: hooks installed (target='{}' class='{}' process='{}')",
+         Logger::info ("window_tracker: event listeners active (target='{}' class='{}' process='{}')",
             std::string { config.title_substring },
             std::string { config.window_class },
             std::string { config.process_name });

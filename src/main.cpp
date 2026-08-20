@@ -209,7 +209,6 @@ namespace {
       };
       for (const auto& [key, value] : *all) {
          (void) value;
-         if (key == "overlay:renderer") continue;
          const bool managed = std::any_of (
             std::begin (prefixes), std::end (prefixes),
             [&key] (std::string_view prefix) { return key.starts_with (prefix); });
@@ -680,7 +679,6 @@ namespace {
       }
 
       gv::ui::TrayIcon tray;
-      tray.set_renderer (QString::fromStdString (overlay.renderer ()));
       tray.set_connection_state (session.signed_in ()
          ? gv::ui::ConnectionState::Syncing
          : gv::ui::ConnectionState::SignedOut);
@@ -967,18 +965,6 @@ namespace {
       });
       QObject::connect (&tray, &gv::ui::TrayIcon::check_updates_requested,
          &update_service, &gv::update::UpdateService::check_now_with_ui);
-      QObject::connect (&tray, &gv::ui::TrayIcon::renderer_requested,
-         &app, [&] (const QString& renderer) {
-            overlay.set_renderer (renderer.toStdString ());
-            tray.set_renderer (QString::fromStdString (overlay.renderer ()));
-            if (auto saved = settings_repo.set ("overlay:renderer", overlay.renderer ());
-                !saved.has_value ()) {
-               gv::core::log::ui.warn ("renderer setting save failed: {}",
-                  saved.error ().message);
-               return;
-            }
-            publish_session_header ();
-         });
       QObject::connect (&tray, &gv::ui::TrayIcon::quit_requested,
          &app, &QApplication::quit);
 

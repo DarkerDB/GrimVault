@@ -161,9 +161,6 @@ void SettingsSync::poll_now ()
 
             int changed = 0;
 
-            // Remove obsolete keys only from namespaces owned by the server;
-            // local-only settings (for example overlay:renderer) are retained
-            // unless they collide with the exact server schema below.
             constexpr std::string_view managed_prefixes [] = {
                "overlay:", "tooltip:", "pricing:", "behavior:", "hotkeys:"
             };
@@ -171,7 +168,6 @@ void SettingsSync::poll_now ()
                const bool managed = std::any_of (
                   std::begin (managed_prefixes), std::end (managed_prefixes),
                   [&key] (std::string_view prefix) { return key.starts_with (prefix); });
-               if (key == "overlay:renderer") continue;
                if (!managed || bundle->values.contains (key)) continue;
 
                if (auto erased = impl_->repo->erase (key); !erased.has_value ()) {

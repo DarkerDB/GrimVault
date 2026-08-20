@@ -31,6 +31,7 @@ namespace gv::app {
 struct Preferences
 {
    Mode                 overlay_mode = Mode::Auto;
+   std::string          renderer = "automatic";
    gv::ui::Layout       layout;
    gv::ui::augment::Options options;
 
@@ -143,6 +144,11 @@ inline bool apply (Preferences& out, std::string_view key, std::string_view valu
          : fallback.overlay_mode;
       out.overlay_mode   = erased ? fallback.overlay_mode : mode;
       out.layout.enabled = out.overlay_mode != Mode::Disabled;
+      return true;
+   }
+   if (key == "overlay:renderer") {
+      out.renderer = erased || (value != "webview" && value != "qml")
+         ? fallback.renderer : value;
       return true;
    }
    if (key == "overlay:alignment") {
