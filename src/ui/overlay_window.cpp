@@ -60,6 +60,12 @@ namespace {
       return wanted && lookup.entitlement.grants (widget);
    }
 
+   std::string normalize_renderer (std::string renderer)
+   {
+      if (renderer == "webview" || renderer == "qml") return renderer;
+      return "automatic";
+   }
+
    QStringList analysis_details (const gv::api::TooltipLookup& lookup,
                                  const augment::Options& options)
    {
@@ -263,6 +269,7 @@ struct OverlayWindow::Impl
    std::unique_ptr<AugmentView> augment;
    std::unique_ptr<QmlTooltip>  qml;
    std::optional<LastPresentation> last;
+   std::uint64_t generation = 0;
    bool active = true;
 
    QmlTooltip& qml_renderer ()
@@ -279,46 +286,87 @@ struct OverlayWindow::Impl
 OverlayWindow::OverlayWindow (Config config, QObject* parent)
    : QObject (parent), impl_ (std::make_unique<Impl> ())
 {
+   auto renderer = std::move (config.renderer);
    impl_->config = std::move (config);
+   impl_->config.renderer.clear ();
+   set_renderer (std::move (renderer));
+}
 
-   if (impl_->config.renderer == "qml") {
-      core::Logger::info ("overlay: native QML renderer selected by setting");
-      impl_->qml_renderer ();
+OverlayWindow::~OverlayWindow () = default;
+
+void OverlayWindow::set_renderer (std::string renderer)
+{
+   renderer = normalize_renderer (std::move (renderer));
+   if (renderer == impl_->config.renderer
+       && ((renderer == "qml" && impl_->qml) || (renderer != "qml" && impl_->augment))) {
       return;
    }
 
-   core::Logger::info ("overlay: hidden WebView2 snapshot renderer selected");
+   ++impl_->generation;
+   const auto generation = impl_->generation;
+   if (impl_->augment) impl_->augment->clear ();
+   if (impl_->qml) impl_->qml->clear ();
+   impl_->augment.reset ();
+   impl_->qml.reset ();
+   impl_->config.renderer = std::move (renderer);
 
+   if (impl_->config.renderer == "qml") {
+      core::Logger::info ("overlay: QML renderer selected");
+      auto& qml = impl_->qml_renderer ();
+      if (impl_->active && impl_->last) {
+         qml.present (impl_->last->lookup, impl_->last->game, impl_->last->anchor);
+      }
+      return;
+   }
+
+   core::Logger::info ("overlay: WebView2 renderer selected mode={}", impl_->config.renderer);
    auto augment = AugmentView::create (
       AugmentView::Config {
          .web_dir       = impl_->config.web_dir,
          .user_data_dir = impl_->config.user_data_dir,
       },
-      [this] { fall_back_to_qml (); });
+      [this, generation] { fall_back_to_qml (generation); });
 
    if (!augment.has_value ()) {
-      core::Logger::warn ("overlay: WebView2 unavailable ({}); using QML renderer",
-         augment.error ().message);
-      impl_->qml_renderer ();
+      core::Logger::warn ("overlay: WebView2 unavailable ({}) mode={}",
+         augment.error ().message, impl_->config.renderer);
+      if (impl_->config.renderer == "automatic") {
+         auto& qml = impl_->qml_renderer ();
+         if (impl_->active && impl_->last) {
+            qml.present (impl_->last->lookup, impl_->last->game, impl_->last->anchor);
+         }
+      }
       return;
    }
 
    impl_->augment = std::move (*augment);
    impl_->augment->set_layout  (impl_->layout);
    impl_->augment->set_options (impl_->options);
+   if (impl_->active && impl_->last) {
+      impl_->augment->present (
+         impl_->last->lookup, impl_->last->game, impl_->last->anchor, false);
+   }
 }
 
-OverlayWindow::~OverlayWindow () = default;
+const std::string& OverlayWindow::renderer () const noexcept
+{
+   return impl_->config.renderer;
+}
 
-void OverlayWindow::fall_back_to_qml ()
+void OverlayWindow::fall_back_to_qml (std::uint64_t generation)
 {
    // May fire from a WebView2 COM callback mid-present; defer the switch so
    // the failed AugmentView isn't destroyed under its own stack frames.
-   QMetaObject::invokeMethod (this, [this] {
-      if (!impl_->augment) return;
+   QMetaObject::invokeMethod (this, [this, generation] {
+      if (generation != impl_->generation || !impl_->augment) return;
+
+      impl_->augment.reset ();
+      if (impl_->config.renderer != "automatic") {
+         core::Logger::warn ("overlay: WebView2 renderer failed; fallback disabled");
+         return;
+      }
 
       core::Logger::warn ("overlay: WebView2 renderer failed; falling back to QML");
-      impl_->augment.reset ();
       auto& qml = impl_->qml_renderer ();
       if (impl_->active && impl_->last.has_value ()) {
          qml.present (impl_->last->lookup, impl_->last->game, impl_->last->anchor);
@@ -337,7 +385,7 @@ void OverlayWindow::present (const gv::api::TooltipLookup& lookup,
       return;
    }
 
-   impl_->qml_renderer ().present (lookup, game, anchor);
+   if (impl_->qml) impl_->qml->present (lookup, game, anchor);
 }
 
 void OverlayWindow::clear ()
@@ -367,9 +415,10 @@ bool OverlayWindow::set_active (bool active)
    const auto& last = *impl_->last;
    if (impl_->augment) {
       impl_->augment->present (last.lookup, last.game, last.anchor, false);
-   } else {
-      impl_->qml_renderer ().present (last.lookup, last.game, last.anchor);
+      return true;
    }
+   if (!impl_->qml) return false;
+   impl_->qml->present (last.lookup, last.game, last.anchor);
    return true;
 }
 

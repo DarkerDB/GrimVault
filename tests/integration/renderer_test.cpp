@@ -1,11 +1,15 @@
 #include <gv/core/logger.h>
+#include <gv/ui/tray_menu.h>
 #include <gv/ui/webview_host.h>
 
+#include <QAction>
 #include <QApplication>
 #include <QEventLoop>
 #include <QImage>
+#include <QMenu>
 #include <QQuickItem>
 #include <QQuickView>
+#include <QPushButton>
 #include <QTemporaryDir>
 #include <QTimer>
 
@@ -46,6 +50,37 @@ TEST (Renderer, QmlFallbackLoadsAndScales)
    EXPECT_NEAR (root->height (), height * 0.85, 0.5);
    EXPECT_NEAR (view.width (), root->width (), 0.5);
    EXPECT_NEAR (view.height (), root->height (), 0.5);
+}
+
+TEST (Renderer, TraySelectsLocalRenderer)
+{
+   gv::ui::TrayMenu menu;
+   QString selected;
+   QObject::connect (&menu, &gv::ui::TrayMenu::renderer_requested,
+      [&selected] (const QString& renderer) { selected = renderer; });
+
+   auto* button = [&menu] {
+      for (auto* candidate : menu.findChildren<QPushButton*> ()) {
+         if (candidate->text ().startsWith (QStringLiteral ("Overlay renderer:"))) {
+            return candidate;
+         }
+      }
+      return static_cast<QPushButton*> (nullptr);
+   } ();
+
+   ASSERT_NE (button, nullptr);
+   ASSERT_NE (button->menu (), nullptr);
+   menu.set_renderer (QStringLiteral ("qml"));
+   EXPECT_EQ (button->text (), QStringLiteral ("Overlay renderer: QML fallback"));
+
+   for (auto* action : button->menu ()->actions ()) {
+      if (action->data ().toString () != QStringLiteral ("webview")) continue;
+      action->trigger ();
+      break;
+   }
+
+   EXPECT_EQ (selected, QStringLiteral ("webview"));
+   EXPECT_EQ (button->text (), QStringLiteral ("Overlay renderer: WebView2"));
 }
 
 TEST (Renderer, WebviewCapturesSharedCard)

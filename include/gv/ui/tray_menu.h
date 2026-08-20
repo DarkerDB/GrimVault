@@ -8,6 +8,7 @@
 class QLabel;
 class QPushButton;
 class QVBoxLayout;
+class QActionGroup;
 
 namespace gv::ui {
 
@@ -37,6 +38,7 @@ public:
    // (signed in), and recolor the status dot (green/red).
    void set_signed_in (bool yes);
    void set_connection_state (ConnectionState state);
+   void set_renderer (const QString& renderer);
 
    // Pop the menu so its bottom-right corner sits at `global_pos`
    // (cursor position). Clamps to the screen the cursor is on.
@@ -48,6 +50,7 @@ signals:
    void settings_requested       ();
    void logs_requested           ();
    void check_updates_requested  ();
+   void renderer_requested       (const QString& renderer);
    void quit_requested           ();
 
 protected:
@@ -56,6 +59,8 @@ protected:
 
 private:
    QPushButton* auth_btn_   = nullptr;
+   QPushButton* renderer_btn_ = nullptr;
+   QActionGroup* renderer_group_ = nullptr;
    QLabel*      status_label_ = nullptr;
    QWidget*     status_dot_ = nullptr;
    bool         signed_in_  = false;

@@ -5,6 +5,7 @@
 #include <QObject>
 #include <QRect>
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -16,10 +17,6 @@ namespace gv::ui {
 namespace augment { struct Options; }
 
 // The overlay surface that draws the Augment beside the in-game tooltip.
-// Renderer is the DDB SDK in a permanently hidden WebView2, captured to a
-// bitmap and presented by a disabled native window. The QML card remains as
-// fallback (`overlay:renderer` = webview | qml).
-//
 // present()/clear() are the whole contract; Controller and main() are
 // renderer-agnostic. Both rects are physical (Win32) screen pixels: game
 // is the game window, anchor the detected tooltip box.
@@ -36,8 +33,7 @@ public:
       // WebView2 user-data folder under the active LocalAppData directory.
       std::filesystem::path user_data_dir;
 
-      // "webview" (hidden snapshot renderer, default) or "qml".
-      std::string renderer = "webview";
+      std::string renderer = "automatic";
    };
 
    explicit OverlayWindow (Config config, QObject* parent = nullptr);
@@ -47,6 +43,8 @@ public:
                  const QRect& game, const QRect& anchor, bool animate = true);
    void clear ();
    bool set_active (bool active);
+   void set_renderer (std::string renderer);
+   const std::string& renderer () const noexcept;
 
    // Live settings. Both are cheap and idempotent — SettingsBridge calls
    // them whenever the dashboard changes, including mid-hover.
@@ -59,7 +57,7 @@ public:
    void anchor_lost (bool immediate);
 
 private:
-   void fall_back_to_qml ();
+   void fall_back_to_qml (std::uint64_t generation);
 
    struct Impl;
    std::unique_ptr<Impl> impl_;
