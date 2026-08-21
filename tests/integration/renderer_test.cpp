@@ -4,6 +4,7 @@
 #include <QApplication>
 #include <QEventLoop>
 #include <QImage>
+#include <QJsonDocument>
 #include <QQuickItem>
 #include <QQuickView>
 #include <QTemporaryDir>
@@ -46,6 +47,70 @@ TEST (Renderer, QmlFallbackLoadsAndScales)
    EXPECT_NEAR (root->height (), height * 0.85, 0.5);
    EXPECT_NEAR (view.width (), root->width (), 0.5);
    EXPECT_NEAR (view.height (), root->height (), 0.5);
+}
+
+TEST (Renderer, QmlFallbackRendersStructuredCard)
+{
+   QQuickView view;
+   view.setResizeMode (QQuickView::SizeViewToRootObject);
+   view.setSource (QUrl { QStringLiteral ("qrc:/qml/Tooltip.qml") });
+
+   ASSERT_EQ (view.status (), QQuickView::Ready);
+   auto* root = view.rootObject ();
+   ASSERT_NE (root, nullptr);
+   const qreal empty_height = root->height ();
+
+   const nlohmann::json entity = {
+      { "name", "GrimVault" },
+      { "realm", "grimvault" },
+      { "rarity", "rare" },
+      { "sections", nlohmann::json::array ({ {
+         { "kind", "analysis" },
+         { "item_name", "Bandage" },
+         { "item_rarity", "rare" },
+         { "tradeable", true },
+         { "pricing", {
+            { "median", 120 }, { "low", 90 }, { "high", 150 },
+            { "confidence", "high" }, { "sample_size", 28 },
+         } },
+         { "market", { { "sales_30d", 28 }, { "active_listings", 17 } } },
+         { "utility", { { "vendor_value", 22 }, { "gear_score", 50 } } },
+         { "weighted_roll_score", 82 },
+         { "rolls", nlohmann::json::array ({ {
+            { "label", "Move Speed" }, { "slot", "secondary" },
+            { "formatted_value", "+4" }, { "minimum", 1 }, { "maximum", 5 },
+            { "roll_percentile", 75 }, { "grade", "A" },
+         } }) },
+         { "visible_sections", nlohmann::json::object () },
+      } }) },
+   };
+
+   const auto document = QJsonDocument::fromJson (
+      QByteArray::fromStdString (entity.dump ()));
+   ASSERT_TRUE (root->setProperty ("entity", document.toVariant ()));
+   EXPECT_GT (root->height (), empty_height);
+   view.show ();
+   QEventLoop loop;
+   QTimer::singleShot (50, &loop, &QEventLoop::quit);
+   loop.exec ();
+
+   EXPECT_TRUE (root->property ("analysisMode").toBool ());
+   auto* card = root->findChild<QQuickItem*> (QStringLiteral ("card"));
+   auto* frame = root->findChild<QQuickItem*> (QStringLiteral ("frame"));
+   auto* body = root->findChild<QQuickItem*> (QStringLiteral ("analysisBody"));
+   ASSERT_NE (card, nullptr);
+   ASSERT_NE (frame, nullptr);
+   ASSERT_NE (body, nullptr);
+   EXPECT_TRUE (body->isVisible ());
+   EXPECT_GT (body->implicitHeight (), 200);
+   EXPECT_GT (frame->height (), 200);
+   EXPECT_GT (card->height (), 100);
+   EXPECT_GT (root->height (), empty_height);
+   EXPECT_NEAR (view.height (), root->height (), 0.5);
+   const QImage image = view.grabWindow ();
+   EXPECT_FALSE (image.isNull ());
+   EXPECT_GT (image.width (), 300);
+   EXPECT_GT (image.height (), 200);
 }
 
 TEST (Renderer, WebviewCapturesSharedCard)

@@ -2,14 +2,14 @@
 #include <gv/api/darkerdb_client.h>
 #include <gv/core/logger.h>
 #include <gv/ui/augment_view.h>
+#include <gv/ui/augment_payload.h>
 #include <gv/ui/placement.h>
 #include <gv/ui/screen.h>
 
-#include <QPointer>
+#include <QJsonDocument>
 #include <QQuickItem>
 #include <QQuickView>
 #include <QString>
-#include <QStringList>
 #include <QVariant>
 
 #include <algorithm>
@@ -19,121 +19,10 @@ namespace gv::ui {
 
 namespace {
 
-   QStringList to_lines (const std::vector<gv::api::TooltipAttribute>& attrs)
-   {
-      QStringList out;
-      out.reserve (static_cast<int> (attrs.size ()));
-      for (const auto& a : attrs) {
-         out << QStringLiteral ("%1: %2").arg (
-            QString::fromStdString (a.label),
-            QString::fromStdString (a.value));
-      }
-      return out;
-   }
-
-   QStringList analysis_rolls (const std::vector<gv::api::AnalysisRoll>& rolls)
-   {
-      QStringList out;
-      out.reserve (static_cast<int> (rolls.size ()));
-      for (const auto& roll : rolls) {
-         QString line = QStringLiteral ("%1 %2").arg (
-            QString::fromStdString (roll.formatted_value),
-            QString::fromStdString (roll.label));
-         if (roll.roll_percentile) {
-            line += QStringLiteral (" (%1%)").arg (*roll.roll_percentile);
-         }
-         out << std::move (line);
-      }
-      return out;
-   }
-
-   bool shows (const gv::api::TooltipLookup& lookup,
-               const augment::Options& options, std::string_view widget)
-   {
-      bool wanted = true;
-      for (const auto& [slug, visible] : options.widgets) {
-         if (slug == widget) {
-            wanted = visible;
-            break;
-         }
-      }
-      return wanted && lookup.entitlement.grants (widget);
-   }
-
    std::string normalize_renderer (std::string renderer)
    {
       if (renderer == "webview" || renderer == "qml") return renderer;
       return "automatic";
-   }
-
-   QStringList analysis_details (const gv::api::TooltipLookup& lookup,
-                                 const augment::Options& options)
-   {
-      QStringList out;
-      if (shows (lookup, options, "item_overview")) {
-         if (lookup.utility.vendor_value > 0) {
-            out << QStringLiteral ("Vendor: %1 G").arg (lookup.utility.vendor_value);
-         }
-         if (lookup.utility.gear_score > 0) {
-            out << QStringLiteral ("Gear score: %1").arg (lookup.utility.gear_score);
-         }
-         if (lookup.utility.adventure_points > 0) {
-            out << QStringLiteral ("Adv. points: %1").arg (lookup.utility.adventure_points);
-         }
-         out << QStringLiteral ("Tradeable: %1").arg (
-            lookup.tradeable ? QStringLiteral ("Yes") : QStringLiteral ("No"));
-      }
-      if (shows (lookup, options, "actions")) {
-         if (lookup.pricing.quick_list > 0) {
-            out << QStringLiteral ("Sell quickly: %1 G").arg (lookup.pricing.quick_list);
-         }
-         if (lookup.pricing.lowest_ask > 0) {
-            out << QStringLiteral ("Lowest ask: %1 G").arg (lookup.pricing.lowest_ask);
-         }
-      }
-      if (shows (lookup, options, "market_activity")) {
-         if (lookup.market_analysis.sales.count > 0) {
-            out << QStringLiteral ("Sales 30d: %1%2")
-                      .arg (lookup.market_analysis.sales.count)
-                      .arg (lookup.market_analysis.sales.capped ? QStringLiteral ("+") : QString {});
-         }
-         if (lookup.market_analysis.active_listings.count > 0) {
-            out << QStringLiteral ("Listings: %1%2")
-                      .arg (lookup.market_analysis.active_listings.count)
-                      .arg (lookup.market_analysis.active_listings.capped
-                         ? QStringLiteral ("+") : QString {});
-         }
-         if (lookup.pricing.sample_size > 0) {
-            out << QStringLiteral ("Samples: %1").arg (lookup.pricing.sample_size);
-         }
-      }
-
-      const auto append_plan = [&out] (const gv::api::GemPlan* plan, int sockets) {
-         if (!plan || plan->changes.empty () || plan->projected_value <= 0) return;
-         const auto& change = plan->changes.front ();
-         out << QStringLiteral ("Best %1-gem: %2 → %3 %4")
-                   .arg (sockets)
-                   .arg (QString::fromStdString (change.replace_label))
-                   .arg (QString::fromStdString (change.new_value))
-                   .arg (QString::fromStdString (change.new_label));
-         out << QStringLiteral ("Projected / net: %1 G / %2%3 G")
-                   .arg (plan->projected_value)
-                   .arg (plan->net_uplift >= 0 ? "+" : "")
-                   .arg (plan->net_uplift);
-      };
-      if (shows (lookup, options, "upgrade_paths")) {
-         if (!lookup.gem_optimization.plans.empty ()) {
-            for (const auto& plan : lookup.gem_optimization.plans) {
-               append_plan (&plan, plan.sockets);
-            }
-         } else {
-            append_plan (lookup.gem_optimization.one_socket
-               ? &*lookup.gem_optimization.one_socket : nullptr, 1);
-            append_plan (lookup.gem_optimization.two_socket
-               ? &*lookup.gem_optimization.two_socket : nullptr, 2);
-         }
-      }
-      return out;
    }
 
    // Native renderer: the QML port of the DDB card. Unlike WebView2, this has
@@ -172,32 +61,10 @@ namespace {
             return;
          }
 
-         const bool raw_ocr = !lookup.recognized_text.empty ();
-         const bool analysis = !lookup.item_id.empty () || !lookup.display_name.empty ()
-            || !lookup.rolls.empty ();
-         const auto score = lookup.weighted_roll_score
-            ? lookup.weighted_roll_score : lookup.roll_score;
+         const auto document = QJsonDocument::fromJson (QByteArray::fromStdString (
+            augment::entity (lookup, options_).dump ()));
          root->setProperty ("renderScale", layout_.scale);
-         root->setProperty ("analysis",   analysis);
-         root->setProperty ("showMarket", shows (lookup, options_, "market_value"));
-         root->setProperty ("body",      QString::fromStdString (lookup.recognized_text));
-         root->setProperty ("primary",   raw_ocr ? QStringList {} : to_lines (lookup.primary));
-         root->setProperty ("secondary", raw_ocr ? QStringList {}
-            : analysis && shows (lookup, options_, "roll_quality")
-               ? analysis_rolls (lookup.rolls) : to_lines (lookup.secondary));
-         root->setProperty ("details",   raw_ocr ? QStringList {}
-            : analysis ? analysis_details (lookup, options_) : to_lines (lookup.details));
-         root->setProperty ("market", raw_ocr || !shows (lookup, options_, "market_value")
-            ? 0 : static_cast<int> (lookup.pricing.median));
-         root->setProperty ("marketLow", raw_ocr || !shows (lookup, options_, "market_value")
-            ? 0 : static_cast<int> (lookup.pricing.low));
-         root->setProperty ("marketHigh", raw_ocr || !shows (lookup, options_, "market_value")
-            ? 0 : static_cast<int> (lookup.pricing.high));
-         root->setProperty ("vendor", raw_ocr ? 0 : static_cast<int> (
-            analysis ? lookup.utility.vendor_value : lookup.pricing.low));
-         root->setProperty ("rollScore", raw_ocr || !score ? -1 : *score);
-         root->setProperty ("confidence", raw_ocr
-            ? QString {} : QString::fromStdString (lookup.pricing.confidence));
+         root->setProperty ("entity", document.toVariant ());
 
          const qreal dpr = screen::scale_at (game.center ());
          const qreal s = dpr * layout_.scale;
