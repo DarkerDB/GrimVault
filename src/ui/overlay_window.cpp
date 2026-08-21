@@ -63,20 +63,31 @@ namespace {
 
          const auto document = QJsonDocument::fromJson (QByteArray::fromStdString (
             augment::entity (lookup, options_).dump ()));
-         root->setProperty ("renderScale", layout_.scale);
+         root->setProperty ("renderScale", 1.0);
          root->setProperty ("entity", document.toVariant ());
 
          const qreal dpr = screen::scale_at (game.center ());
-         const qreal s = dpr * layout_.scale;
+         const QRect monitor = screen::viewport_at (game.center ());
+         const QRect visible = game.intersected (monitor);
+         const QRect view = visible.isEmpty () ? game : visible;
+         const bool attached = layout_.align == Layout::Align::Attached && !anchor.isEmpty ();
+         const QSize available = attached
+            ? placement::attached_space (view, anchor, 0) : view.size ();
+         const QSize card_css { qRound (root->width ()), qRound (root->height ()) };
+         const qreal wanted = dpr * layout_.scale;
+         const qreal fit = placement::fit (
+            QRect { QPoint {}, available },
+            { card_css.width () + (attached ? 12 : 0), card_css.height () },
+            0, wanted);
+         const qreal render_scale = layout_.scale * fit;
+         root->setProperty ("renderScale", render_scale);
+
+         const qreal s = dpr * render_scale;
          const int gap = qRound (12 * s);
          const QSize size {
             qRound (root->width () * dpr),
             qRound (root->height () * dpr),
          };
-
-         const QRect monitor = screen::viewport_at (game.center ());
-         const QRect visible = game.intersected (monitor);
-         const QRect view = visible.isEmpty () ? game : visible;
          const int nudge_x = static_cast<int> (layout_.offset_x * s);
          const int nudge_y = static_cast<int> (layout_.offset_y * s);
          const QPoint want = layout_.align == Layout::Align::Attached

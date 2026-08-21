@@ -19,7 +19,7 @@
       <file alias="tooltip/adornment-top.png">../assets/images/tooltip/adornment-top.png</file>
       <file alias="tooltip/dots-separator.png">../assets/images/tooltip/dots-separator.png</file>
       <file alias="tooltip/gold-coin.png">../assets/images/tooltip/gold-coin.png</file>
-      <file alias="tooltip/grimvault-mark.webp">../web/tooltips/assets/grimvault-mark.webp</file>
+      <file alias="tooltip/grimvault-mark.png">../assets/images/tooltip/grimvault-mark.png</file>
       <file alias="tooltip/header-pattern.png">../assets/images/tooltip/header-pattern.png</file>
       <file alias="tooltip/header-separator.png">../assets/images/tooltip/header-separator.png</file>
       <file alias="tooltip/separator.png">../assets/images/tooltip/separator.png</file>

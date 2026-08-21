@@ -98,10 +98,16 @@ TEST (Renderer, QmlFallbackRendersStructuredCard)
    auto* card = root->findChild<QQuickItem*> (QStringLiteral ("card"));
    auto* frame = root->findChild<QQuickItem*> (QStringLiteral ("frame"));
    auto* body = root->findChild<QQuickItem*> (QStringLiteral ("analysisBody"));
+   auto* mark = root->findChild<QQuickItem*> (QStringLiteral ("brandMark"));
+   auto* market = root->findChild<QQuickItem*> (QStringLiteral ("marketOverview"));
    ASSERT_NE (card, nullptr);
    ASSERT_NE (frame, nullptr);
    ASSERT_NE (body, nullptr);
+   ASSERT_NE (mark, nullptr);
+   ASSERT_NE (market, nullptr);
    EXPECT_TRUE (body->isVisible ());
+   EXPECT_TRUE (market->isVisible ());
+   EXPECT_EQ (mark->property ("status").toInt (), 1);
    EXPECT_GT (body->implicitHeight (), 200);
    EXPECT_GT (frame->height (), 200);
    EXPECT_GT (card->height (), 100);
@@ -111,6 +117,21 @@ TEST (Renderer, QmlFallbackRendersStructuredCard)
    EXPECT_FALSE (image.isNull ());
    EXPECT_GT (image.width (), 300);
    EXPECT_GT (image.height (), 200);
+
+   auto vendor_entity = entity;
+   auto& analysis = vendor_entity ["sections"][0];
+   analysis ["pricing"] = {
+      { "median", 0 }, { "low", 0 }, { "high", 0 }, { "confidence", "none" },
+   };
+   analysis ["market"] = nlohmann::json::object ();
+   const qreal market_height = root->height ();
+   const auto vendor_document = QJsonDocument::fromJson (
+      QByteArray::fromStdString (vendor_entity.dump ()));
+   ASSERT_TRUE (root->setProperty ("entity", vendor_document.toVariant ()));
+   QCoreApplication::processEvents ();
+
+   EXPECT_FALSE (market->isVisible ());
+   EXPECT_LT (root->height (), market_height);
 }
 
 TEST (Renderer, WebviewCapturesSharedCard)

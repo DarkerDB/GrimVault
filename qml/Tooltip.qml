@@ -188,6 +188,12 @@ Item {
       return entries
    }
 
+   function marketOverviewAvailable () {
+      if (!enabledWidget ("market_activity") && !enabledWidget ("actions")) return false
+      return pricing.median > 0 || pricing.quick_list > 0 || pricing.lowest_ask > 0
+         || market.median_sale_price > 0 || market.average_sale_price > 0
+   }
+
    function secondaryRolls () {
       const rolls = analysis.rolls || []
       const result = []
@@ -312,10 +318,11 @@ Item {
                      spacing: 3
 
                      Image {
+                        objectName: "brandMark"
                         anchors.verticalCenter: parent.verticalCenter
                         width: 17
                         height: 17
-                        source: "qrc:/assets/images/tooltip/grimvault-mark.webp"
+                        source: "qrc:/assets/images/tooltip/grimvault-mark.png"
                         fillMode: Image.PreserveAspectFit
                      }
 
@@ -389,7 +396,7 @@ Item {
                         }
 
                         Rectangle {
-                           visible: root.pricing.confidence
+                           visible: !!root.pricing.confidence
                               && root.pricing.confidence !== "none"
                            implicitWidth: confidenceText.implicitWidth + 12
                            implicitHeight: confidenceText.implicitHeight + 8
@@ -497,9 +504,10 @@ Item {
                }
 
                TooltipSection {
+                  objectName: "marketOverview"
                   Layout.fillWidth: true
                   shown: (root.enabledWidget ("market_activity")
-                     || root.enabledWidget ("actions")) && root.marketEntries ().length > 0
+                     || root.enabledWidget ("actions")) && root.marketOverviewAvailable ()
                   title: "Market overview"
                   subtitle: "How this item trades"
 
@@ -808,7 +816,7 @@ Item {
                TooltipSection {
                   Layout.fillWidth: true
                   shown: root.enabledWidget ("trade_chat")
-                     && (root.analysis.trade_chat || {}).messages
+                     && !!(root.analysis.trade_chat || {}).messages
                      && (root.analysis.trade_chat || {}).messages.length > 0
                   title: "Recent trade chat"
                   subtitle: (root.analysis.trade_chat || {}).mentions_14d > 0
