@@ -22,10 +22,6 @@ namespace gv::ui {
 
 namespace {
 
-   // Game fonts — registered at app startup in main.cpp and shared with
-   // the in-game tooltip (qml/Tooltip.qml). Qt matches on the family name
-   // embedded in the TTF ("Solmoe KimDaeGeon ..."), not the filename
-   // (SaintKDG_*.ttf) — the filename silently falls back to the system font.
    constexpr const char* k_font_body   = "Solmoe KimDaeGeon Light";
    constexpr const char* k_font_strong = "Solmoe KimDaeGeon Medium";
 

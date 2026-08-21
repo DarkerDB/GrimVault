@@ -194,7 +194,7 @@ struct AugmentView::Impl
    AugmentView*                  owner = nullptr;
    std::unique_ptr<WebviewHost> host;
    std::unique_ptr<SnapshotWindow> snapshot;
-   std::function<void ()>       on_failed;
+   Callbacks                    callbacks;
    bool                         pending_animate = true;
 
    std::uint64_t seq         = 0;
@@ -319,22 +319,28 @@ AugmentView::AugmentView () : impl_ (std::make_unique<Impl> ())
 AugmentView::~AugmentView () = default;
 
 core::Result<std::unique_ptr<AugmentView>> AugmentView::create (Config config,
-                                                                std::function<void ()> on_failed)
+                                                                Callbacks callbacks)
 {
    auto view = std::unique_ptr<AugmentView> { new AugmentView () };
    auto* impl = view->impl_.get ();
-   impl->on_failed = std::move (on_failed);
+   impl->callbacks = std::move (callbacks);
    impl->snapshot  = std::make_unique<SnapshotWindow> ();
 
    auto host = WebviewHost::create (
       WebviewHost::Config {
          .web_dir       = std::move (config.web_dir),
          .user_data_dir = std::move (config.user_data_dir),
+         .software_rendering = config.software_rendering,
       },
       WebviewHost::Callbacks {
-         .on_ready          = [impl] { impl->prewarm (); },
+         .on_ready          = [impl] {
+            impl->prewarm ();
+            if (impl->callbacks.on_ready) impl->callbacks.on_ready ();
+         },
          .on_message        = [impl] (std::string_view text) { impl->on_message (text); },
-         .on_process_failed = [impl] { if (impl->on_failed) impl->on_failed (); },
+         .on_failed         = [impl] (std::string reason) {
+            if (impl->callbacks.on_failed) impl->callbacks.on_failed (std::move (reason));
+         },
       });
 
    if (!host.has_value ()) {
@@ -643,7 +649,7 @@ void AugmentView::Impl::capture_to_snapshot (const QRect& rect)
             static_cast<int> (png.size ()), "PNG");
          if (image.isNull ()) {
             core::Logger::warn ("augment: WebView2 snapshot capture failed");
-            if (on_failed) on_failed ();
+            if (callbacks.on_failed) callbacks.on_failed ("snapshot capture failed");
             return;
          }
 

@@ -262,8 +262,8 @@ webview2/           %LOCALAPPDATA%\GrimVault\<env>\webview2
 
 The Augment is rendered by the vendored DDB tooltip SDK in a permanently
 hidden WebView2, captured as a transparent PNG, and displayed through a
-disabled native Qt window. No browser HWND is placed over the game. The QML
-port remains available as fallback with `overlay:renderer=qml`.
+disabled native Qt window. No browser HWND is placed over the game. Startup
+retries with clean profile data and then software rendering if necessary.
 
 The card's enter animation is CSS in `web/augment.html`, played on the
 `.ddb-tooltip` element the library recreates on each render (a fresh

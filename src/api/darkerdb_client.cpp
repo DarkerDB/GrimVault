@@ -727,7 +727,6 @@ namespace {
       };
 
       put ("overlay:mode",      b.overlay.mode);
-      put ("overlay:renderer",  b.overlay.renderer);
       put ("overlay:alignment", b.overlay.alignment);
       put ("overlay:columns",   b.overlay.columns);
       put ("overlay:opacity",   std::to_string (b.overlay.opacity));
@@ -782,7 +781,6 @@ namespace {
    void parse_overlay (const nlohmann::json& j, SettingsBundle::Overlay& out)
    {
       out.mode      = j.value ("mode",      out.mode);
-      out.renderer  = j.value ("renderer",  out.renderer);
       out.alignment = j.value ("alignment", out.alignment);
       out.columns   = j.value ("columns",   out.columns);
       out.opacity   = j.value ("opacity",   out.opacity);

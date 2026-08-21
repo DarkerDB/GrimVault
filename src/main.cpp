@@ -498,9 +498,6 @@ namespace {
          .web_dir       = std::move (web_dir),
          .user_data_dir = data_dir / "webview2",
       };
-      if (auto v = settings_repo.get ("overlay:renderer"); v.has_value () && v->has_value ()) {
-         overlay_cfg.renderer = **v;
-      }
       gv::ui::OverlayWindow overlay { std::move (overlay_cfg) };
       gv::ui::DebugOverlay  debug_overlay;
 
@@ -679,6 +676,12 @@ namespace {
       }
 
       gv::ui::TrayIcon tray;
+      QObject::connect (&overlay, &gv::ui::OverlayWindow::renderer_failed,
+         &tray, [&tray] (const QString&) {
+            tray.showMessage (QStringLiteral ("Overlay unavailable"),
+               QStringLiteral ("WebView2 could not start after automatic recovery. Open Logs from the tray for diagnostics."),
+               QSystemTrayIcon::Critical, 10000);
+         });
       tray.set_connection_state (session.signed_in ()
          ? gv::ui::ConnectionState::Syncing
          : gv::ui::ConnectionState::SignedOut);

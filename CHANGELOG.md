@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Hardened WebView2 startup with clean-profile and software-rendering recovery
+- Removed the alternate QML tooltip renderer
 - Fixed dashboard hotkeys using F6 through F8
 
 ## [0.0.5] - 2026-08-15
@@ -177,7 +179,7 @@ the result as an analysis card over the game window.
 
 **In-game overlay**
 
-- Tray-resident overlay that anchors a GrimVault analysis card to the hovered item tooltip, rendered in WebView2 with a QML renderer as the fallback when the runtime is absent.
+- Tray-resident overlay that anchors a GrimVault analysis card to the hovered item tooltip and renders it through WebView2.
 - Automatic, manual, and disabled modes. Automatic scans stable tooltips, manual scans only on request, and disabled performs no capture or API work.
 - One-, two-, and three-column card layouts. Automatic mode widens only when the current card exceeds the available height and the wider card still fits.
 - Per-section visibility toggles for the analysis card, plus overlay alignment, opacity, scale, offsets, and hotkeys for toggling the overlay and forcing a refresh.

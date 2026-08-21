@@ -40,7 +40,6 @@ endif ()
 if (WIN32)
    add_executable (grimvault_renderer_tests
       integration/renderer_test.cpp
-      "${CMAKE_SOURCE_DIR}/qml/qml.qrc"
    )
 
    target_link_libraries (grimvault_renderer_tests PRIVATE
@@ -48,8 +47,6 @@ if (WIN32)
       gv::ui
       Qt6::Core
       Qt6::Gui
-      Qt6::Quick
-      Qt6::Qml
       Qt6::Widgets
       GTest::gtest
    )

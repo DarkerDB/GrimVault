@@ -10,6 +10,15 @@
 #include <unknwn.h>
 
 #include <WebView2.h>
+#ifdef _MSC_VER
+   #pragma push_macro("__has_attribute")
+   #undef __has_attribute
+#endif
+#include <WebView2EnvironmentOptions.h>
+#ifdef _MSC_VER
+   #pragma pop_macro("__has_attribute")
+#endif
+#include <fmt/format.h>
 #include <wil/com.h>
 #include <wrl.h>
 
@@ -93,11 +102,13 @@ struct WebviewHost::Impl : std::enable_shared_from_this<WebviewHost::Impl>
    wil::com_ptr<ICoreWebView2>            webview;
 
    bool ready = false;
+   bool alive = true;
 
    HRESULT on_environment (ICoreWebView2Environment* env);
    HRESULT on_controller (ICoreWebView2Controller* value);
    void    on_navigation_completed ();
-   void    fail (const char* stage, HRESULT hr);
+   void    fail (std::string stage, HRESULT hr);
+   void    fail (std::string reason);
    void    teardown ();
 };
 
@@ -120,6 +131,7 @@ WebviewHost::~WebviewHost ()
 {
    // Creation may still be in flight. It owns Impl until its completion
    // callback returns, but must no longer call into the destroyed owner.
+   impl_->alive = false;
    impl_->callbacks = {};
    impl_->teardown ();
    impl_.reset ();
@@ -154,11 +166,27 @@ core::Result<std::unique_ptr<WebviewHost>> WebviewHost::create (Config config,
    }
 
    const auto user_data = impl->config.user_data_dir.wstring ();
+   Microsoft::WRL::ComPtr<CoreWebView2EnvironmentOptions> options;
+   if (impl->config.software_rendering) {
+      options = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions> ();
+      if (!options) {
+         impl->alive = false;
+         impl->teardown ();
+         return core::fail (core::Error {
+            core::ErrorKind::Internal, "WebView2 environment options allocation failed" });
+      }
+      options->put_AdditionalBrowserArguments (L"--disable-gpu");
+   }
+
+   core::Logger::info ("webview: creating environment profile='{}' rendering={}",
+      impl->config.user_data_dir.string (),
+      impl->config.software_rendering ? "software" : "hardware");
 
    const HRESULT hr = ::CreateCoreWebView2EnvironmentWithOptions (
-      nullptr, user_data.c_str (), nullptr,
+      nullptr, user_data.c_str (), options.Get (),
       Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler> (
          [impl] (HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
+            if (!impl->alive) return S_OK;
             if (FAILED (result) || !env) {
                impl->fail ("environment", result);
                return result;
@@ -167,8 +195,10 @@ core::Result<std::unique_ptr<WebviewHost>> WebviewHost::create (Config config,
          }).Get ());
 
    if (FAILED (hr)) {
+      impl->alive = false;
       impl->teardown ();
-      return core::fail (core::Error { core::ErrorKind::Internal, "CreateCoreWebView2Environment failed" });
+      return core::fail (core::Error { core::ErrorKind::Internal,
+         fmt::format ("environment hr=0x{:08x}", static_cast<unsigned long> (hr)) });
    }
 
    return host;
@@ -179,16 +209,19 @@ HRESULT WebviewHost::Impl::on_environment (ICoreWebView2Environment* env)
    environment = env;
 
    const auto self = shared_from_this ();
-   return environment->CreateCoreWebView2Controller (
+   const HRESULT hr = environment->CreateCoreWebView2Controller (
       hwnd,
       Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler> (
          [self] (HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
+            if (!self->alive) return S_OK;
             if (FAILED (result) || !controller) {
                self->fail ("controller", result);
                return result;
             }
             return self->on_controller (controller);
          }).Get ());
+   if (FAILED (hr)) fail ("controller request", hr);
+   return hr;
 }
 
 HRESULT WebviewHost::Impl::on_controller (ICoreWebView2Controller* value)
@@ -236,9 +269,13 @@ HRESULT WebviewHost::Impl::on_controller (ICoreWebView2Controller* value)
 
    if (auto wv3 = webview.try_query<ICoreWebView2_3> ()) {
       const auto dir = config.web_dir.wstring ();
-      wv3->SetVirtualHostNameToFolderMapping (
+      hr = wv3->SetVirtualHostNameToFolderMapping (
          k_virtual_host, dir.c_str (),
          COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
+      if (FAILED (hr)) {
+         fail ("virtual host mapping", hr);
+         return hr;
+      }
    } else {
       fail ("ICoreWebView2_3 (virtual host mapping unavailable)", E_NOINTERFACE);
       return E_NOINTERFACE;
@@ -248,7 +285,7 @@ HRESULT WebviewHost::Impl::on_controller (ICoreWebView2Controller* value)
       Callback<ICoreWebView2WebMessageReceivedEventHandler> (
          [weak] (ICoreWebView2*, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
             const auto self = weak.lock ();
-            if (!self) return S_OK;
+            if (!self || !self->alive) return S_OK;
             wil::unique_cotaskmem_string json;
             if (SUCCEEDED (args->get_WebMessageAsJson (&json)) && json && self->callbacks.on_message) {
                self->callbacks.on_message (narrow (json.get ()));
@@ -260,7 +297,7 @@ HRESULT WebviewHost::Impl::on_controller (ICoreWebView2Controller* value)
       Callback<ICoreWebView2NavigationCompletedEventHandler> (
          [weak] (ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT {
             const auto self = weak.lock ();
-            if (!self) return S_OK;
+            if (!self || !self->alive) return S_OK;
             BOOL ok = FALSE;
             args->get_IsSuccess (&ok);
             if (!ok) {
@@ -273,17 +310,32 @@ HRESULT WebviewHost::Impl::on_controller (ICoreWebView2Controller* value)
 
    webview->add_ProcessFailed (
       Callback<ICoreWebView2ProcessFailedEventHandler> (
-         [weak] (ICoreWebView2*, ICoreWebView2ProcessFailedEventArgs*) -> HRESULT {
+         [weak] (ICoreWebView2*, ICoreWebView2ProcessFailedEventArgs* args) -> HRESULT {
             const auto self = weak.lock ();
-            if (!self) return S_OK;
-            core::Logger::warn ("webview: browser process failed; tearing down");
-            const auto notify = self->callbacks.on_process_failed;
-            self->teardown ();
-            if (notify) notify ();
+            if (!self || !self->alive) return S_OK;
+
+            COREWEBVIEW2_PROCESS_FAILED_KIND kind {};
+            args->get_ProcessFailedKind (&kind);
+            auto reason = fmt::format ("process kind={}", static_cast<int> (kind));
+            wil::com_ptr<ICoreWebView2ProcessFailedEventArgs2> args2;
+            if (SUCCEEDED (args->QueryInterface (IID_PPV_ARGS (args2.put ())))) {
+               COREWEBVIEW2_PROCESS_FAILED_REASON process_reason {};
+               INT32 exit_code = 0;
+               wil::unique_cotaskmem_string description;
+               args2->get_Reason (&process_reason);
+               args2->get_ExitCode (&exit_code);
+               args2->get_ProcessDescription (&description);
+               reason = fmt::format ("process kind={} reason={} exit={} description='{}'",
+                  static_cast<int> (kind), static_cast<int> (process_reason), exit_code,
+                  narrow (description.get ()));
+            }
+            self->fail (std::move (reason));
             return S_OK;
          }).Get (), nullptr);
 
-   return webview->Navigate (k_start_url);
+   hr = webview->Navigate (k_start_url);
+   if (FAILED (hr)) fail ("navigation request", hr);
+   return hr;
 }
 
 void WebviewHost::Impl::on_navigation_completed ()
@@ -295,14 +347,20 @@ void WebviewHost::Impl::on_navigation_completed ()
    if (callbacks.on_ready) callbacks.on_ready ();
 }
 
-void WebviewHost::Impl::fail (const char* stage, HRESULT hr)
+void WebviewHost::Impl::fail (std::string stage, HRESULT hr)
 {
-   core::Logger::error ("webview: {} failed (hr=0x{:08x})", stage,
-      static_cast<unsigned long> (hr));
+   fail (fmt::format ("{} hr=0x{:08x}", stage,
+      static_cast<unsigned long> (hr)));
+}
 
-   const auto notify = callbacks.on_process_failed;
+void WebviewHost::Impl::fail (std::string reason)
+{
+   if (!alive) return;
+   alive = false;
+   core::Logger::error ("webview: {}", reason);
+   const auto notify = callbacks.on_failed;
    teardown ();
-   if (notify) notify ();
+   if (notify) notify (std::move (reason));
 }
 
 void WebviewHost::Impl::teardown ()
@@ -360,7 +418,10 @@ void WebviewHost::capture_png (
    }
 
    wil::com_ptr<IStream> stream;
-   if (FAILED (::CreateStreamOnHGlobal (nullptr, TRUE, stream.put ()))) {
+   const HRESULT stream_hr = ::CreateStreamOnHGlobal (nullptr, TRUE, stream.put ());
+   if (FAILED (stream_hr)) {
+      core::Logger::error ("webview: snapshot stream failed hr=0x{:08x}",
+         static_cast<unsigned long> (stream_hr));
       callback ({});
       return;
    }
@@ -374,12 +435,17 @@ void WebviewHost::capture_png (
       Callback<ICoreWebView2CapturePreviewCompletedHandler> (
          [weak, stream, done] (HRESULT result) mutable -> HRESULT {
             if (FAILED (result) || weak.expired ()) {
+               if (FAILED (result)) {
+                  core::Logger::error ("webview: snapshot callback failed hr=0x{:08x}",
+                     static_cast<unsigned long> (result));
+               }
                (*done) ({});
                return S_OK;
             }
 
             HGLOBAL memory = nullptr;
             if (FAILED (::GetHGlobalFromStream (stream.get (), &memory)) || !memory) {
+               core::Logger::error ("webview: snapshot stream extraction failed");
                (*done) ({});
                return S_OK;
             }
@@ -387,6 +453,7 @@ void WebviewHost::capture_png (
             const auto size = static_cast<std::size_t> (::GlobalSize (memory));
             const auto* data = static_cast<const std::uint8_t*> (::GlobalLock (memory));
             if (!data || size == 0) {
+               core::Logger::error ("webview: snapshot stream empty size={}", size);
                if (data) ::GlobalUnlock (memory);
                (*done) ({});
                return S_OK;
@@ -398,7 +465,11 @@ void WebviewHost::capture_png (
             return S_OK;
          }).Get ());
 
-   if (FAILED (hr)) (*done) ({});
+   if (FAILED (hr)) {
+      core::Logger::error ("webview: CapturePreview failed hr=0x{:08x}",
+         static_cast<unsigned long> (hr));
+      (*done) ({});
+   }
 }
 
 } // namespace gv::ui

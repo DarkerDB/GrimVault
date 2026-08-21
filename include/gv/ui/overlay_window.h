@@ -4,6 +4,7 @@
 
 #include <QObject>
 #include <QRect>
+#include <QString>
 
 #include <cstdint>
 #include <filesystem>
@@ -32,8 +33,6 @@ public:
 
       // WebView2 user-data folder under the active LocalAppData directory.
       std::filesystem::path user_data_dir;
-
-      std::string renderer = "automatic";
    };
 
    explicit OverlayWindow (Config config, QObject* parent = nullptr);
@@ -43,20 +42,23 @@ public:
                  const QRect& game, const QRect& anchor, bool animate = true);
    void clear ();
    bool set_active (bool active);
-   void set_renderer (std::string renderer);
 
    // Live settings. Both are cheap and idempotent — SettingsBridge calls
    // them whenever the dashboard changes, including mid-hover.
    void set_layout  (const Layout& layout);
    void set_options (const augment::Options& options);
 
-   // Anchoring passthrough (WebView2 renderer only; QML is lookup-driven).
    void anchor_shown (const QRect& game, const QPoint& offset, const QSize& tip,
                       bool pinned_x, bool pinned_y, const QPoint& pin);
    void anchor_lost (bool immediate);
 
+signals:
+   void renderer_failed (const QString& reason);
+
 private:
-   void fall_back_to_qml (std::uint64_t generation);
+   void start_webview ();
+   void recover_webview (std::uint64_t generation, std::string reason);
+   void fail_webview (std::string reason);
 
    struct Impl;
    std::unique_ptr<Impl> impl_;

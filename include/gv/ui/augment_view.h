@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <string>
 
 namespace gv::api { struct TooltipLookup; }
 
@@ -25,8 +26,6 @@ namespace gv::ui {
 //       ▼                                        ▼
 //    WebviewHost ──► DDB.tooltips.render ──► ResizeObserver ──► place+show
 //
-// Placement mirrors the QML overlay: physical pixels, flip to the anchor's
-// left when the right side would overflow, clamped inside the game window.
 class AugmentView
 {
 public:
@@ -34,12 +33,17 @@ public:
    {
       std::filesystem::path web_dir;
       std::filesystem::path user_data_dir;
+      bool software_rendering = false;
    };
 
-   // on_failed: WebView2 unavailable or died and could not serve renders;
-   // the owner switches to the QML fallback renderer.
+   struct Callbacks
+   {
+      std::function<void ()> on_ready;
+      std::function<void (std::string)> on_failed;
+   };
+
    static core::Result<std::unique_ptr<AugmentView>> create (Config config,
-                                                             std::function<void ()> on_failed);
+                                                             Callbacks callbacks);
    ~AugmentView ();
 
    void present (const gv::api::TooltipLookup& lookup,

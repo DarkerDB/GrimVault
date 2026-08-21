@@ -23,6 +23,8 @@ public:
 
       // WebView2 user-data folder under the active LocalAppData directory.
       std::filesystem::path user_data_dir;
+
+      bool software_rendering = false;
    };
 
    struct Callbacks
@@ -30,9 +32,7 @@ public:
       std::function<void ()>                   on_ready;
       std::function<void (std::string_view)>   on_message;
 
-      // Browser process died or the runtime updated under us. The host has
-      // already torn down; owner decides whether to recreate or fall back.
-      std::function<void ()>                   on_process_failed;
+      std::function<void (std::string)>        on_failed;
    };
 
    // Fails fast when the Evergreen runtime is absent (returns the installed

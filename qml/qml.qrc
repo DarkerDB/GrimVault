@@ -3,27 +3,9 @@
       <file>qmldir</file>
       <file>Palette.qml</file>
       <file>StatusBadge.qml</file>
-      <file>Tooltip.qml</file>
-      <file>TooltipSection.qml</file>
-      <file>TooltipSectionHeader.qml</file>
-      <file>TooltipValueGrid.qml</file>
    </qresource>
    <qresource prefix="/assets/images">
-      <file alias="Background_TooltipBorder.png">../assets/images/Background_TooltipBorder.png</file>
-      <file alias="Background_TooltipTexture.png">../assets/images/Background_TooltipTexture.png</file>
-      <file alias="Tooltip_SeparatorThick.png">../assets/images/Tooltip_SeparatorThick.png</file>
-      <file alias="Tooltip_SeparatorThin.png">../assets/images/Tooltip_SeparatorThin.png</file>
-      <file alias="Icon_Gold.png">../assets/images/Icon_Gold.png</file>
       <file alias="Icon-324x356.png">../assets/images/Icon-324x356.png</file>
-      <file alias="tooltip/adornment-bottom.png">../assets/images/tooltip/adornment-bottom.png</file>
-      <file alias="tooltip/adornment-top.png">../assets/images/tooltip/adornment-top.png</file>
-      <file alias="tooltip/dots-separator.png">../assets/images/tooltip/dots-separator.png</file>
-      <file alias="tooltip/gold-coin.png">../assets/images/tooltip/gold-coin.png</file>
-      <file alias="tooltip/grimvault-mark.png">../assets/images/tooltip/grimvault-mark.png</file>
-      <file alias="tooltip/header-pattern.png">../assets/images/tooltip/header-pattern.png</file>
-      <file alias="tooltip/header-separator.png">../assets/images/tooltip/header-separator.png</file>
-      <file alias="tooltip/separator.png">../assets/images/tooltip/separator.png</file>
-      <file alias="tooltip/tooltip-bg.png">../assets/images/tooltip/tooltip-bg.png</file>
    </qresource>
    <qresource prefix="/assets/fonts">
       <file alias="SaintKDG_Light.ttf">../assets/fonts/SaintKDG_Light.ttf</file>

@@ -36,7 +36,6 @@ TEST (Preferences, DefaultsMatchTheServerSchema)
    const Preferences prefs;
 
    EXPECT_EQ (prefs.overlay_mode, Mode::Auto);
-   EXPECT_EQ (prefs.renderer, "automatic");
    EXPECT_EQ (prefs.layout.align, Align::Attached);
    EXPECT_DOUBLE_EQ (prefs.layout.opacity, 0.9);
    EXPECT_DOUBLE_EQ (prefs.layout.scale, 1.0);
@@ -54,7 +53,6 @@ TEST (Preferences, FoldsTheOverlayGroup)
 {
    const auto prefs = folded ({
       { "overlay:mode",      "manual" },
-      { "overlay:renderer",  "qml" },
       { "overlay:alignment", "bottom_right" },
       { "overlay:opacity",   "0.500000" },
       { "overlay:scale",     "1.250000" },
@@ -65,7 +63,6 @@ TEST (Preferences, FoldsTheOverlayGroup)
    });
 
    EXPECT_EQ (prefs.overlay_mode, Mode::Manual);
-   EXPECT_EQ (prefs.renderer, "qml");
    EXPECT_EQ (prefs.layout.align, Align::BottomRight);
    EXPECT_DOUBLE_EQ (prefs.layout.opacity, 0.5);
    EXPECT_DOUBLE_EQ (prefs.layout.scale, 1.25);
@@ -107,12 +104,10 @@ TEST (Preferences, DisabledModeClearsTheEnabledFlag)
    EXPECT_TRUE  (folded ({ { "overlay:mode", "automatic" } }).layout.enabled);
 }
 
-TEST (Preferences, FoldsRenderer)
+TEST (Preferences, IgnoresRemovedRenderer)
 {
-   EXPECT_EQ (folded ({ { "overlay:renderer", "webview" } }).renderer, "webview");
-   EXPECT_EQ (folded ({ { "overlay:renderer", "qml" } }).renderer, "qml");
-   EXPECT_EQ (folded ({ { "overlay:renderer", "invalid" } }).renderer, "automatic");
-   EXPECT_EQ (folded ({ { "overlay:renderer", "" } }).renderer, "automatic");
+   Preferences prefs;
+   EXPECT_FALSE (apply (prefs, "overlay:renderer", "qml"));
 }
 
 TEST (Preferences, ClampsNumbersOutOfRange)

@@ -164,7 +164,7 @@ set (CPACK_CREATE_DESKTOP_LINKS           "grimvault")
 # tools/build/MicrosoftEdgeWebView2Setup.exe, not committed) and run it
 # silently when the EdgeUpdate client key is absent. Per-user install, so
 # no UAC. Without the bootstrapper file the installer still builds; the app
-# then falls back to the QML renderer on machines missing the runtime.
+# reports the missing runtime through the tray and support log.
 set (grimvault_cpack_assets "${CMAKE_BINARY_DIR}/cpack-assets")
 file (MAKE_DIRECTORY "${grimvault_cpack_assets}")
 

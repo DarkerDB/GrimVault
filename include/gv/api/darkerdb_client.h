@@ -17,9 +17,6 @@ namespace gv::auth { class Session;   }
 
 namespace gv::api {
 
-// Per contract §4.3, pricing is currency + (low, median, high) + provenance.
-// `market` is retained as an alias for `median` so the existing overlay
-// keeps rendering until the QML is updated.
 struct Pricing {
    std::string       currency    = "gold";
    std::int64_t      low         = 0;
@@ -319,7 +316,6 @@ struct TooltipLookup {
 struct SettingsBundle {
    struct Overlay {
       std::string  mode      = "automatic";
-      std::string  renderer  = "automatic";
       std::string  alignment = "attached";
       std::string  columns   = "auto";
       double       opacity   = 0.9;
