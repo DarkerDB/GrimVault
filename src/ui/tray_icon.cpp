@@ -1,5 +1,6 @@
 #include <gv/ui/tray_icon.h>
 
+#include <gv/core/logger.h>
 #include <gv/core/version.h>
 
 #include <QCursor>
@@ -38,6 +39,7 @@ TrayIcon::TrayIcon (QObject* parent)
       });
 
    QSystemTrayIcon::show ();
+   core::Logger::info ("tray: visible={}", isVisible ());
 }
 
 TrayIcon::~TrayIcon () = default;

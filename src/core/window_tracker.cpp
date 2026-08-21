@@ -129,23 +129,11 @@ struct WindowTracker::Impl
    // Full candidate check. Title alone is spoofable by any window that
    // happens to mention the game (browser tab, Discord); class + process
    // pin the match to the actual game window.
-   bool window_matches (HWND hwnd, bool log_rejection = true)
+   bool window_matches (HWND hwnd)
    {
-      if (!title_matches (hwnd, needle)) return false;
-
-      if (!class_matches (hwnd, want_class) || !process_matches (hwnd, want_process)) {
-         if (log_rejection) {
-            wchar_t cls [128] {};
-            ::GetClassNameW (hwnd, cls, 128);
-            char cls_utf8 [256] {};
-            ::WideCharToMultiByte (CP_UTF8, 0, cls, -1, cls_utf8,
-               sizeof cls_utf8, nullptr, nullptr);
-            Logger::info ("window_tracker: candidate rejected — title matched but "
-               "class/process did not (class='{}')", cls_utf8);
-         }
-         return false;
-      }
-      return true;
+      return class_matches (hwnd, want_class)
+         && process_matches (hwnd, want_process)
+         && title_matches (hwnd, needle);
    }
 
    bool target_is_valid (HWND hwnd) const
@@ -244,7 +232,7 @@ struct WindowTracker::Impl
    {
       // Prefer the foreground game when multiple matching windows exist.
       if (HWND foreground = ::GetForegroundWindow ();
-          foreground && window_matches (foreground, /*log_rejection=*/ false)) {
+          foreground && window_matches (foreground)) {
          return foreground;
       }
 
@@ -252,7 +240,7 @@ struct WindowTracker::Impl
       ::EnumWindows ([] (HWND hwnd, LPARAM lp) -> BOOL {
          auto* c = reinterpret_cast<ProbeCtx*> (lp);
          if (!::IsWindowVisible (hwnd)) return TRUE;
-         if (!c->self->window_matches (hwnd, /*log_rejection=*/ false)) return TRUE;
+         if (!c->self->window_matches (hwnd)) return TRUE;
          c->found = hwnd;
          return FALSE;
       }, reinterpret_cast<LPARAM> (&ctx));
@@ -385,11 +373,6 @@ struct WindowTracker::Impl
             std::string { config.process_name });
       }
 
-      // Initial probe — if the game is already running we won't get a
-      // foreground event for it. EnumWindows + the full matcher, not
-      // FindWindowW: exact-title lookup can't apply the class/process checks.
-      if (config.emit_on_start) reconcile ();
-
       if (config.reconcile_interval_ms > 0) {
          reconcile_timer = ::SetTimer (nullptr, 0, config.reconcile_interval_ms, nullptr);
          if (!reconcile_timer) {
@@ -402,6 +385,8 @@ struct WindowTracker::Impl
 
       { std::lock_guard lk { ready_mtx }; set = true; }
       ready.notify_one ();
+
+      if (config.emit_on_start) reconcile ();
 
       MSG msg;
       while (::GetMessage (&msg, nullptr, 0, 0) > 0) {
