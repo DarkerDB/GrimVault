@@ -323,3 +323,84 @@ TEST (CaptureServiceTest, AutomaticModeRejectsManualOnlyBackend)
    EXPECT_EQ    (service->mode (), capture::CaptureMode::ForceGdi);
    EXPECT_EQ    (service->current ().name (), "gdi.bitblt");
 }
+
+TEST (CaptureServiceTest, DemoteAdvancesTheLadderWithoutACaptureFailure)
+{
+   capture::CaptureService::Strategies strategies;
+   auto wgc  = append (strategies, "wgc.borderless", true);
+   auto dxgi = append (strategies, "dxgi.duplication", true);
+
+   auto service = create (std::move (strategies));
+   ASSERT_NE (service, nullptr);
+   EXPECT_EQ (service->current ().name (), "wgc.borderless");
+
+   const auto cause = core::Error::make (
+      core::ErrorKind::Capture, "wgc: latest_frame timeout");
+   EXPECT_TRUE (service->demote (cause));
+   EXPECT_EQ   (service->current ().name (), "dxgi.duplication");
+   EXPECT_EQ   (wgc->shutdown_calls, 1);
+   EXPECT_EQ   (wgc->capture_calls, 0);
+   EXPECT_EQ   (dxgi->init_calls, 1);
+}
+
+TEST (CaptureServiceTest, DemoteKeepsTheBackendUntilTheTargetChanges)
+{
+   capture::CaptureService::Strategies strategies;
+   auto wgc = append (strategies, "wgc.borderless", true);
+   append (strategies, "dxgi.duplication", true);
+
+   auto service = create (std::move (strategies));
+   ASSERT_NE (service, nullptr);
+
+   auto* first  = reinterpret_cast<void*> (std::uintptr_t { 1 });
+   auto* second = reinterpret_cast<void*> (std::uintptr_t { 2 });
+   ASSERT_TRUE (service->capture_window (first).has_value ());
+
+   ASSERT_TRUE (service->demote (core::Error::make (
+      core::ErrorKind::Capture, "wgc: latest_frame timeout")));
+   EXPECT_EQ (service->current ().name (), "dxgi.duplication");
+
+   ASSERT_TRUE (service->capture_window (first).has_value ());
+   EXPECT_EQ   (service->current ().name (), "dxgi.duplication");
+
+   ASSERT_TRUE (service->capture_window (second).has_value ());
+   EXPECT_EQ   (service->current ().name (), "wgc.borderless");
+   EXPECT_EQ   (wgc->init_calls, 2);
+}
+
+TEST (CaptureServiceTest, DemoteIsRefusedInAForcedMode)
+{
+   capture::CaptureService::Strategies strategies;
+   auto wgc  = append (strategies, "wgc.borderless", true);
+   auto dxgi = append (strategies, "dxgi.duplication", true);
+
+   auto service = create (std::move (strategies));
+   ASSERT_NE (service, nullptr);
+   ASSERT_TRUE (service->set_mode (capture::CaptureMode::ForceWgc).has_value ());
+
+   EXPECT_FALSE (service->demote (core::Error::make (
+      core::ErrorKind::Capture, "wgc: latest_frame timeout")));
+   EXPECT_EQ    (service->current ().name (), "wgc.borderless");
+   EXPECT_EQ    (dxgi->init_calls, 0);
+   EXPECT_EQ    (wgc->shutdown_calls, 0);
+}
+
+TEST (CaptureServiceTest, DemoteStopsAtTheEndOfTheAutomaticLadder)
+{
+   capture::CaptureService::Strategies strategies;
+   append (strategies, "wgc.borderless", true);
+   auto dxgi = append (strategies, "dxgi.duplication", true);
+   auto gdi  = append (strategies, "gdi.bitblt", true);
+
+   auto service = create (std::move (strategies));
+   ASSERT_NE (service, nullptr);
+
+   const auto cause = core::Error::make (
+      core::ErrorKind::Capture, "wgc: latest_frame timeout");
+   EXPECT_TRUE  (service->demote (cause));
+   EXPECT_EQ    (service->current ().name (), "dxgi.duplication");
+   EXPECT_FALSE (service->demote (cause));
+   EXPECT_EQ    (service->current ().name (), "dxgi.duplication");
+   EXPECT_EQ    (gdi->init_calls, 0);
+   EXPECT_EQ    (dxgi->shutdown_calls, 0);
+}

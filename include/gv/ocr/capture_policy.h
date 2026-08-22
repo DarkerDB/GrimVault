@@ -1,10 +1,22 @@
 #pragma once
 
 #include <algorithm>
+#include <chrono>
 
 namespace gv::ocr {
 
 inline constexpr double minimum_capture_fps = 3.0;
+
+inline constexpr int continuous_error_limit = 3;
+
+inline constexpr std::chrono::milliseconds continuous_backoff_min { 2000 };
+inline constexpr std::chrono::milliseconds continuous_backoff_max { 60000 };
+
+constexpr std::chrono::milliseconds next_continuous_backoff (
+   std::chrono::milliseconds current) noexcept
+{
+   return std::min (current * 2, continuous_backoff_max);
+}
 
 constexpr bool capture_active (
    bool enabled, bool automatic, bool tracking, bool forced) noexcept

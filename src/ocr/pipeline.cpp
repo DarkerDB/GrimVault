@@ -213,11 +213,32 @@ struct Pipeline::Impl
    {
       void* current_target  = nullptr;
       bool  session_active  = false;
-      bool  continuous_ok   = true;   // flips false after a failed (re)start
       int   continuous_errors = 0;
+      auto  continuous_backoff = continuous_backoff_min;
+      auto  continuous_retry_at = std::chrono::steady_clock::now ();
       auto  applied_mode    = capture.mode ();
       int   dropped_frames  = 0;
       auto  last_drop_report = std::chrono::steady_clock::now ();
+
+      const auto rearm_continuous = [&] {
+         continuous_errors   = 0;
+         continuous_backoff  = continuous_backoff_min;
+         continuous_retry_at = std::chrono::steady_clock::now ();
+      };
+
+      const auto degrade_continuous = [&] (const core::Error& cause) {
+         if (session_active) {
+            capture.stop_continuous ();
+            session_active = false;
+         }
+         if (capture.demote (cause)) {
+            rearm_continuous ();
+            return;
+         }
+         continuous_errors   = 0;
+         continuous_retry_at = std::chrono::steady_clock::now () + continuous_backoff;
+         continuous_backoff  = next_continuous_backoff (continuous_backoff);
+      };
 
       while (running.load (std::memory_order_relaxed)) {
          // The service is owned by this thread once the loop runs, so mode
@@ -234,10 +255,9 @@ struct Pipeline::Impl
                core::Logger::warn ("pipeline: capture mode {} rejected: {}",
                   capture::capture_mode_name (want_mode), r.error ().message);
             }
-            applied_mode      = want_mode;
-            current_target    = nullptr;
-            continuous_ok     = true;
-            continuous_errors = 0;
+            applied_mode   = want_mode;
+            current_target = nullptr;
+            rearm_continuous ();
          }
 
          void* now_target = window.load ();
@@ -249,10 +269,8 @@ struct Pipeline::Impl
                auto_scan,
                tracking.load (std::memory_order_relaxed),
                forced)) {
-            if (session_active) {
-               capture.stop_continuous ();
-               session_active = false;
-            }
+            capture.stop_continuous ();
+            session_active = false;
             std::this_thread::sleep_for (std::chrono::milliseconds (100));
             continue;
          }
@@ -262,10 +280,8 @@ struct Pipeline::Impl
          // nothing to find. A forced scan (F5) still grabs one monitor
          // frame so desktop testing works without the game.
          if (!capture_targeted (now_target != nullptr, forced)) {
-            if (session_active) {
-               capture.stop_continuous ();
-               session_active = false;
-            }
+            capture.stop_continuous ();
+            session_active = false;
             std::this_thread::sleep_for (std::chrono::milliseconds (250));
             continue;
          }
@@ -273,23 +289,22 @@ struct Pipeline::Impl
          // (Re)start the continuous session when the target changed or the
          // session was torn down during a no-window pause.
          const bool target_changed = now_target != current_target;
-         if (target_changed) {
-            continuous_ok = true;
-            continuous_errors = 0;
-         }
-         const bool can_continuous = capture.supports_continuous ();
-         if (can_continuous && continuous_ok
+         if (target_changed) rearm_continuous ();
+
+         const bool retry_due =
+            std::chrono::steady_clock::now () >= continuous_retry_at;
+         if (capture.supports_continuous () && retry_due
                && (!session_active || target_changed)) {
             if (session_active) capture.stop_continuous ();
             auto r = capture.start_continuous (
                now_target, /*is_window=*/ now_target != nullptr);
             session_active = r.has_value ();
-            if (!session_active) {
-               core::Logger::warn ("pipeline: continuous start failed: {}; falling back to per-call",
-                  r.error ().message);
-               continuous_ok = false;
-            } else {
+            if (session_active) {
                continuous_errors = 0;
+            } else {
+               core::Logger::warn ("pipeline: continuous start failed: {}",
+                  r.error ().message);
+               degrade_continuous (r.error ());
             }
          }
          current_target = now_target;
@@ -299,17 +314,12 @@ struct Pipeline::Impl
 
          if (session_active) {
             frame_res = capture.latest_frame (std::chrono::milliseconds (200));
-            if (!frame_res.has_value ()) {
-               ++continuous_errors;
-               if (continuous_errors >= 3) {
-                  core::Logger::warn (
-                     "pipeline: continuous capture failed repeatedly; falling back to per-call");
-                  capture.stop_continuous ();
-                  session_active = false;
-                  continuous_ok = false;
-               }
-            } else {
+            if (frame_res.has_value ()) {
                continuous_errors = 0;
+            } else if (++continuous_errors >= continuous_error_limit) {
+               core::Logger::warn ("pipeline: continuous capture failed repeatedly: {}",
+                  frame_res.error ().message);
+               degrade_continuous (frame_res.error ());
             }
          } else {
             frame_res = now_target

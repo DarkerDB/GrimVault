@@ -63,6 +63,8 @@ public:
    core::Result<Frame> latest_frame (std::chrono::milliseconds timeout);
    void                stop_continuous () noexcept;
 
+   bool demote (const core::Error& cause);
+
    // Switch to a different strategy by name (e.g. for diagnostics).
    core::Result<void> switch_to (std::string_view strategy_name);
 

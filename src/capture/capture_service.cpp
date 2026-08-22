@@ -330,6 +330,11 @@ void CaptureService::stop_continuous () noexcept
    impl_->current ().stop_continuous ();
 }
 
+bool CaptureService::demote (const core::Error& cause)
+{
+   return impl_->activate_next (cause);
+}
+
 core::Result<void> CaptureService::switch_to (std::string_view strategy_name)
 {
    for (std::size_t i = 0; i < impl_->entries.size (); ++i) {
