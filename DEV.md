@@ -155,7 +155,7 @@ age, locator cost, and hash-distance summaries in:
 ```
 
 From WSL/Codex the same directory is directly readable at
-`/mnt/c/Users/Ethan/AppData/Local/GrimVault/<env>/logs`; no log copy/paste is
+`/mnt/c/Users/<you>/AppData/Local/GrimVault/<env>/logs`; no log copy/paste is
 needed. Production omits the `<env>` directory. Summarize the newest session with:
 
 ```bash
@@ -224,10 +224,9 @@ do not include the source-only command.
 
 ## Bundled test data
 
-All tooltip and language ONNX models are committed under `models/`. GrimVault
-ships the trained artifacts only — the training pipelines, their corpora and
-the tooltip fonts live in the `scry` package (`packages/scry/training`), which
-is private because those fonts are not cleared for redistribution.
+All tooltip and language ONNX models are committed under `models/`. Raw
+training corpora, checkpoints, and internal training infrastructure are not
+part of this public repository.
 
 ## Useful one-offs
 

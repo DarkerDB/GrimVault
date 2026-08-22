@@ -10,8 +10,6 @@
 
 namespace gv::vision {
 
-// Shipped detector exports, produced by packages/scry/training/detection.
-//
 // The name carries the two parameters that distinguish them — architecture
 // and input edge — because a models/ directory holding several .onnx files
 // should be readable without loading any of them. Everything else about the

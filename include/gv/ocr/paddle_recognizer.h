@@ -43,6 +43,7 @@ public:
    // English may provide an independently trained title-face model beside
    // the body recognizer. Other languages transparently use the body model.
    bool has_title_model () const noexcept;
+   bool is_wide () const noexcept;
 
    LanguageFamily family () const noexcept;
    void           set_family (LanguageFamily f) noexcept;

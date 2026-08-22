@@ -8,6 +8,7 @@ All notable changes to this project will be documented in this file.
 - Hardened WebView2 startup with clean-profile and software-rendering recovery
 - Removed the alternate QML tooltip renderer
 - Fixed dashboard hotkeys using F6 through F8
+- Added game-font OCR models for every supported language
 
 ## [0.0.5] - 2026-08-15
 

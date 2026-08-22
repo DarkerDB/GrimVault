@@ -9,8 +9,7 @@ namespace gv::ocr {
 // Each name carries what distinguishes one recognizer from another: who
 // trained it and the line geometry it expects. `ppocr` is stock PaddleOCR,
 // whose character set is the family dictionary; `tooltip` is ours, trained
-// against the game's own faces on a printable-ASCII charset, which is why it
-// pairs with a different, much smaller dictionary.
+// against the game's own faces on a generated current-game character set.
 //
 // A dictionary is named for the model it belongs to, not the directory, so a
 // family holding two charsets cannot mispair them. Body and title share one

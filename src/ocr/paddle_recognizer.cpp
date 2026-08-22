@@ -30,7 +30,6 @@ namespace {
    // a median hover spends ~54 ms in this function against ~6 ms detecting.
    constexpr int k_model_height       = 48;
    constexpr int k_default_model_width = 320;
-   constexpr int k_english_model_width = 960;
 
 } // namespace
 
@@ -43,6 +42,7 @@ struct Session
    std::string input_name;
    std::string output_name;
    bool        directml = false;
+   int         width = k_default_model_width;
 
    explicit operator bool () const noexcept { return session != nullptr; }
 };
@@ -82,6 +82,8 @@ struct PaddleRecognizer::Impl
       Ort::AllocatorWithDefaultOptions allocator;
       out.input_name  = out.session->GetInputNameAllocated (0, allocator).get ();
       out.output_name = out.session->GetOutputNameAllocated (0, allocator).get ();
+      const auto shape = out.session->GetInputTypeInfo (0).GetTensorTypeAndShapeInfo ().GetShape ();
+      if (shape.size () == 4 && shape [3] > 0) out.width = static_cast<int> (shape [3]);
       out.directml    = gpu;
       return out;
    }
@@ -120,11 +122,10 @@ PaddleRecognizer::~PaddleRecognizer () = default;
 
 LanguageFamily PaddleRecognizer::family () const noexcept                  { return impl_->family; }
 bool PaddleRecognizer::has_title_model () const noexcept                   { return impl_->title_loaded; }
+bool PaddleRecognizer::is_wide () const noexcept                           { return impl_->model_width > k_default_model_width; }
 void           PaddleRecognizer::set_family (LanguageFamily f) noexcept
 {
    impl_->family = f;
-   impl_->model_width = f == LanguageFamily::English
-      ? k_english_model_width : k_default_model_width;
 }
 
 core::Result<void> PaddleRecognizer::initialize (
@@ -140,10 +141,11 @@ core::Result<void> PaddleRecognizer::initialize (
          impl_->net = impl_->load (model_path, false);
       }
       impl_->loaded = true;
+      impl_->model_width = impl_->net.width;
       impl_->title_loaded = false;
 
       const auto title_path = model_path.parent_path () / model_files::rec_tooltip_title;
-      if (impl_->family == LanguageFamily::English
+      if (model_path.filename () == model_files::rec_tooltip_body
           && std::filesystem::exists (title_path)) {
          try {
             impl_->title_net = impl_->load (title_path, impl_->net.directml);

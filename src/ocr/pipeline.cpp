@@ -860,7 +860,7 @@ struct Pipeline::Impl
                const std::vector<cv::Range> whole_line {
                   cv::Range { 0, line.cols }
                };
-               if (family == LanguageFamily::English && is_title) {
+               if (is_title && (*rec)->has_title_model ()) {
                   // The font-trained model learns spaces and punctuation as
                   // CTC classes. Feed the complete title once; geometric word
                   // splitting created false boundaries inside serif names.
@@ -873,7 +873,7 @@ struct Pipeline::Impl
                      ++conf_n;
                   }
                } else {
-                  const auto chunks = family == LanguageFamily::English
+                  const auto chunks = (*rec)->is_wide ()
                      ? whole_line : preprocess::col_chunks (line);
                   for (const auto& chunk : chunks) {
                      if (item.generation != generation.load (std::memory_order_relaxed)) break;
@@ -912,7 +912,6 @@ struct Pipeline::Impl
                text += line_text;
 
                if (!preliminary_sent && is_title
-                   && family == LanguageFamily::English
                    && line_text.size () >= 2 && line_confidence >= 0.65f
                    && item.generation == generation.load (std::memory_order_relaxed)
                    && callback) {

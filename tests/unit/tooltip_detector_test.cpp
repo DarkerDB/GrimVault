@@ -10,9 +10,6 @@
 
 TEST (TooltipDetector, DetectsHeldOutTooltip)
 {
-   // One held-out capture, vendored here rather than read from the training
-   // corpus: that corpus lives in packages/scry now, and this test has to
-   // stand on its own in a GrimVault checkout.
    const auto root = std::filesystem::path { GRIMVAULT_TEST_SOURCE_DIR };
    const auto image_path = root / "tests" / "fixtures"
       / "tooltip_0033_20251028_171457_539.jpg";

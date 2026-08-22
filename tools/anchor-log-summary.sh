@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-user_home="/mnt/c/Users/${GRIMVAULT_WINDOWS_USER:-Ethan}/AppData"
+user_home="/mnt/c/Users/${GRIMVAULT_WINDOWS_USER:-$USER}/AppData"
 if [[ $# -gt 0 ]]; then
   search_dirs=("$1")
 else

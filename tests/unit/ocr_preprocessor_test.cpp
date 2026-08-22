@@ -4,6 +4,7 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
@@ -114,6 +115,7 @@ TEST (FontOcrModel, LoadsAndRunsInOpenCvDnn)
    const auto initialized = rec.initialize (
       base / gv::ocr::model_files::rec_tooltip_body, base / gv::ocr::model_files::rec_tooltip_dict);
    ASSERT_TRUE (initialized.has_value ()) << initialized.error ().message;
+   EXPECT_TRUE (rec.is_wide ());
    EXPECT_EQ (rec.has_title_model (), fs::exists (base / gv::ocr::model_files::rec_tooltip_title));
 
    cv::Mat line { 32, 180, CV_8UC4, cv::Scalar { 8, 8, 8, 255 } };
@@ -130,22 +132,11 @@ TEST (FontOcrModel, LocalCapturedCorpusMatchesProductionOpenCv)
    namespace fs = std::filesystem;
    const fs::path root { GRIMVAULT_TEST_SOURCE_DIR };
 
-   // The labelled corpus lives with the training pipeline in the scry
-   // package, which is a sibling checkout rather than a dependency. Look
-   // beside GrimVault first so a self-contained tree still works, then in the
-   // workspace; skip when neither is present, as a release checkout will be.
-   const fs::path bases [] = {
-      root / "tools/ocr-train",
-      root / "../../packages/scry/training/ocr",
-   };
-   fs::path corpus;
-   for (const auto& base : bases) {
-      if (fs::exists (base / "real-train.tsv") && fs::exists (base / "real-crops")) {
-         corpus = base;
-         break;
-      }
-   }
-   if (corpus.empty ())
+   const char* corpus_env = std::getenv ("GRIMVAULT_OCR_CORPUS_DIR");
+   if (!corpus_env)
+      GTEST_SKIP () << "local labelled OCR corpus not present";
+   const fs::path corpus { corpus_env };
+   if (!fs::exists (corpus / "real-train.tsv") || !fs::exists (corpus / "real-crops"))
       GTEST_SKIP () << "local labelled OCR corpus not present";
 
    const auto manifest = corpus / "real-train.tsv";

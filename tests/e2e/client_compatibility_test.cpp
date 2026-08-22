@@ -28,10 +28,10 @@ struct Model {
 
 constexpr std::array models {
    Model { LanguageFamily::English, "en",     gv::ocr::model_files::rec_tooltip_body,  gv::ocr::model_files::rec_tooltip_dict },
-   Model { LanguageFamily::Latin,   "latin",  gv::ocr::model_files::rec_ppocr_narrow, gv::ocr::model_files::rec_ppocr_narrow_dict },
-   Model { LanguageFamily::Eslav,   "eslav",  gv::ocr::model_files::rec_ppocr_narrow, gv::ocr::model_files::rec_ppocr_narrow_dict },
-   Model { LanguageFamily::Korean,  "korean", gv::ocr::model_files::rec_ppocr_narrow, gv::ocr::model_files::rec_ppocr_narrow_dict },
-   Model { LanguageFamily::Chinese, "ch",     gv::ocr::model_files::rec_ppocr_narrow, gv::ocr::model_files::rec_ppocr_narrow_dict },
+   Model { LanguageFamily::Latin,   "latin",  gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict },
+   Model { LanguageFamily::Eslav,   "eslav",  gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict },
+   Model { LanguageFamily::Korean,  "korean", gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict },
+   Model { LanguageFamily::Chinese, "ch",     gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict },
 };
 
 cv::Mat gem_line (const cv::Scalar& bgra, double scale)
@@ -62,6 +62,7 @@ TEST (ClientCompatibilityE2E, EveryBundledLanguageModelLoadsAndRuns)
       const auto initialized = recognizer.initialize (
          base / model.network, base / model.dictionary);
       ASSERT_TRUE (initialized.has_value ()) << initialized.error ().message;
+      EXPECT_TRUE (recognizer.is_wide ());
 
       cv::Mat sample { 40, 260, CV_8UC4, cv::Scalar { 8, 8, 8, 255 } };
       cv::putText (sample, "123 + 45%", { 16, 29 }, cv::FONT_HERSHEY_SIMPLEX,
@@ -95,6 +96,7 @@ TEST (ClientCompatibilityE2E, CapturedEnglishTooltipRunsAcrossDisplayScales)
       root / "models/paddle/en" / gv::ocr::model_files::rec_tooltip_body,
       root / "models/paddle/en" / gv::ocr::model_files::rec_tooltip_dict);
    ASSERT_TRUE (initialized.has_value ()) << initialized.error ().message;
+   EXPECT_TRUE (recognizer.is_wide ());
 
    for (const auto& bounds : lines) {
       const cv::Mat original = tooltip (bounds).clone ();

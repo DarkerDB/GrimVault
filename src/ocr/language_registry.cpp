@@ -21,11 +21,7 @@ core::Result<LanguageRegistry::Lease> LanguageRegistry::acquire (LanguageFamily 
 
    const auto base = models_root_ / "paddle" / std::string { family_dir (family) };
 
-   // English prefers our tooltip-trained recognizer and falls back to stock
-   // PaddleOCR; every other family only has stock. The wide 48x960 line is
-   // the English geometry either way.
-   const bool tooltip_model = family == LanguageFamily::English
-      && std::filesystem::exists (base / model_files::rec_tooltip_body)
+   const bool tooltip_model = std::filesystem::exists (base / model_files::rec_tooltip_body)
       && std::filesystem::exists (base / model_files::rec_tooltip_dict);
 
    const auto stock = family == LanguageFamily::English
