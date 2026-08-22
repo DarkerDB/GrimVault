@@ -21,6 +21,16 @@ One-shot from any Windows PowerShell:
 wsl.exe bash -lc 'cd ~/.katforge/realms/grimvault && pwsh.exe -File "$(wslpath -w tools/run-dev.ps1)"'
 ```
 
+Start the KATforge dev runtime first:
+
+```bash
+hearth setup --start
+```
+
+Hearth opens a read-only pricing tunnel to the production ClickHouse feed.
+The dev API runs the local pricing code and stores its own hourly roll model
+in dev Postgres. Tests continue using the isolated local ClickHouse database.
+
 or from a WSL shell:
 
 ```bash
@@ -75,7 +85,7 @@ configures are cached.
 - Main window opens (if you click the tray). Six pages in the left rail.
 - Dashboard / Items / Pricing / Settings / Diagnostics / Logs.
 - Ctrl+Shift+P opens the command palette.
-- Pricing lookups hit https://api.darkerdb.com (network needed).
+- Pricing lookups hit https://api.dev.darkerdb.com and use the live market feed.
 - Capture probes WGC/DXGI/GDI at startup, then advances through the same ladder after three consecutive runtime failures.
 - WGC will fail if no foreground game window — that's expected without
   Dark and Darker running. The pipeline reports the failure and stays idle.
