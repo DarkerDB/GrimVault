@@ -46,6 +46,7 @@ public:
       LanguageFamily              language           = LanguageFamily::Latin;
       std::filesystem::path       evidence_dir;
       std::uintmax_t              evidence_max_bytes = 250ull * 1024ull * 1024ull;
+      std::filesystem::path       collector_dir;
    };
 
    // Once a tooltip settles,
@@ -106,7 +107,7 @@ public:
 
    void set_performance_mode (bool on);
 
-   void set_language (LanguageFamily f);
+   void set_language (std::string locale);
 
    // True only while `generation` still belongs to the current tooltip.
    bool is_current (std::uint64_t generation) const noexcept;

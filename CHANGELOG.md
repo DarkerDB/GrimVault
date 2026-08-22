@@ -9,6 +9,7 @@ All notable changes to this project will be documented in this file.
 - Removed the alternate QML tooltip renderer
 - Fixed dashboard hotkeys using F6 through F8
 - Added game-font OCR models for every supported language
+- Added opt-in collection of localized tooltip crops for OCR training
 
 ## [0.0.5] - 2026-08-15
 

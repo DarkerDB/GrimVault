@@ -625,7 +625,7 @@ void Controller::set_language (std::string selection)
    }
 
    const auto family = ocr::family_of (*resolved);
-   if (impl_->deps.pipeline) impl_->deps.pipeline->set_language (family);
+   if (impl_->deps.pipeline) impl_->deps.pipeline->set_language (*resolved);
    core::Logger::info ("controller: game language '{}' source={} (ocr family '{}')",
       *resolved, source, std::string { ocr::family_dir (family) });
 }

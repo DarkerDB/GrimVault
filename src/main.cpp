@@ -290,6 +290,7 @@ namespace {
       bool   highlight_game    = false;
       bool   detect_only   = false;
       bool   ocr_only      = false;
+      bool   collect_ocr   = false;
       double fcr           = 0.0;   // frames/s while active; 0 = default
    };
 
@@ -586,6 +587,12 @@ namespace {
             pipe_cfg.evidence_dir = data_dir / "evidence";
             gv::core::Logger::info ("Evidence directory: {}",
                pipe_cfg.evidence_dir.string ());
+         }
+         if (opts.collect_ocr) {
+            const auto root = active_env.name == "prod" ? data_dir : data_dir.parent_path ();
+            pipe_cfg.collector_dir = root / "ocr-samples" / "inbox";
+            gv::core::Logger::info ("OCR collector directory: {}",
+               pipe_cfg.collector_dir.string ());
          }
 
          pipeline = std::make_unique<gv::ocr::Pipeline> (
@@ -1096,7 +1103,8 @@ int main (int argc, char** argv)
           || a == "--debug"  || a.rfind ("--debug=", 0) == 0
           || a == "--detached"
           || a == "--detect-only"
-          || a == "--ocr-only";
+          || a == "--ocr-only"
+          || a == "--collect-ocr";
    };
 
    const bool all_gui_flags = !cli_args.empty () &&
@@ -1117,6 +1125,7 @@ int main (int argc, char** argv)
          if (a == "--debug" || a.rfind ("--debug=", 0) == 0) apply_debug_option (opts, a);
          if (a == "--detect-only")   opts.detect_only   = true;
          if (a == "--ocr-only")      opts.ocr_only      = true;
+         if (a == "--collect-ocr")   opts.collect_ocr   = true;
       }
       return run_gui (argc, argv, opts);
    }

@@ -1,5 +1,6 @@
 #include <gv/ocr/pipeline.h>
 #include <gv/ocr/capture_policy.h>
+#include <gv/ocr/collector.h>
 #include <gv/ocr/evidence.h>
 #include <gv/ocr/preprocessor.h>
 #include <gv/ocr/tooltip_state.h>
@@ -130,8 +131,9 @@ struct Pipeline::Impl
    Impl (capture::CaptureService& c, vision::TooltipDetector& d, LanguageRegistry& r, Config cfg)
       : capture (c), detector (d), registry (r), config (std::move (cfg)),
         evidence (config.evidence_dir, config.evidence_max_bytes),
+        collector (config.collector_dir),
         capture_fps (std::clamp (config.capture_fps, minimum_capture_fps, 60.0)),
-        capture_mode (c.mode ())
+        capture_mode (c.mode ()), language (config.language)
    {}
 
    capture::CaptureService&  capture;
@@ -139,6 +141,7 @@ struct Pipeline::Impl
    LanguageRegistry&         registry;
    Config                    config;
    Evidence                  evidence;
+   Collector                 collector;
    std::atomic<double>       capture_fps;
    std::atomic<capture::CaptureMode> capture_mode { capture::CaptureMode::Automatic };
 
@@ -151,7 +154,9 @@ struct Pipeline::Impl
    std::atomic<bool>         reset_requested { false };
    std::atomic<std::uint64_t> generation { 0 };
    std::atomic<void*>        window    { nullptr };
-   std::atomic<LanguageFamily> language { LanguageFamily::Latin };
+   std::mutex                language_lock;
+   LanguageFamily            language;
+   std::string               locale { "en" };
 
    std::thread               capture_thread;
    std::thread               vision_thread;
@@ -722,7 +727,13 @@ struct Pipeline::Impl
             continue;
          }
 
-         const auto family = language.load (std::memory_order_relaxed);
+         LanguageFamily family;
+         std::string locale_name;
+         {
+            std::lock_guard lock { language_lock };
+            family = language;
+            locale_name = locale;
+         }
          const auto identity_key = item.observation.identity.key ();
          if (!item.refresh) {
             const auto found = std::find_if (cache.begin (), cache.end (), [&] (const Cached& value) {
@@ -892,7 +903,7 @@ struct Pipeline::Impl
                if (line_confidence_n > 1) line_confidence /= line_confidence_n;
                if (family == LanguageFamily::Latin)
                   canonicalize_latin (line_text);
-               if (evidence.enabled ()) {
+               if (evidence.enabled () || collector.enabled ()) {
                   evidence_lines.push_back (EvidenceLine {
                      .image = line.clone (), .source_band = source_index,
                      .title = is_title, .prediction = line_text,
@@ -958,6 +969,9 @@ struct Pipeline::Impl
             const float confidence = conf_n ? conf_sum / conf_n : 0.0f;
             evidence.ocr (
                item.generation, crop, evidence_lines, text, confidence);
+            collector.save (
+               item.generation, locale_name, identity_key, box.rect,
+               crop, evidence_lines, text, confidence);
             if (item.generation != generation.load (std::memory_order_relaxed)) continue;
             if (text.empty ()) continue;
             last_completed_generation = item.generation;
@@ -1009,8 +1023,7 @@ Pipeline::Pipeline (
    LanguageRegistry&        registry,
    Config                   config
 ) {
-   impl_           = std::make_unique<Impl> (capture, detector, registry, std::move (config));
-   impl_->language = impl_->config.language;
+   impl_ = std::make_unique<Impl> (capture, detector, registry, std::move (config));
 }
 
 Pipeline::~Pipeline () { stop (); }
@@ -1059,13 +1072,19 @@ void Pipeline::set_performance_mode (bool on)
    impl_->reset_requested.store (true, std::memory_order_relaxed);
    core::Logger::info ("pipeline: performance mode {}", on ? "enabled" : "disabled");
 }
-void Pipeline::set_language (LanguageFamily f)
+void Pipeline::set_language (std::string locale)
 {
-   if (impl_->language.exchange (f, std::memory_order_relaxed) == f) return;
+   const auto family = family_of (locale);
+   {
+      std::lock_guard lock { impl_->language_lock };
+      if (impl_->language == family && impl_->locale == locale) return;
+      impl_->language = family;
+      impl_->locale = std::move (locale);
+   }
    impl_->force_scans.store (0, std::memory_order_relaxed);
    impl_->generation.fetch_add (1, std::memory_order_relaxed);
    impl_->reset_requested.store (true, std::memory_order_relaxed);
-   core::Logger::info ("pipeline: OCR language → {}", family_dir (f));
+   core::Logger::info ("pipeline: OCR language → {}", family_dir (family));
 }
 
 bool Pipeline::is_current (std::uint64_t value) const noexcept
@@ -1097,7 +1116,11 @@ core::Result<void> Pipeline::start (TooltipCallback on_tooltip)
    impl_->callback       = std::move (on_tooltip);
 
    const auto warm_started = std::chrono::steady_clock::now ();
-   const auto warm_family = impl_->language.load (std::memory_order_relaxed);
+   LanguageFamily warm_family;
+   {
+      std::lock_guard lock { impl_->language_lock };
+      warm_family = impl_->language;
+   }
    auto warm = impl_->registry.acquire (warm_family);
    const auto warm_ms = std::chrono::duration_cast<std::chrono::milliseconds> (
       std::chrono::steady_clock::now () - warm_started).count ();
