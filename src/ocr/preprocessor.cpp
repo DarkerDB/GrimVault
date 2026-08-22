@@ -193,4 +193,34 @@ bool is_horizontal_rule (const cv::Mat& line)
    return false;
 }
 
+bool is_item_tooltip (const cv::Mat& crop, std::size_t line_count)
+{
+   if (crop.empty () || line_count < 4) return false;
+   cv::Mat gray;
+   if (crop.channels () == 4)
+      cv::cvtColor (crop, gray, cv::COLOR_BGRA2GRAY);
+   else if (crop.channels () == 3)
+      cv::cvtColor (crop, gray, cv::COLOR_BGR2GRAY);
+   else
+      gray = crop;
+
+   int histogram [256] {};
+   for (int y = 0; y < gray.rows; ++y) {
+      const auto* row = gray.ptr<std::uint8_t> (y);
+      for (int x = 0; x < gray.cols; ++x) ++histogram [row [x]];
+   }
+   const int midpoint = gray.rows * gray.cols / 2;
+   int cumulative = 0, background = 0;
+   for (; background < 255; ++background) {
+      cumulative += histogram [background];
+      if (cumulative >= midpoint) break;
+   }
+   if (background > 18) return false;
+
+   const cv::Mat mask = bright_mask (crop);
+   for (int y = 0; y < mask.rows; ++y)
+      if (has_long_horizontal_run (mask.row (y), mask.cols / 2)) return true;
+   return false;
+}
+
 } // namespace gv::ocr::preprocess

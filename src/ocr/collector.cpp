@@ -2,6 +2,7 @@
 
 #include <gv/core/logger.h>
 #include <gv/ocr/language.h>
+#include <gv/ocr/preprocessor.h>
 
 #include <opencv2/imgcodecs.hpp>
 #include <nlohmann/json.hpp>
@@ -69,7 +70,7 @@ bool Collector::save (
    const std::string& prediction,
    float confidence)
 {
-   if (!enabled () || tooltip.empty () || lines.empty ()) return false;
+   if (!enabled () || !preprocess::is_item_tooltip (tooltip, lines.size ())) return false;
    std::lock_guard lock { mutex_ };
    try {
       std::error_code error;

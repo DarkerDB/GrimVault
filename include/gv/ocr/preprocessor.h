@@ -2,6 +2,7 @@
 
 #include <opencv2/core.hpp>
 
+#include <cstddef>
 #include <vector>
 
 namespace gv::ocr::preprocess {
@@ -17,5 +18,6 @@ cv::Mat trim_title_rule (const cv::Mat& line);
 
 // True for thin full-width ornaments that contain no useful text.
 bool is_horizontal_rule (const cv::Mat& line);
+bool is_item_tooltip    (const cv::Mat& crop, std::size_t line_count);
 
 } // namespace gv::ocr::preprocess
