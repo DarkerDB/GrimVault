@@ -33,6 +33,26 @@ TEST (AugmentPayload, TitleIsFixedIdentity)
    EXPECT_EQ (e ["rarity"], "rare");
 }
 
+TEST (AugmentPayload, LocaleAndStructuredSourceReachTheRenderer)
+{
+   gv::api::TooltipLookup lookup;
+   lookup.item_id = "id.item.famine_8001";
+   lookup.language = "ko";
+   lookup.source_analysis = gv::api::SourceAnalysis {
+      .kind = "craft",
+      .name = "무기 제작자",
+      .mode = "high_roller",
+      .reward_quests = 2,
+   };
+
+   const auto analysis = gv::ui::augment::entity (lookup) ["sections"][0];
+
+   EXPECT_EQ (analysis ["locale"], "ko");
+   EXPECT_EQ (analysis ["source"]["kind"], "craft");
+   EXPECT_EQ (analysis ["source"]["mode"], "high_roller");
+   EXPECT_EQ (analysis ["source"]["reward_quests"], 2);
+}
+
 TEST (AugmentPayload, SectionsInOrder)
 {
    const json e = gv::ui::augment::entity (sample ());

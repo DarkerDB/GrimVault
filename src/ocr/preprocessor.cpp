@@ -32,6 +32,20 @@ namespace {
          cv::cvtColor (input, gray, cv::COLOR_BGR2GRAY);
       else
          gray = input;
+      if (input.channels () >= 3) {
+         cv::Mat bgr;
+         if (input.channels () == 4) cv::cvtColor (input, bgr, cv::COLOR_BGRA2BGR);
+         else bgr = input;
+         for (int y = 0; y < gray.rows; ++y) {
+            auto* target = gray.ptr<std::uint8_t> (y);
+            const auto* source = bgr.ptr<cv::Vec3b> (y);
+            for (int x = 0; x < gray.cols; ++x) {
+               const int maximum = std::max ({ source [x][0], source [x][1], source [x][2] });
+               const int minimum = std::min ({ source [x][0], source [x][1], source [x][2] });
+               if (maximum - minimum >= 32) target [x] = static_cast<std::uint8_t> (maximum);
+            }
+         }
+      }
       // Tooltip labels are deliberately rendered in a very dark gray. A
       // fixed threshold of 80 retained colored values but erased labels such
       // as "Slot Type:". Estimate the dominant background luminance and keep

@@ -24,6 +24,17 @@ TEST (OcrPreprocessor, FindsSeparateTextBands)
    EXPECT_LT (bands [0].end, bands [1].start);
 }
 
+TEST (OcrPreprocessor, FindsSaturatedRedText)
+{
+   cv::Mat crop { 60, 240, CV_8UC4, cv::Scalar { 12, 12, 12, 255 } };
+   cv::putText (crop, "FAMINE", { 32, 40 }, cv::FONT_HERSHEY_SIMPLEX,
+                1.0, cv::Scalar { 25, 25, 190, 255 }, 2);
+
+   const auto bands = prep::line_bands (crop);
+   ASSERT_EQ (bands.size (), 1u);
+   EXPECT_GT (bands.front ().size (), 10);
+}
+
 TEST (OcrPreprocessor, TrimsEmptyHorizontalMargins)
 {
    cv::Mat line { 32, 300, CV_8UC4, cv::Scalar { 10, 10, 10, 255 } };

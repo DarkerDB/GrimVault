@@ -846,7 +846,7 @@ struct Pipeline::Impl
                // contrast, a title merged with its lower separator is tall.
                // Skip only the thin standalone form without consuming the
                // title slot.
-               if (band_index == 0 && is_rule && raw_line.rows <= 20) continue;
+               if (band_index == 0 && is_rule && band.size () <= 24) continue;
                const bool is_title = band_index == 0;
                // The title and its lower ornament can be merged into one
                // geometric band. Never reject the first band as a rule

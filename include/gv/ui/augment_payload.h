@@ -231,6 +231,7 @@ inline nlohmann::json analysis_entity (const gv::api::TooltipLookup& lookup,
       { "budget_w",  options.budget_w },
       { "budget_h",  options.budget_h },
       { "browse_hotkey", options.browse_hotkey },
+      { "locale", lookup.language },
       { "item_name", lookup.display_name.empty ()
             ? lookup.canonical_name : lookup.display_name },
       { "item_rarity", lookup.rarity },
@@ -318,7 +319,11 @@ inline nlohmann::json analysis_entity (const gv::api::TooltipLookup& lookup,
          { "icon_url", lookup.source_analysis->icon_url },
          { "name", lookup.source_analysis->name },
          { "context", lookup.source_analysis->context },
+         { "mode", lookup.source_analysis->mode },
       };
+      if (lookup.source_analysis->reward_quests) {
+         analysis ["source"]["reward_quests"] = *lookup.source_analysis->reward_quests;
+      }
       if (lookup.source_analysis->drop_rate) {
          analysis ["source"]["drop_rate"] = *lookup.source_analysis->drop_rate;
       }

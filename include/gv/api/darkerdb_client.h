@@ -188,6 +188,8 @@ struct SourceAnalysis {
    std::string           icon_url;
    std::string           name;
    std::string           context;
+   std::string           mode;
+   std::optional<int>    reward_quests;
    std::optional<double> drop_rate;
    std::optional<double> luck_drop_rate;
    std::optional<int>    luck;
@@ -265,6 +267,7 @@ struct TooltipLookup {
    std::string                    item_id;
    std::string                    canonical_name;
    std::string                    display_name;
+   std::string                    language = "en";
    std::string                    rarity;
    std::string                    artifact_type;
    double                         match_confidence = 0.0;

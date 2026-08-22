@@ -316,6 +316,7 @@ namespace {
       out.item_id          = j.value ("item_id", "");
       out.canonical_name   = j.value ("canonical_name", "");
       out.display_name     = j.value ("display_name", out.canonical_name);
+      out.language         = j.value ("source_language", "en");
       out.rarity           = j.value ("rarity", "");
       out.artifact_type    = j.value ("artifact_type", "");
       out.match_confidence = optional_number<double> (j, "confidence").value_or (0.0);
@@ -495,6 +496,8 @@ namespace {
          .icon_url       = j.value ("icon_url", ""),
          .name           = j.value ("name", ""),
          .context        = j.value ("context", ""),
+         .mode           = j.value ("mode", ""),
+         .reward_quests  = optional_number<int> (j, "reward_quests"),
          .drop_rate      = optional_number<double> (j, "drop_rate"),
          .luck_drop_rate = optional_number<double> (j, "luck_drop_rate"),
          .luck           = optional_number<int> (j, "luck"),

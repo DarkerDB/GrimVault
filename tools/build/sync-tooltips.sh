@@ -23,7 +23,7 @@ version="$(sed -n 's/.*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$src/package.j
 
 rm -rf "$dst"
 mkdir -p "$dst"
-cp "$src/dist/tooltip.min.js" "$src/dist/tooltip.css" "$dst/"
+cp "$src/dist/tooltip.min.js" "$src/dist/tooltip.css" "$src/dist/tooltip.nofonts.css" "$dst/"
 cp -r "$src/dist/assets" "$dst/assets"
 printf '%s\n' "$version" > "$dst/VERSION"
 
