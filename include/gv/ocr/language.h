@@ -4,8 +4,6 @@
 
 namespace gv::ocr {
 
-inline constexpr std::string_view active_locale = "en";
-
 // Recognizer filenames under <models_root>/paddle/<family>/.
 //
 // Each name carries what distinguishes one recognizer from another: who

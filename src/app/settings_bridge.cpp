@@ -4,7 +4,6 @@
 #include <gv/core/logger.h>
 #include <gv/core/startup_link.h>
 #include <gv/db/repos/user_settings_repo.h>
-#include <gv/ocr/language.h>
 #include <gv/ui/overlay_window.h>
 
 #include <map>
@@ -54,7 +53,7 @@ struct SettingsBridge::Impl
          deps.controller->set_capture_fps (prefs.capture_fps);
       deps.controller->set_capture_mode (prefs.capture_mode);
       deps.controller->set_performance_mode (prefs.performance_mode);
-      deps.controller->set_language (std::string { ocr::active_locale });
+      deps.controller->set_language (prefs.language);
       std::vector<std::string> enabled_widgets;
       for (const auto& [widget, enabled] : prefs.options.widgets) {
          if (enabled) enabled_widgets.push_back (widget);

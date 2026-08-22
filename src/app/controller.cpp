@@ -470,7 +470,7 @@ Controller::Controller (Dependencies deps, QObject* parent)
       impl_->deps.debug->set_enabled (highlights_enabled);
    }
 
-   set_language (std::string { ocr::active_locale });
+   set_language ("automatic");
    if (impl_->deps.pipeline) {
       impl_->sync_pipeline ();
    }
