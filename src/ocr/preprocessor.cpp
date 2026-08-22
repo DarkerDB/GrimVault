@@ -7,6 +7,9 @@
 namespace gv::ocr::preprocess {
 
 namespace {
+   constexpr int k_training_tooltip_max_background = 18;
+   constexpr std::size_t k_training_tooltip_min_lines = 4;
+
    bool has_long_horizontal_run (const cv::Mat& row, int minimum)
    {
       int run = 0;
@@ -195,7 +198,7 @@ bool is_horizontal_rule (const cv::Mat& line)
 
 bool is_item_tooltip (const cv::Mat& crop, std::size_t line_count)
 {
-   if (crop.empty () || line_count < 4) return false;
+   if (crop.empty () || line_count < k_training_tooltip_min_lines) return false;
    cv::Mat gray;
    if (crop.channels () == 4)
       cv::cvtColor (crop, gray, cv::COLOR_BGRA2GRAY);
@@ -215,7 +218,7 @@ bool is_item_tooltip (const cv::Mat& crop, std::size_t line_count)
       cumulative += histogram [background];
       if (cumulative >= midpoint) break;
    }
-   if (background > 18) return false;
+   if (background > k_training_tooltip_max_background) return false;
 
    const cv::Mat mask = bright_mask (crop);
    for (int y = 0; y < mask.rows; ++y)
