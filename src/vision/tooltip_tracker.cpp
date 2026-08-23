@@ -262,6 +262,9 @@ TooltipTracking TooltipTracker::track (
    double total = 0.0;
    double weakest = 1.0;
    int count = 0;
+   std::array<int, 4> content_x {};
+   std::array<int, 4> content_y {};
+   int located = 0;
    for (std::size_t index = 0; index < anchor.content_fingerprints.size (); ++index) {
       if (anchor.content_fingerprints [index].empty ()) continue;
       const auto content = match (
@@ -271,18 +274,27 @@ TooltipTracking TooltipTracker::track (
          anchor.content_dy [index],
          anchor.w,
          anchor.h,
-         frame.box.x,
-         frame.box.y,
-         k_content_search,
-         k_content_search);
+         pred_x,
+         pred_y,
+         std::max (k_content_search, search_px),
+         std::max (k_content_search, search_px));
       total += content.confidence;
       weakest = std::min (weakest, content.confidence);
+      if (content.confidence >= k_content_present) {
+         content_x [located] = content.box.x;
+         content_y [located] = content.box.y;
+         ++located;
+      }
       ++count;
    }
    if (count == 0) return result;
 
    result.content_confidence = total / count;
    if (result.content_confidence >= k_content_present && weakest >= k_content_present) {
+      std::sort (content_x.begin (), content_x.begin () + located);
+      std::sort (content_y.begin (), content_y.begin () + located);
+      result.box.x = content_x [located / 2];
+      result.box.y = content_y [located / 2];
       result.presence = TooltipPresence::Present;
       return result;
    }

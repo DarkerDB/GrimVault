@@ -136,6 +136,21 @@ TEST (TooltipTracker, TrackPreservesTranslatedTooltip)
    EXPECT_NEAR (tracked.box.y, shifted.y, 1);
 }
 
+TEST (TooltipTracker, TrackIgnoresAmbiguousFrameFingerprintPosition)
+{
+   const cv::Mat img = scene_with_tooltip (k_truth);
+   Anchor anchor;
+   TooltipTracker::remember (img, k_truth, anchor);
+   anchor.fingerprint.setTo (0);
+
+   const auto tracked = TooltipTracker::track (
+      img, anchor, k_truth.x, k_truth.y);
+
+   EXPECT_EQ (tracked.presence, TooltipPresence::Present);
+   EXPECT_NEAR (tracked.box.x, k_truth.x, 1);
+   EXPECT_NEAR (tracked.box.y, k_truth.y, 1);
+}
+
 TEST (TooltipTracker, TrackRejectsMissingTooltip)
 {
    const cv::Mat first = scene_with_tooltip (k_truth);
