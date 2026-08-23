@@ -11,18 +11,16 @@ namespace gv::ocr {
 // whose character set is the family dictionary; `tooltip` is ours, trained
 // against the game's own faces on a generated current-game character set.
 //
-// A dictionary is named for the model it belongs to, not the directory, so a
-// family holding two charsets cannot mispair them. Body and title share one
-// because they share a charset — the split is line role, not vocabulary.
 namespace model_files {
 
    inline constexpr const char* rec_ppocr_narrow      = "rec-ppocr-48x320.onnx";
    inline constexpr const char* rec_ppocr_narrow_dict = "rec-ppocr-48x320.dict.txt";
    inline constexpr const char* rec_ppocr_wide        = "rec-ppocr-48x960.onnx";
    inline constexpr const char* rec_ppocr_wide_dict   = "rec-ppocr-48x960.dict.txt";
-   inline constexpr const char* rec_tooltip_body      = "rec-tooltip-body-48x960.onnx";
-   inline constexpr const char* rec_tooltip_title     = "rec-tooltip-title-48x960.onnx";
-   inline constexpr const char* rec_tooltip_dict      = "rec-tooltip-48x960.dict.txt";
+   inline constexpr const char* rec_tooltip_body       = "rec-tooltip-body-48x960.onnx";
+   inline constexpr const char* rec_tooltip_title      = "rec-tooltip-title-48x960.onnx";
+   inline constexpr const char* rec_tooltip_title_dict = "rec-tooltip-title-48x960.dict.txt";
+   inline constexpr const char* rec_tooltip_dict       = "rec-tooltip-48x960.dict.txt";
 
 } // namespace model_files
 

@@ -9,17 +9,13 @@ models/
    tooltip-yolox-nano-416.onnx     Tooltip-region detector
    tooltip-yolox-nano.LICENSE.txt  Apache-2.0 text + provenance for the detector
    paddle/
-      <family>/                    latin | eslav | korean | ch
-         rec-ppocr-48x320.onnx          stock PaddleOCR recognizer
-         rec-ppocr-48x320.dict.txt      its character set
-         rec-tooltip-body-48x960.onnx   ours, trained on the game's faces
-         rec-tooltip-48x960.dict.txt    its generated character set
-      en/
-         rec-ppocr-48x960.onnx          stock PaddleOCR, wide English line
-         rec-ppocr-48x960.dict.txt      its character set
+      <family>/                    en | latin | eslav | korean | ch
+         rec-ppocr-48x{320,960}.onnx    stock PaddleOCR recognizer
+         rec-ppocr-48x{320,960}.dict.txt  its character set
          rec-tooltip-body-48x960.onnx   ours, trained on the game's faces
          rec-tooltip-title-48x960.onnx  ours, title lines
-         rec-tooltip-48x960.dict.txt    printable ASCII, shared by both
+         rec-tooltip-48x960.dict.txt    its generated character set
+         rec-tooltip-title-48x960.dict.txt  its title character set
 ```
 
 GrimVault prefers `rec-tooltip-body-48x960.onnx` when it and its dictionary are
@@ -28,8 +24,8 @@ present, and falls back to stock PaddleOCR otherwise.
 A recognizer's name carries who trained it and the line geometry it expects —
 `ppocr` is upstream PaddleOCR on the family character set, `tooltip` is ours on
 a generated current-game character set. A dictionary is named for its model rather than
-its directory, so a family holding two character sets cannot mispair them; body
-and title share one because they share a charset. `gv::ocr::model_files`
+its directory, so a family holding two character sets cannot mispair them. Title
+models use their title dictionary when it differs from the body charset. `gv::ocr::model_files`
 (`include/gv/ocr/language.h`) is the only place these strings live.
 
 ## These are artifacts, not sources

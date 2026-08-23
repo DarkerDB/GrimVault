@@ -31,6 +31,22 @@ namespace {
    constexpr int k_model_height       = 48;
    constexpr int k_default_model_width = 320;
 
+   core::Result<std::vector<std::string>> read_dictionary (const std::filesystem::path& path)
+   {
+      std::ifstream input { path };
+      if (!input) {
+         return core::fail (core::Error::make (core::ErrorKind::Io,
+            "paddle_rec: failed to open dict {}", path.string ()));
+      }
+      std::vector<std::string> values;
+      std::string line;
+      while (std::getline (input, line)) {
+         line.erase (line.find_last_not_of (" \r\n\t") + 1);
+         values.push_back (line);
+      }
+      return values;
+   }
+
 } // namespace
 
 // One loaded recognizer graph. Input geometry is fixed by the export
@@ -43,6 +59,7 @@ struct Session
    std::string output_name;
    bool        directml = false;
    int         width = k_default_model_width;
+   int         classes = 0;
 
    explicit operator bool () const noexcept { return session != nullptr; }
 };
@@ -56,6 +73,7 @@ struct PaddleRecognizer::Impl
    bool                     loaded = false;
    bool                     title_loaded = false;
    std::vector<std::string> dict;
+   std::vector<std::string> title_dict;
    LanguageFamily           family = LanguageFamily::Latin;
    int                      model_width = k_default_model_width;
    std::mutex               lock;
@@ -84,6 +102,10 @@ struct PaddleRecognizer::Impl
       out.output_name = out.session->GetOutputNameAllocated (0, allocator).get ();
       const auto shape = out.session->GetInputTypeInfo (0).GetTensorTypeAndShapeInfo ().GetShape ();
       if (shape.size () == 4 && shape [3] > 0) out.width = static_cast<int> (shape [3]);
+      const auto output_shape = out.session->GetOutputTypeInfo (0).GetTensorTypeAndShapeInfo ().GetShape ();
+      if (output_shape.size () == 3 && output_shape [2] > 0) {
+         out.classes = static_cast<int> (output_shape [2]);
+      }
       out.directml    = gpu;
       return out;
    }
@@ -155,24 +177,35 @@ core::Result<void> PaddleRecognizer::initialize (
          }
       }
 
-      std::ifstream df { dict_path };
-      if (!df) {
-         return core::fail (core::Error::make (core::ErrorKind::Io,
-            "paddle_rec: failed to open dict {}", dict_path.string ()));
+      auto body_dict = read_dictionary (dict_path);
+      if (!body_dict) return core::fail (body_dict.error ());
+      impl_->dict = std::move (*body_dict);
+      if (impl_->net.classes != static_cast<int> (impl_->dict.size ()) + 2) {
+         return core::fail (core::Error::make (core::ErrorKind::Ocr,
+            "paddle_rec: model has {} classes but dictionary has {} characters",
+            impl_->net.classes, impl_->dict.size ()));
       }
 
-      impl_->dict.clear ();
-      std::string line;
-      while (std::getline (df, line)) {
-         line.erase (line.find_last_not_of (" \r\n\t") + 1);
-         impl_->dict.push_back (line);
+      impl_->title_dict = impl_->dict;
+      const auto title_dict_path = model_path.parent_path () / model_files::rec_tooltip_title_dict;
+      if (impl_->title_loaded && std::filesystem::exists (title_dict_path)) {
+         auto title_dict = read_dictionary (title_dict_path);
+         if (!title_dict) return core::fail (title_dict.error ());
+         impl_->title_dict = std::move (*title_dict);
+      }
+      if (impl_->title_loaded
+          && impl_->title_net.classes != static_cast<int> (impl_->title_dict.size ()) + 2) {
+         return core::fail (core::Error::make (core::ErrorKind::Ocr,
+            "paddle_rec: title model has {} classes but dictionary has {} characters",
+            impl_->title_net.classes, impl_->title_dict.size ()));
       }
 
       core::Logger::info ("paddle_rec: loaded model {} on {} ({} chars in dict)",
          model_path.filename ().string (),
          impl_->net.directml ? "DirectML" : "CPU", impl_->dict.size ());
       if (impl_->title_loaded) {
-         core::Logger::info ("paddle_rec: loaded title model {}", model_files::rec_tooltip_title);
+         core::Logger::info ("paddle_rec: loaded title model {} ({} chars in dict)",
+            model_files::rec_tooltip_title, impl_->title_dict.size ());
       }
 
       return {};
@@ -317,7 +350,8 @@ core::Result<RecognizerResult> PaddleRecognizer::read (const cv::Mat& line, bool
    std::lock_guard lock { impl_->lock };
 
    try {
-      auto& net = title && impl_->title_loaded ? impl_->title_net : impl_->net;
+      const bool use_title = title && impl_->title_loaded;
+      auto& net = use_title ? impl_->title_net : impl_->net;
       const cv::Mat blob = preprocess (line, impl_->model_width);
 
       cv::Mat out;
@@ -327,7 +361,7 @@ core::Result<RecognizerResult> PaddleRecognizer::read (const cv::Mat& line, bool
          if (!net.directml) throw;
          core::Logger::warn (
             "paddle_rec: DirectML inference failed: {}; using CPU", error.what ());
-         net = impl_->load (title && impl_->title_loaded
+         net = impl_->load (use_title
             ? impl_->model_path.parent_path () / model_files::rec_tooltip_title
             : impl_->model_path, false);
          out = impl_->run (net, blob);
@@ -340,7 +374,8 @@ core::Result<RecognizerResult> PaddleRecognizer::read (const cv::Mat& line, bool
       }
 
       auto [text, conf] = ctc_decode (
-         out.ptr<float> (), out.size [1], out.size [2], impl_->dict);
+         out.ptr<float> (), out.size [1], out.size [2],
+         use_title ? impl_->title_dict : impl_->dict);
 
       return RecognizerResult { .text = std::move (text), .confidence = conf };
    } catch (const cv::Exception& e) {
