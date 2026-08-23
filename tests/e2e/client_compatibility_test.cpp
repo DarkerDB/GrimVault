@@ -24,14 +24,15 @@ struct Model {
    const char*    directory;
    const char*    network;
    const char*    dictionary;
+   bool           title;
 };
 
 constexpr std::array models {
-   Model { LanguageFamily::English, "en",     gv::ocr::model_files::rec_tooltip_body,  gv::ocr::model_files::rec_tooltip_dict },
-   Model { LanguageFamily::Latin,   "latin",  gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict },
-   Model { LanguageFamily::Eslav,   "eslav",  gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict },
-   Model { LanguageFamily::Korean,  "korean", gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict },
-   Model { LanguageFamily::Chinese, "ch",     gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict },
+   Model { LanguageFamily::English, "en",     gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict, true },
+   Model { LanguageFamily::Latin,   "latin",  gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict, false },
+   Model { LanguageFamily::Eslav,   "eslav",  gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict, false },
+   Model { LanguageFamily::Korean,  "korean", gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict, true },
+   Model { LanguageFamily::Chinese, "ch",     gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict, false },
 };
 
 cv::Mat gem_line (const cv::Scalar& bgra, double scale)
@@ -63,12 +64,17 @@ TEST (ClientCompatibilityE2E, EveryBundledLanguageModelLoadsAndRuns)
          base / model.network, base / model.dictionary);
       ASSERT_TRUE (initialized.has_value ()) << initialized.error ().message;
       EXPECT_TRUE (recognizer.is_wide ());
+      EXPECT_EQ (recognizer.has_title_model (), model.title);
 
       cv::Mat sample { 40, 260, CV_8UC4, cv::Scalar { 8, 8, 8, 255 } };
       cv::putText (sample, "123 + 45%", { 16, 29 }, cv::FONT_HERSHEY_SIMPLEX,
                    0.85, cv::Scalar { 225, 180, 110, 255 }, 2);
       const auto result = recognizer.read (sample);
       ASSERT_TRUE (result.has_value ()) << result.error ().message;
+      if (model.title) {
+         const auto title = recognizer.read (sample, true);
+         ASSERT_TRUE (title.has_value ()) << title.error ().message;
+      }
    }
 }
 
