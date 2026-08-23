@@ -181,7 +181,7 @@ TEST (AugmentPayload, CompleteAnalysisRendersPremiumSections)
       .message = "WTS test item for 500g",
       .observed_at = "2026-07-17T04:00:00+00:00",
       .age_seconds = 420,
-      .items = {{ .name = "Test Item", .rarity = "epic" }},
+      .items = {{ .name = "Test Item", .display_name = "테스트 아이템", .rarity = "epic" }},
    });
 
    gv::api::GemPlan gem;
@@ -221,6 +221,7 @@ TEST (AugmentPayload, CompleteAnalysisRendersPremiumSections)
    EXPECT_EQ (analysis ["trade_chat"]["mentions_14d"], 12);
    EXPECT_EQ (analysis ["trade_chat"]["messages"][0]["age_seconds"], 420);
    EXPECT_EQ (analysis ["trade_chat"]["messages"][0]["items"][0]["name"], "Test Item");
+   EXPECT_EQ (analysis ["trade_chat"]["messages"][0]["items"][0]["display_name"], "테스트 아이템");
    EXPECT_EQ (analysis ["trade_chat"]["messages"][0]["items"][0]["rarity"], "epic");
    EXPECT_EQ (analysis ["utility"]["max_stack_size"], 5);
    EXPECT_EQ (analysis ["utility"]["value_per_slot"], 206);

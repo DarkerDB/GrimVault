@@ -198,6 +198,7 @@ struct SourceAnalysis {
 
 struct TradeChatItem {
    std::string name;
+   std::string display_name;
    std::string rarity;
 };
 

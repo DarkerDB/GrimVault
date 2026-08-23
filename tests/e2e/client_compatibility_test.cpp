@@ -32,7 +32,7 @@ constexpr std::array models {
    Model { LanguageFamily::Latin,   "latin",  gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict, false },
    Model { LanguageFamily::Eslav,   "eslav",  gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict, false },
    Model { LanguageFamily::Korean,  "korean", gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict, true },
-   Model { LanguageFamily::Chinese, "ch",     gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict, false },
+   Model { LanguageFamily::Chinese, "ch",     gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict, true },
 };
 
 cv::Mat gem_line (const cv::Scalar& bgra, double scale)

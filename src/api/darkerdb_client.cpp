@@ -530,8 +530,9 @@ namespace {
          for (const auto& item : items) {
             if (!item.is_object ()) continue;
             out.items.push_back (TradeChatItem {
-               .name   = item.value ("name", ""),
-               .rarity = item.value ("rarity", ""),
+               .name         = item.value ("name", ""),
+               .display_name = item.value ("display_name", item.value ("name", "")),
+               .rarity       = item.value ("rarity", ""),
             });
          }
       });

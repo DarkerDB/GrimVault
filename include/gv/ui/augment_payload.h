@@ -144,7 +144,11 @@ inline nlohmann::json analysis_entity (const gv::api::TooltipLookup& lookup,
    for (const auto& message : lookup.trade_chat.messages) {
       nlohmann::json items = nlohmann::json::array ();
       for (const auto& item : message.items) {
-         items.push_back ({ { "name", item.name }, { "rarity", item.rarity } });
+         items.push_back ({
+            { "name", item.name },
+            { "display_name", item.display_name },
+            { "rarity", item.rarity },
+         });
       }
       trade_messages.push_back ({
          { "message", message.message },
