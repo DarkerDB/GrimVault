@@ -35,6 +35,13 @@ void StatusBadge::set_auto (bool is_auto)
    if (auto* root = rootObject ()) root->setProperty ("isAuto", is_auto);
 }
 
+void StatusBadge::set_locale (const std::string& locale)
+{
+   if (auto* root = rootObject ()) {
+      root->setProperty ("locale", QString::fromStdString (locale));
+   }
+}
+
 void StatusBadge::set_signed_in (bool signed_in)
 {
    if (auto* root = rootObject ()) root->setProperty ("isSignedIn", signed_in);

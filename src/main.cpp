@@ -706,8 +706,9 @@ namespace {
 
       // overlay:is_indicator_visible. Re-read on every settings change so
       // hiding the badge in the dashboard takes it down without a restart.
-      auto sync_badge = [&badge, &settings_bridge] {
+      auto sync_badge = [&badge, &controller, &settings_bridge] {
          badge.set_enabled (settings_bridge.preferences ().indicator_visible);
+         badge.set_locale (controller.language ());
       };
       QObject::connect (&settings_bridge, &gv::app::SettingsBridge::applied,
          &app, sync_badge);

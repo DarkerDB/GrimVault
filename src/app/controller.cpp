@@ -139,11 +139,11 @@ struct Controller::Impl
    std::mutex  browse_lock;
    std::string last_item_id;
 
-   std::mutex  language_lock;
+   mutable std::mutex language_lock;
    std::string language_selection;
    std::string game_language { "en" };
 
-   std::string language ()
+   std::string language () const
    {
       std::lock_guard lk { language_lock };
       return game_language;
@@ -628,6 +628,11 @@ void Controller::set_language (std::string selection)
    if (impl_->deps.pipeline) impl_->deps.pipeline->set_language (*resolved);
    core::Logger::info ("controller: game language '{}' source={} (ocr family '{}')",
       *resolved, source, std::string { ocr::family_dir (family) });
+}
+
+std::string Controller::language () const
+{
+   return impl_->language ();
 }
 
 std::string Controller::accelerator_for (std::string_view action) const

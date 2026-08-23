@@ -13,6 +13,7 @@ Item {
 
    property bool isAuto:     true
    property bool isSignedIn: false
+   property string locale:   "en"
 
    function pulse () { pulseAnim.restart () }
 
@@ -45,7 +46,9 @@ Item {
 
       Text {
          anchors.verticalCenter: parent.verticalCenter
-         text: root.isSignedIn ? (root.isAuto ? "AUTO" : "MANUAL") : "SIGNED OUT"
+         text: root.isSignedIn
+            ? (root.isAuto ? "AUTO" : "MANUAL") + " (" + root.locale + ")"
+            : "SIGNED OUT"
          color: Theme.text.body
          font.family: Theme.fontLight
          font.pixelSize: 11

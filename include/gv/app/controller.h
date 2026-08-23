@@ -90,6 +90,7 @@ public:
    void set_performance_mode (bool on);
 
    void set_language (std::string selection);
+   std::string language () const;
 
    // Enabled dashboard widgets sent as a computation hint. The API still
    // intersects these with the authenticated plan before doing less work.

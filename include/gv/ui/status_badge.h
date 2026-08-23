@@ -4,6 +4,8 @@
 #include <QQuickView>
 #include <QRect>
 
+#include <string>
+
 namespace gv::ui {
 
 class StatusBadge : public QQuickView
@@ -15,6 +17,7 @@ public:
 
 public slots:
    void set_auto      (bool is_auto);
+   void set_locale    (const std::string& locale);
    void set_signed_in (bool signed_in);
    void set_game      (const QRect& bounds, bool active);
    void pulse         ();
