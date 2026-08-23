@@ -799,6 +799,7 @@ struct Pipeline::Impl
 
             const auto t0    = std::chrono::steady_clock::now ();
             const auto bands = preprocess::line_bands (crop);
+            const auto first_band = preprocess::first_tooltip_band (crop, bands);
             const auto segmented_at = std::chrono::steady_clock::now ();
 
             // GRIMVAULT_OCR_DEBUG=1 → dump crop + bands to %TEMP%\grimvault-ocr
@@ -836,6 +837,7 @@ struct Pipeline::Impl
             for (const auto& band : bands) {
                const auto source_index = source_band_index++;
                if (item.generation != generation.load (std::memory_order_relaxed)) break;
+               if (source_index < first_band) continue;
                // Rule classification must see the original tooltip-wide
                // band. Once tightly column-trimmed, an ordinary title can
                // occupy >50% of its row and masquerade as a separator.

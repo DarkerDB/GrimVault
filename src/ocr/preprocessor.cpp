@@ -103,6 +103,19 @@ std::vector<cv::Range> line_bands (const cv::Mat& crop)
    return bands;
 }
 
+std::size_t first_tooltip_band (const cv::Mat& crop, const std::vector<cv::Range>& bands)
+{
+   if (bands.size () < 3 || bands.front ().start > 2) return 0;
+   const int limit = std::min (64, crop.rows / 5);
+   for (std::size_t index = 1; index + 1 < bands.size (); ++index) {
+      const auto& band = bands [index];
+      if (band.end > limit) break;
+      if (band.size () <= 24
+          && is_horizontal_rule (crop (band, cv::Range::all ()))) return index + 1;
+   }
+   return 0;
+}
+
 cv::Mat trim_cols (const cv::Mat& line)
 {
    if (line.empty ()) return line;

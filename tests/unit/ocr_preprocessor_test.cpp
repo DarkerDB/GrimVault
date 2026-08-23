@@ -22,6 +22,21 @@ TEST (OcrPreprocessor, FindsSeparateTextBands)
    const auto bands = prep::line_bands (crop);
    ASSERT_EQ (bands.size (), 2u);
    EXPECT_LT (bands [0].end, bands [1].start);
+   EXPECT_EQ (prep::first_tooltip_band (crop, bands), 0u);
+}
+
+TEST (OcrPreprocessor, SkipsContentAboveTooltipBorder)
+{
+   cv::Mat crop { 340, 490, CV_8UC4, cv::Scalar { 8, 8, 8, 255 } };
+   cv::putText (crop, "outside text", { 2, 8 }, cv::FONT_HERSHEY_SIMPLEX,
+                0.45, cv::Scalar { 210, 210, 210, 255 }, 1);
+   cv::rectangle (crop, { 2, 36, 486, 8 }, cv::Scalar { 180, 180, 180, 255 }, cv::FILLED);
+   cv::putText (crop, "Tooltip Title", { 130, 82 }, cv::FONT_HERSHEY_SIMPLEX,
+                0.8, cv::Scalar { 220, 160, 60, 255 }, 2);
+
+   const auto bands = prep::line_bands (crop);
+   ASSERT_GE (bands.size (), 3u);
+   EXPECT_EQ (prep::first_tooltip_band (crop, bands), 2u);
 }
 
 TEST (OcrPreprocessor, FindsSaturatedRedText)
