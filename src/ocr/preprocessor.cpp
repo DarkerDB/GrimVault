@@ -130,6 +130,12 @@ std::optional<std::size_t> title_band (
 
 bool top_is_clipped (const cv::Mat& crop, const std::vector<cv::Range>& bands)
 {
+   if (crop.empty ()) return false;
+   const cv::Mat top = bright_mask (crop.rowRange (0, std::min (6, crop.rows)));
+   const int left = top.cols / 3;
+   const int right = top.cols * 2 / 3;
+   if (right > left && cv::countNonZero (
+         top (cv::Range::all (), cv::Range (left, right))) > 2) return true;
    if (bands.empty ()) return false;
    const auto first = first_tooltip_band (crop, bands);
    if (first >= bands.size ()) return false;

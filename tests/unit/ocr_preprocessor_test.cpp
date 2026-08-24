@@ -81,6 +81,19 @@ TEST (OcrPreprocessor, DetectsClippedCenteredTitle)
    EXPECT_TRUE (prep::top_is_clipped (crop, bands));
 }
 
+TEST (OcrPreprocessor, DetectsClippedTitleFragmentBelowBandHeight)
+{
+   cv::Mat crop { 180, 480, CV_8UC4, cv::Scalar { 8, 8, 8, 255 } };
+   cv::rectangle (crop, { 212, 0, 5, 3 }, cv::Scalar { 25, 25, 190, 255 }, cv::FILLED);
+   cv::rectangle (crop, { 226, 0, 5, 3 }, cv::Scalar { 25, 25, 190, 255 }, cv::FILLED);
+   cv::putText (crop, "Armor 43", { 180, 70 }, cv::FONT_HERSHEY_SIMPLEX,
+                0.65, cv::Scalar { 180, 180, 180, 255 }, 2);
+
+   const auto bands = prep::line_bands (crop);
+   ASSERT_EQ (bands.size (), 1u);
+   EXPECT_TRUE (prep::top_is_clipped (crop, bands));
+}
+
 TEST (OcrPreprocessor, FindsSaturatedRedText)
 {
    cv::Mat crop { 60, 240, CV_8UC4, cv::Scalar { 12, 12, 12, 255 } };
