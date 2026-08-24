@@ -296,6 +296,8 @@ struct TooltipLookup {
    nlohmann::json                 raw;
 };
 
+nlohmann::json diagnostic (const TooltipLookup& lookup);
+
 // Dashboard-controlled settings snapshot from /v2/grimvault/settings.
 //
 // Wire schema is nested:

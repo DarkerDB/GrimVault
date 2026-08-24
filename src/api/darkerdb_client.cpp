@@ -894,6 +894,60 @@ namespace {
 
 } // namespace
 
+nlohmann::json diagnostic (const TooltipLookup& lookup)
+{
+   const auto optional = [] (const auto& value) {
+      return value ? nlohmann::json (*value) : nlohmann::json (nullptr);
+   };
+   nlohmann::json rolls = nlohmann::json::array ();
+   for (const auto& roll : lookup.rolls) {
+      rolls.push_back ({
+         { "attribute", roll.attribute_id },
+         { "label", roll.label },
+         { "value", roll.formatted_value },
+         { "minimum", optional (roll.minimum) },
+         { "maximum", optional (roll.maximum) },
+         { "percentile", optional (roll.roll_percentile) },
+         { "gem", roll.gem },
+      });
+   }
+
+   return {
+      { "item", {
+         { "id", lookup.item_id },
+         { "canonical_name", lookup.canonical_name },
+         { "display_name", lookup.display_name },
+         { "language", lookup.language },
+         { "rarity", lookup.rarity },
+         { "match_confidence", lookup.match_confidence },
+      }},
+      { "rolls", std::move (rolls) },
+      { "valuation", {
+         { "currency", lookup.pricing.currency },
+         { "low", lookup.pricing.low },
+         { "fair_value", lookup.pricing.median },
+         { "high", lookup.pricing.high },
+         { "quick_list", lookup.pricing.quick_list },
+         { "lowest_ask", lookup.pricing.lowest_ask },
+         { "sample_size", lookup.pricing.sample_size },
+         { "confidence", lookup.pricing.confidence },
+         { "mean_similarity", lookup.pricing.mean_similarity },
+      }},
+      { "market", {
+         { "sales", lookup.market_analysis.sales.count },
+         { "sales_window_hours", lookup.market_analysis.sales.window_hours },
+         { "active_listings", lookup.market_analysis.active_listings.count },
+         { "average_sale_price", optional (lookup.market_analysis.average_sale_price) },
+         { "median_sale_price", optional (lookup.market_analysis.median_sale_price) },
+      }},
+      { "utility", {
+         { "vendor_value", lookup.utility.vendor_value },
+         { "adventure_points", lookup.utility.adventure_points },
+         { "gear_score", lookup.utility.gear_score },
+      }},
+   };
+}
+
 core::Result<SettingsBundle> parse_settings (std::string_view response)
 {
    auto json = nlohmann::json::parse (response, nullptr, false);

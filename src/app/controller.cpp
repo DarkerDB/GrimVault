@@ -352,6 +352,10 @@ struct Controller::Impl
             { "confidence", lookup.pricing.confidence },
             { "elapsed_ms", std::to_string (analysis_ms) },
          });
+         core::log::api.event ("analysis.interpreted", {
+            { "generation", std::to_string (job.tooltip.generation) },
+            { "data", api::diagnostic (lookup).dump () },
+         });
          if (deps.pipeline) deps.pipeline->record_evidence (
             job.tooltip.generation, "analysis_ready", {
                { "item_id", lookup.item_id },
