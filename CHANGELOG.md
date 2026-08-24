@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Fixed startup on Windows profiles with non-ASCII characters in the path
 - Restored localized OCR and dashboard language selection
 - Hardened WebView2 startup with clean-profile and software-rendering recovery
 - Removed the alternate QML tooltip renderer

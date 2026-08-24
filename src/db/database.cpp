@@ -10,6 +10,19 @@
 
 namespace gv::db {
 
+namespace {
+
+   // SQLite takes filenames as UTF-8 and widens them itself. path::string ()
+   // encodes with the active code page, so go through u8string () to stay
+   // correct even where that code page is not UTF-8.
+   std::string utf8 (const std::filesystem::path& path)
+   {
+      const auto encoded = path.u8string ();
+      return std::string { encoded.begin (), encoded.end () };
+   }
+
+}
+
 struct Database::Impl
 {
    std::filesystem::path             path;
@@ -30,7 +43,7 @@ core::Result<std::unique_ptr<Database>> Database::open (const std::filesystem::p
       auto impl  = std::make_unique<Impl> ();
       impl->path = path;
       impl->conn = std::make_unique<SQLite::Database> (
-         path.string (),
+         utf8 (path),
          SQLite::OPEN_READWRITE | SQLite::OPEN_CREATE
       );
 
@@ -70,14 +83,14 @@ core::Result<std::unique_ptr<Database>> Database::open (const std::filesystem::p
       )sql");
 
       core::Logger::info ("db: opened {} (user_version={})",
-         path.string (), *migrated);
+         utf8 (path), *migrated);
 
       return db;
    } catch (const std::exception& e) {
       return core::fail (core::Error::make (
          core::ErrorKind::Database,
          "Failed to open database at {}: {}",
-         path.string (),
+         utf8 (path),
          e.what ()
       ));
    }
