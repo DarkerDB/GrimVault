@@ -105,15 +105,39 @@ std::vector<cv::Range> line_bands (const cv::Mat& crop)
 
 std::size_t first_tooltip_band (const cv::Mat& crop, const std::vector<cv::Range>& bands)
 {
-   if (bands.size () < 3 || bands.front ().start > 2) return 0;
-   const int limit = std::min (64, crop.rows / 5);
-   for (std::size_t index = 1; index + 1 < bands.size (); ++index) {
+   if (bands.size () < 2) return 0;
+   const int limit = std::min (96, crop.rows / 4);
+   for (std::size_t index = 0; index + 1 < bands.size (); ++index) {
       const auto& band = bands [index];
       if (band.end > limit) break;
       if (band.size () <= 24
           && is_horizontal_rule (crop (band, cv::Range::all ()))) return index + 1;
    }
    return 0;
+}
+
+std::optional<std::size_t> title_band (
+   const cv::Mat& crop, const std::vector<cv::Range>& bands)
+{
+   for (std::size_t index = first_tooltip_band (crop, bands); index < bands.size (); ++index) {
+      const auto& band = bands [index];
+      const cv::Mat line = crop (band, cv::Range::all ());
+      if (is_horizontal_rule (line) || band.size () < 18) continue;
+      return index;
+   }
+   return std::nullopt;
+}
+
+bool top_is_clipped (const cv::Mat& crop, const std::vector<cv::Range>& bands)
+{
+   if (bands.empty ()) return false;
+   const auto first = first_tooltip_band (crop, bands);
+   if (first >= bands.size ()) return false;
+   const auto& band = bands [first];
+   if (band.start > 3 || band.size () >= 18) return false;
+   const cv::Mat mask = bright_mask (crop (band, cv::Range::all ()));
+   return cv::countNonZero (mask (cv::Range::all (),
+      cv::Range (mask.cols / 3, mask.cols * 2 / 3))) > 0;
 }
 
 cv::Mat trim_cols (const cv::Mat& line)

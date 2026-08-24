@@ -789,17 +789,25 @@ struct Pipeline::Impl
 
             if (cv_box.area () <= 0) continue;
 
-            cv::Mat crop = bgra (cv_box).clone ();
+            auto make_crop = [&] {
+               cv::Mat value = bgra (cv_box).clone ();
+               if (value.cols > 24 && value.rows > 24)
+                  value = value (cv::Rect (6, 6, value.cols - 12, value.rows - 12));
+               return value;
+            };
 
-            // Cut the tooltip's painted border before segmenting — same
-            // trim the old Tesseract pipeline applied.
-            if (crop.cols > 24 && crop.rows > 24) {
-               crop = crop (cv::Rect (6, 6, crop.cols - 12, crop.rows - 12));
+            cv::Mat crop = make_crop ();
+            auto bands = preprocess::line_bands (crop);
+            if (preprocess::top_is_clipped (crop, bands) && cv_box.y > 0) {
+               const int extension = std::min (64, cv_box.y);
+               cv_box.y -= extension;
+               cv_box.height += extension;
+               crop = make_crop ();
+               bands = preprocess::line_bands (crop);
             }
 
             const auto t0    = std::chrono::steady_clock::now ();
-            const auto bands = preprocess::line_bands (crop);
-            const auto first_band = preprocess::first_tooltip_band (crop, bands);
+            const auto title_band = preprocess::title_band (crop, bands);
             const auto segmented_at = std::chrono::steady_clock::now ();
 
             // GRIMVAULT_OCR_DEBUG=1 → dump crop + bands to %TEMP%\grimvault-ocr
@@ -832,12 +840,11 @@ struct Pipeline::Impl
             bool        preliminary_sent = false;
             std::vector<EvidenceLine> evidence_lines;
 
-            std::size_t band_index = 0;
             std::size_t source_band_index = 0;
             for (const auto& band : bands) {
                const auto source_index = source_band_index++;
                if (item.generation != generation.load (std::memory_order_relaxed)) break;
-               if (source_index < first_band) continue;
+               if (!title_band.has_value () || source_index < *title_band) continue;
                // Rule classification must see the original tooltip-wide
                // band. Once tightly column-trimmed, an ordinary title can
                // occupy >50% of its row and masquerade as a separator.
@@ -848,8 +855,7 @@ struct Pipeline::Impl
                // contrast, a title merged with its lower separator is tall.
                // Skip only the thin standalone form without consuming the
                // title slot.
-               if (band_index == 0 && is_rule && band.size () <= 24) continue;
-               const bool is_title = band_index == 0;
+               const bool is_title = source_index == *title_band;
                // The title and its lower ornament can be merged into one
                // geometric band. Never reject the first band as a rule
                // before removing that ornament, or the first stat is
@@ -859,7 +865,6 @@ struct Pipeline::Impl
                // A failed title recognition must not cause the first stat to
                // become the title on the next iteration. Band identity is
                // geometric, not conditional on OCR success.
-               ++band_index;
                if (is_title) raw_line = preprocess::trim_title_rule (raw_line);
                cv::Mat line = preprocess::trim_cols (raw_line);
                if (dump_index >= 0) {

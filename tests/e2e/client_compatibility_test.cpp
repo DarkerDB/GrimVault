@@ -32,6 +32,7 @@ constexpr std::array models {
    Model { LanguageFamily::Latin,   "latin",  gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict, true },
    Model { LanguageFamily::Eslav,   "eslav",  gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict, true },
    Model { LanguageFamily::Korean,  "korean", gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict, true },
+   Model { LanguageFamily::Japanese, "ja",    gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict, true },
    Model { LanguageFamily::Chinese, "ch",     gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict, true },
 };
 

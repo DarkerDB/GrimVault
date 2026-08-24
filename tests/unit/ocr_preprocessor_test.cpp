@@ -39,6 +39,48 @@ TEST (OcrPreprocessor, SkipsContentAboveTooltipBorder)
    EXPECT_EQ (prep::first_tooltip_band (crop, bands), 2u);
 }
 
+TEST (OcrPreprocessor, FindsTitleAfterLeadingBorder)
+{
+   cv::Mat crop { 180, 480, CV_8UC4, cv::Scalar { 8, 8, 8, 255 } };
+   cv::line (crop, { 2, 28 }, { 477, 28 }, cv::Scalar { 180, 180, 180, 255 }, 1);
+   cv::putText (crop, "Frozen Feather", { 125, 84 }, cv::FONT_HERSHEY_SIMPLEX,
+                0.8, cv::Scalar { 230, 150, 40, 255 }, 2);
+   cv::putText (crop, "Rarity Rare", { 150, 142 }, cv::FONT_HERSHEY_SIMPLEX,
+                0.65, cv::Scalar { 180, 180, 180, 255 }, 2);
+
+   const auto bands = prep::line_bands (crop);
+   ASSERT_TRUE (prep::title_band (crop, bands).has_value ());
+   EXPECT_EQ (*prep::title_band (crop, bands), 1u);
+}
+
+TEST (OcrPreprocessor, SkipsTitleOrnaments)
+{
+   cv::Mat crop { 180, 480, CV_8UC4, cv::Scalar { 8, 8, 8, 255 } };
+   cv::rectangle (crop, { 12, 3, 8, 8 }, cv::Scalar { 180, 180, 180, 255 }, 1);
+   cv::rectangle (crop, { 460, 3, 8, 8 }, cv::Scalar { 180, 180, 180, 255 }, 1);
+   cv::putText (crop, "Frozen Feather", { 125, 62 }, cv::FONT_HERSHEY_SIMPLEX,
+                0.8, cv::Scalar { 230, 150, 40, 255 }, 2);
+   cv::putText (crop, "Rarity Rare", { 150, 122 }, cv::FONT_HERSHEY_SIMPLEX,
+                0.65, cv::Scalar { 180, 180, 180, 255 }, 2);
+
+   const auto bands = prep::line_bands (crop);
+   ASSERT_TRUE (prep::title_band (crop, bands).has_value ());
+   EXPECT_EQ (*prep::title_band (crop, bands), 1u);
+   EXPECT_FALSE (prep::top_is_clipped (crop, bands));
+}
+
+TEST (OcrPreprocessor, DetectsClippedCenteredTitle)
+{
+   cv::Mat crop { 180, 480, CV_8UC4, cv::Scalar { 8, 8, 8, 255 } };
+   cv::putText (crop, "FAMINE", { 180, 10 }, cv::FONT_HERSHEY_SIMPLEX,
+                0.8, cv::Scalar { 25, 25, 190, 255 }, 2);
+   cv::putText (crop, "Rarity Artifact", { 150, 70 }, cv::FONT_HERSHEY_SIMPLEX,
+                0.65, cv::Scalar { 180, 180, 180, 255 }, 2);
+
+   const auto bands = prep::line_bands (crop);
+   EXPECT_TRUE (prep::top_is_clipped (crop, bands));
+}
+
 TEST (OcrPreprocessor, FindsSaturatedRedText)
 {
    cv::Mat crop { 60, 240, CV_8UC4, cv::Scalar { 12, 12, 12, 255 } };
