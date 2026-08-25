@@ -177,6 +177,7 @@ struct Pipeline::Impl
    TooltipCallback           callback;
    AnchorCallback            anchor_cb;
    AnchorLostCallback        anchor_lost_cb;
+   SampleCallback            sample_cb;
 
    std::atomic<long long>    last_detect_ms { 0 };
 
@@ -976,9 +977,25 @@ struct Pipeline::Impl
             const float confidence = conf_n ? conf_sum / conf_n : 0.0f;
             evidence.ocr (
                item.generation, crop, evidence_lines, text, confidence);
+            const capture::Rect sample_rect { cv_box.x, cv_box.y, cv_box.width, cv_box.height };
             collector.save (
-               item.generation, locale_name, identity_key, box.rect,
+               item.generation, locale_name, identity_key, sample_rect,
                crop, evidence_lines, text, confidence);
+            if (sample_cb) {
+               try {
+                  sample_cb (TooltipSample {
+                     .generation = item.generation,
+                     .rect = sample_rect,
+                     .image = crop,
+                     .locale = locale_name,
+                     .text = text,
+                     .confidence = confidence,
+                     .backend = item.frame.backend,
+                  });
+               } catch (const std::exception& error) {
+                  core::Logger::warn ("collection: tooltip sample failed: {}", error.what ());
+               }
+            }
             if (item.generation != generation.load (std::memory_order_relaxed)) continue;
             if (text.empty ()) continue;
             last_completed_generation = item.generation;
@@ -1037,6 +1054,7 @@ Pipeline::~Pipeline () { stop (); }
 
 void Pipeline::on_anchor (AnchorCallback cb) { impl_->anchor_cb = std::move (cb); }
 void Pipeline::on_anchor_lost (AnchorLostCallback cb) { impl_->anchor_lost_cb = std::move (cb); }
+void Pipeline::on_sample (SampleCallback cb) { impl_->sample_cb = std::move (cb); }
 
 void Pipeline::set_active_window (void* hwnd)
 {

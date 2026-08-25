@@ -10,6 +10,7 @@ if (unit_sources)
       gv::core
       gv::db
       gv::api
+      gv::collection
       gv::capture
       gv::vision
       gv::ocr

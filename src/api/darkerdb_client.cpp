@@ -8,6 +8,7 @@
 #include <gv/core/logger.h>
 #include <gv/core/version.h>
 #include <curl/curl.h>
+#include <openssl/sha.h>
 
 #ifdef _WIN32
    #include <Windows.h>
@@ -34,6 +35,19 @@ namespace {
 
    constexpr std::array<int, 3> k_retry_delays_ms { 200, 500, 1500 };
    constexpr std::size_t k_max_response_bytes = 2 * 1024 * 1024;
+
+   std::string sha256 (std::string_view value)
+   {
+      std::array<unsigned char, SHA256_DIGEST_LENGTH> digest {};
+      SHA256 (reinterpret_cast<const unsigned char*> (value.data ()), value.size (), digest.data ());
+      constexpr char digits[] = "0123456789abcdef";
+      std::string result (digest.size () * 2, '0');
+      for (std::size_t i = 0; i < digest.size (); ++i) {
+         result [i * 2] = digits [digest [i] >> 4];
+         result [i * 2 + 1] = digits [digest [i] & 0x0f];
+      }
+      return result;
+   }
 
    std::string normalized_cache_text (std::string_view text)
    {
@@ -771,6 +785,9 @@ namespace {
       put ("behavior:capture_mode", b.behavior.capture_mode);
       put ("behavior:language", b.behavior.language);
 
+      put ("collection:is_improvement_enabled",
+         b.collection.is_improvement_enabled ? "true" : "false");
+
       put ("hotkeys:toggle_overlay",  b.hotkeys.toggle_overlay);
       put ("hotkeys:force_refresh",   b.hotkeys.force_refresh);
       put ("hotkeys:open_in_browser", b.hotkeys.open_in_browser);
@@ -881,6 +898,10 @@ namespace {
 
       with_object (body, "overlay",  [&] (const nlohmann::json& s) { parse_overlay  (s, out.overlay); });
       with_object (body, "behavior", [&] (const nlohmann::json& s) { parse_behavior (s, out.behavior); });
+      with_object (body, "collection", [&] (const nlohmann::json& s) {
+         out.collection.is_improvement_enabled = s.value (
+            "is_improvement_enabled", out.collection.is_improvement_enabled);
+      });
       with_object (body, "hotkeys",  [&] (const nlohmann::json& s) { parse_hotkeys  (s, out.hotkeys); });
       with_object (body, "tooltip",  [&] (const nlohmann::json& s) {
          parse_tooltip (s, out.tooltip, analysis_order);
@@ -1610,6 +1631,117 @@ core::Result<SettingsBundle> DDBClient::get_settings ()
    }
 
    return parse_settings (res->body);
+}
+
+core::Result<CollectionResult> DDBClient::collect (const CollectionSample& sample)
+{
+   if (sample.channel.empty () || sample.content_type.empty () || sample.body.empty ()
+       || !sample.metadata.is_object ()) {
+      return core::fail (core::Error::make (
+         core::ErrorKind::InvalidArgument, "darkerdb: invalid collection sample"));
+   }
+
+   const nlohmann::json authorization {
+      { "channel", sample.channel },
+      { "content_type", sample.content_type },
+      { "content_bytes", sample.body.size () },
+      { "content_sha256", sha256 (sample.body) },
+      { "metadata", sample.metadata },
+   };
+   Impl::Req authorize {
+      .method = "POST",
+      .url = impl_->cfg.base_url + "/v2/grimvault/collection/authorize",
+      .body = authorization.dump (),
+      .retryable = false,
+   };
+   auto response = impl_->http (authorize);
+   if (!response.has_value ()) return core::fail (response.error ());
+   if (response->status == 401 || response->status == 403) {
+      return core::fail (core::Error::make (
+         core::ErrorKind::Permission, "darkerdb: collection authorization denied"));
+   }
+   if (response->status < 200 || response->status >= 300) {
+      return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
+         "darkerdb: collection authorization HTTP {}", response->status));
+   }
+
+   auto envelope = nlohmann::json::parse (response->body, nullptr, false);
+   if (envelope.is_discarded ()) {
+      return core::fail (core::Error::make (
+         core::ErrorKind::ExternalApi, "darkerdb: invalid collection authorization"));
+   }
+   const auto& body = body_of (envelope);
+   if (!body.is_object ()) {
+      return core::fail (core::Error::make (
+         core::ErrorKind::ExternalApi, "darkerdb: invalid collection authorization"));
+   }
+
+   CollectionResult result {
+      .accepted = body.value ("accepted", false),
+      .retry_after = body.value ("retry_after", 0),
+      .reason = body.value ("reason", ""),
+   };
+   if (!result.accepted) return result;
+
+   const auto upload = body.find ("upload");
+   const auto sample_id = body.value ("sample_id", "");
+   if (upload == body.end () || !upload->is_object () || sample_id.empty ()) {
+      return core::fail (core::Error::make (
+         core::ErrorKind::ExternalApi, "darkerdb: incomplete collection authorization"));
+   }
+
+   std::vector<core::http::Header> headers;
+   if (const auto values = upload->find ("headers"); values != upload->end () && values->is_object ()) {
+      for (const auto& [name, value] : values->items ()) {
+         if (!value.is_string ()) continue;
+         std::string lower = name;
+         std::transform (lower.begin (), lower.end (), lower.begin (), [] (unsigned char c) {
+            return static_cast<char> (std::tolower (c));
+         });
+         if (lower == "content-type" || lower == "content-length" || lower == "host") continue;
+         headers.push_back ({ name, value.get<std::string> () });
+      }
+   }
+   auto uploaded = core::http::perform ({
+      .method = upload->value ("method", "PUT"),
+      .url = upload->value ("url", ""),
+      .body = sample.body,
+      .content_type = sample.content_type,
+      .ca_bundle = impl_->cfg.ca_bundle,
+      .headers = std::move (headers),
+      .timeout = std::chrono::milliseconds { 30000 },
+      .max_response_bytes = 64 * 1024,
+   });
+   if (!uploaded.has_value ()) return core::fail (uploaded.error ());
+   if (uploaded->status < 200 || uploaded->status >= 300) {
+      return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
+         "darkerdb: collection upload HTTP {}", uploaded->status));
+   }
+
+   Impl::Req complete {
+      .method = "POST",
+      .url = impl_->cfg.base_url + "/v2/grimvault/collection/complete",
+      .body = nlohmann::json ({ { "sample_id", sample_id } }).dump (),
+      .retryable = false,
+   };
+   auto completed = impl_->http (complete);
+   if (!completed.has_value ()) return core::fail (completed.error ());
+   if (completed->status < 200 || completed->status >= 300) {
+      return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
+         "darkerdb: collection completion HTTP {}", completed->status));
+   }
+   auto completion_envelope = nlohmann::json::parse (completed->body, nullptr, false);
+   if (completion_envelope.is_discarded ()) {
+      return core::fail (core::Error::make (
+         core::ErrorKind::ExternalApi, "darkerdb: invalid collection completion"));
+   }
+   const auto& completion = body_of (completion_envelope);
+   if (!completion.is_object () || !completion.value ("completed", false)) {
+      return core::fail (core::Error::make (
+         core::ErrorKind::ExternalApi, "darkerdb: collection completion rejected"));
+   }
+
+   return result;
 }
 
 } // namespace gv::api

@@ -3,6 +3,7 @@
 #include <gv/app/controller.h>
 #include <gv/core/logger.h>
 #include <gv/core/startup_link.h>
+#include <gv/collection/collector.h>
 #include <gv/db/repos/user_settings_repo.h>
 #include <gv/ui/overlay_window.h>
 
@@ -109,6 +110,7 @@ struct SettingsBridge::Impl
       push_overlay ();
       push_controller ();
       push_startup ();
+      if (deps.collection) deps.collection->set_enabled (prefs.improvement_collection);
    }
 };
 

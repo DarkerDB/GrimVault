@@ -108,10 +108,12 @@ Result<Response> perform (const Request& req)
    curl_easy_setopt (curl, CURLOPT_NOSIGNAL,          1L);
    apply_tls (curl, req.ca_bundle);
 
-   if (req.method == "POST") {
-      curl_easy_setopt (curl, CURLOPT_POST,          1L);
-      curl_easy_setopt (curl, CURLOPT_POSTFIELDS,    req.body.c_str ());
+   if (!req.body.empty ()) {
+      curl_easy_setopt (curl, CURLOPT_POSTFIELDS,    req.body.data ());
       curl_easy_setopt (curl, CURLOPT_POSTFIELDSIZE, static_cast<long> (req.body.size ()));
+   }
+   if (req.method == "POST") {
+      curl_easy_setopt (curl, CURLOPT_POST, 1L);
    } else if (req.method != "GET") {
       curl_easy_setopt (curl, CURLOPT_CUSTOMREQUEST, req.method.c_str ());
    }

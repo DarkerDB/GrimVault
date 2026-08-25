@@ -215,6 +215,13 @@ target_link_libraries (gv_api
       nlohmann_json::nlohmann_json
    PRIVATE
       CURL::libcurl
+      OpenSSL::Crypto
+)
+
+grimvault_add_module (collection)
+target_link_libraries (gv_collection PUBLIC
+   gv::core
+   gv::api
 )
 
 grimvault_add_module (cli)
@@ -237,6 +244,7 @@ target_link_libraries (gv_app
       gv::db
       gv::ocr
       gv::api
+      gv::collection
       gv::ui
       Qt6::Core
 )

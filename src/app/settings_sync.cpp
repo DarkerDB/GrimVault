@@ -162,7 +162,7 @@ void SettingsSync::poll_now ()
             int changed = 0;
 
             constexpr std::string_view managed_prefixes [] = {
-               "overlay:", "tooltip:", "pricing:", "behavior:", "hotkeys:"
+               "overlay:", "tooltip:", "pricing:", "behavior:", "collection:", "hotkeys:"
             };
             for (const auto& [key, value] : existing) {
                const bool managed = std::any_of (

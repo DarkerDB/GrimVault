@@ -387,15 +387,33 @@ struct SettingsBundle {
       std::string open_in_browser = "Ctrl+Shift+D";
    };
 
+   struct Collection {
+      bool is_improvement_enabled = false;
+   };
+
    Overlay   overlay;
    Tooltip   tooltip;
    Pricing   pricing;
    Behavior  behavior;
+   Collection collection;
    Hotkeys   hotkeys;
    std::string updated_at;
 
    std::unordered_map<std::string, std::string> values;
    nlohmann::json                                raw;
+};
+
+struct CollectionSample {
+   std::string channel;
+   std::string content_type;
+   std::string body;
+   nlohmann::json metadata = nlohmann::json::object ();
+};
+
+struct CollectionResult {
+   bool accepted = false;
+   int retry_after = 0;
+   std::string reason;
 };
 
 core::Result<SettingsBundle> parse_settings (std::string_view json);
@@ -456,6 +474,8 @@ public:
    // GET /v2/grimvault/settings. Returns the dashboard-controlled settings
    // bundle. Source of truth for any key the server manages.
    core::Result<SettingsBundle> get_settings ();
+
+   core::Result<CollectionResult> collect (const CollectionSample& sample);
 
    /// Abort current transfers. Safe to call from another thread and reusable;
    /// future requests are assigned a new cancellation generation.

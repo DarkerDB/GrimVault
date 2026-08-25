@@ -67,3 +67,21 @@ TEST (Settings, IndicatorDefaultsToVisibleWhenAbsent)
    EXPECT_EQ (settings->values.at ("overlay:is_indicator_visible"), "true");
    EXPECT_FALSE (settings->values.contains ("overlay:renderer"));
 }
+
+TEST (Settings, ParsesImprovementCollectionConsent)
+{
+   const auto settings = gv::api::parse_settings (R"({
+      "body": {
+         "behavior": {},
+         "collection": { "is_improvement_enabled": true },
+         "hotkeys": {},
+         "overlay": {},
+         "pricing": {},
+         "tooltip": {}
+      }
+   })");
+
+   ASSERT_TRUE (settings.has_value ()) << settings.error ().message;
+   EXPECT_TRUE (settings->collection.is_improvement_enabled);
+   EXPECT_EQ (settings->values.at ("collection:is_improvement_enabled"), "true");
+}

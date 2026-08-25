@@ -6,6 +6,7 @@
 #include <gv/auth/session.h>
 #include <gv/capture/capture_service.h>
 #include <gv/cli/cli.h>
+#include <gv/collection/collector.h>
 #include <gv/core/crash_handler.h>
 #include <gv/core/env.h>
 #include <gv/core/env_resolver.h>
@@ -29,6 +30,9 @@
 #include <gv/ui/tray_icon.h>
 #include <gv/update/update_service.h>
 #include <gv/vision/tooltip_detector.h>
+
+#include <nlohmann/json.hpp>
+#include <opencv2/imgcodecs.hpp>
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -506,6 +510,8 @@ namespace {
       api_cfg.base_url  = std::string { active_env.api_base_url };
       api_cfg.client_id = std::string { active_env.client_id };
       gv::api::DDBClient api_client { api_cfg, &session, db->get () };
+      gv::collection::Collector collection { api_client };
+      const auto collection_install_id = gv::core::diagnostics::install_id (data_dir);
 
       gv::vision::TooltipDetector detector;
       if (auto r = detector.initialize (
@@ -597,6 +603,31 @@ namespace {
 
          pipeline = std::make_unique<gv::ocr::Pipeline> (
             *capture, detector, langs, pipe_cfg);
+         pipeline->on_sample ([&collection, &collection_install_id] (gv::ocr::TooltipSample sample) {
+            if (!collection.enabled ()) return;
+            std::vector<unsigned char> png;
+            if (!cv::imencode (".png", sample.image, png)) return;
+            collection.submit ({
+               .channel = "tooltip",
+               .content_type = "image/png",
+               .body = std::string { reinterpret_cast<const char*> (png.data ()), png.size () },
+               .metadata = {
+                  { "schema", 1 },
+                  { "install_id", collection_install_id },
+                  { "generation", sample.generation },
+                  { "locale", sample.locale },
+                  { "prediction", sample.text },
+                  { "confidence", sample.confidence },
+                  { "capture_backend", std::string { gv::capture::backend_name (sample.backend) } },
+                  { "rect", {
+                     { "x", sample.rect.x },
+                     { "y", sample.rect.y },
+                     { "width", sample.rect.w },
+                     { "height", sample.rect.h },
+                  } },
+               },
+            });
+         });
 
          if (opts.detect_only) {
             pipeline->set_detect_only (true);
@@ -670,6 +701,7 @@ namespace {
          .repo               = &settings_repo,
          .overlay            = &overlay,
          .controller         = &controller,
+         .collection         = &collection,
          .exe_path           = app.applicationFilePath ().toStdString (),
          .updates_locked_off = disabled_by_env,
          .capture_fps_locked = opts.fcr > 0.0,
@@ -1028,6 +1060,7 @@ namespace {
       settings_sync.stop ();
       controller.stop ();
       if (pipeline) pipeline->stop ();
+      collection.stop ();
       tracker.reset ();
       hotkeys.reset ();
       update_service.stop ();

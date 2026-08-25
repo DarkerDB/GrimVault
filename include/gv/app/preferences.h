@@ -38,6 +38,7 @@ struct Preferences
    bool launch_on_startup = true;
    bool performance_mode  = false;
    bool indicator_visible = true;
+   bool improvement_collection = false;
    int  capture_fps       = 15;
 
    capture::CaptureMode capture_mode = capture::CaptureMode::Automatic;
@@ -259,6 +260,11 @@ inline bool apply (Preferences& out, std::string_view key, std::string_view valu
       out.language = erased || value == "automatic" || !locale.has_value ()
          ? fallback.language
          : *locale;
+      return true;
+   }
+   if (key == "collection:is_improvement_enabled") {
+      out.improvement_collection = erased ? fallback.improvement_collection
+         : detail::parse_bool (value, fallback.improvement_collection);
       return true;
    }
 

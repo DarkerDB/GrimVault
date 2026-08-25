@@ -10,6 +10,7 @@
 namespace gv::app { class Controller; }
 namespace gv::db  { class UserSettingsRepo; }
 namespace gv::ui  { class OverlayWindow; }
+namespace gv::collection { class Collector; }
 
 namespace gv::app {
 
@@ -38,6 +39,7 @@ public:
       gv::db::UserSettingsRepo* repo       = nullptr;
       gv::ui::OverlayWindow*    overlay    = nullptr;
       gv::app::Controller*      controller = nullptr;
+      gv::collection::Collector* collection = nullptr;
 
       // Absolute path to the running exe, for the HKCU\...\Run entry.
       std::string               exe_path;

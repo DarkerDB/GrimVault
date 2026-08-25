@@ -11,6 +11,7 @@
 #include <functional>
 #include <memory>
 #include <filesystem>
+#include <opencv2/core/mat.hpp>
 #include <string>
 #include <unordered_map>
 
@@ -25,6 +26,16 @@ struct RecognizedTooltip {
    capture::CaptureBackend backend = capture::CaptureBackend::Unknown;
    bool          preliminary = false; // title-only; full tooltip follows
    std::chrono::steady_clock::time_point captured_at;
+};
+
+struct TooltipSample {
+   std::uint64_t generation = 0;
+   capture::Rect rect;
+   cv::Mat image;
+   std::string locale;
+   std::string text;
+   float confidence = 0.0f;
+   capture::CaptureBackend backend = capture::CaptureBackend::Unknown;
 };
 
 class Pipeline
@@ -68,6 +79,7 @@ public:
 
    using TooltipCallback    = std::function<void (const RecognizedTooltip&)>;
    using AnchorCallback     = std::function<void (const AnchorEvent&)>;
+   using SampleCallback     = std::function<void (TooltipSample)>;
 
    // immediate = vision confirmed disappearance, so
    // hide now. False remains available for future soft-loss sources.
@@ -89,6 +101,7 @@ public:
    // anchor lost, fired from the vision thread. Set before start().
    void on_anchor      (AnchorCallback cb);
    void on_anchor_lost (AnchorLostCallback cb);
+   void on_sample      (SampleCallback cb);
 
    void set_active_window (void* hwnd);   // HWND or nullptr to capture monitor
 

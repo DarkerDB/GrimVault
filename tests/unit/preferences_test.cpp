@@ -218,6 +218,14 @@ TEST (Preferences, FoldsBehaviorAndHotkeys)
    EXPECT_EQ (prefs.hotkey_toggle_overlay, "Ctrl+Alt+G");
 }
 
+TEST (Preferences, FoldsImprovementCollectionConsent)
+{
+   EXPECT_TRUE (folded ({ { "collection:is_improvement_enabled", "true" } })
+      .improvement_collection);
+   EXPECT_FALSE (folded ({ { "collection:is_improvement_enabled", "false" } })
+      .improvement_collection);
+}
+
 // SettingsSync emits an empty value when the server drops a key, which has
 // to mean "back to the compiled default", not "false" or "empty string".
 TEST (Preferences, ErasedKeysRevertToDefaults)
