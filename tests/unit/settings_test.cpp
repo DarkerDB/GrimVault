@@ -73,7 +73,24 @@ TEST (Settings, ParsesImprovementCollectionConsent)
    const auto settings = gv::api::parse_settings (R"({
       "body": {
          "behavior": {},
-         "collection": { "is_improvement_enabled": true },
+         "collection": { "is_improvement_enabled": false },
+         "hotkeys": {},
+         "overlay": {},
+         "pricing": {},
+         "tooltip": {}
+      }
+   })");
+
+   ASSERT_TRUE (settings.has_value ()) << settings.error ().message;
+   EXPECT_FALSE (settings->collection.is_improvement_enabled);
+   EXPECT_EQ (settings->values.at ("collection:is_improvement_enabled"), "false");
+}
+
+TEST (Settings, ImprovementCollectionDefaultsToEnabled)
+{
+   const auto settings = gv::api::parse_settings (R"({
+      "body": {
+         "behavior": {},
          "hotkeys": {},
          "overlay": {},
          "pricing": {},

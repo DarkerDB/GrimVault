@@ -220,6 +220,7 @@ TEST (Preferences, FoldsBehaviorAndHotkeys)
 
 TEST (Preferences, FoldsImprovementCollectionConsent)
 {
+   EXPECT_TRUE (folded ({}).improvement_collection);
    EXPECT_TRUE (folded ({ { "collection:is_improvement_enabled", "true" } })
       .improvement_collection);
    EXPECT_FALSE (folded ({ { "collection:is_improvement_enabled", "false" } })

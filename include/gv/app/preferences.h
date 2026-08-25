@@ -38,7 +38,7 @@ struct Preferences
    bool launch_on_startup = true;
    bool performance_mode  = false;
    bool indicator_visible = true;
-   bool improvement_collection = false;
+   bool improvement_collection = true;
    int  capture_fps       = 15;
 
    capture::CaptureMode capture_mode = capture::CaptureMode::Automatic;

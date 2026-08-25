@@ -388,7 +388,7 @@ struct SettingsBundle {
    };
 
    struct Collection {
-      bool is_improvement_enabled = false;
+      bool is_improvement_enabled = true;
    };
 
    Overlay   overlay;

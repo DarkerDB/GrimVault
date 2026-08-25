@@ -96,6 +96,19 @@ TEST (OcrPreprocessor, DetectsClippedTitleFragmentBelowBandHeight)
    EXPECT_TRUE (prep::top_is_clipped (crop, bands));
 }
 
+TEST (OcrPreprocessor, IgnoresCompleteHudTextAtTopEdge)
+{
+   cv::Mat crop { 180, 480, CV_8UC4, cv::Scalar { 8, 8, 8, 255 } };
+   cv::putText (crop, "6j 22h 54m", { 170, 18 }, cv::FONT_HERSHEY_SIMPLEX,
+                0.65, cv::Scalar { 190, 190, 190, 255 }, 2);
+   cv::putText (crop, "Vieux Tissu", { 150, 74 }, cv::FONT_HERSHEY_SIMPLEX,
+                0.8, cv::Scalar { 235, 235, 235, 255 }, 2);
+
+   const auto bands = prep::line_bands (crop);
+   ASSERT_GE (bands.size (), 2u);
+   EXPECT_FALSE (prep::top_is_clipped (crop, bands));
+}
+
 TEST (OcrPreprocessor, FindsSaturatedRedText)
 {
    cv::Mat crop { 60, 240, CV_8UC4, cv::Scalar { 12, 12, 12, 255 } };

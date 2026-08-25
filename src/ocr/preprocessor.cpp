@@ -190,7 +190,8 @@ bool top_is_clipped (const cv::Mat& crop, const std::vector<cv::Range>& bands)
    const int left = top.cols / 3;
    const int right = top.cols * 2 / 3;
    if (right > left && cv::countNonZero (
-         top (cv::Range::all (), cv::Range (left, right))) > 2) return true;
+         top (cv::Range::all (), cv::Range (left, right))) > 2
+      && (bands.empty () || bands.front ().start > 6)) return true;
    if (bands.empty ()) return false;
    const auto first = first_tooltip_band (crop, bands);
    if (first >= bands.size ()) return false;
