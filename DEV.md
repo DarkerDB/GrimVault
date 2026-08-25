@@ -156,6 +156,7 @@ grimvault --fcr 10        # active frame capture rate, 1-60 fps (default 15;
 
 The dashboard improvement setting controls private tooltip sample submission.
 Only detected tooltip crops are submitted. Uploaded object paths are recorded in the log.
+List collected samples with `hearth aws s3 ls s3://katforge-collections/collections/grimvault/tooltip/ --recursive`.
 
 ### Anchoring diagnostics
 

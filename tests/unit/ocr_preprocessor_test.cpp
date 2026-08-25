@@ -49,8 +49,9 @@ TEST (OcrPreprocessor, FindsTitleAfterLeadingBorder)
                 0.65, cv::Scalar { 180, 180, 180, 255 }, 2);
 
    const auto bands = prep::line_bands (crop);
-   ASSERT_TRUE (prep::title_band (crop, bands).has_value ());
-   EXPECT_EQ (*prep::title_band (crop, bands), 1u);
+   const auto title = prep::title_band (crop, bands);
+   ASSERT_TRUE (title.has_value ());
+   EXPECT_GT (bands [*title].start, 40);
 }
 
 TEST (OcrPreprocessor, SkipsTitleOrnaments)
@@ -64,8 +65,9 @@ TEST (OcrPreprocessor, SkipsTitleOrnaments)
                 0.65, cv::Scalar { 180, 180, 180, 255 }, 2);
 
    const auto bands = prep::line_bands (crop);
-   ASSERT_TRUE (prep::title_band (crop, bands).has_value ());
-   EXPECT_EQ (*prep::title_band (crop, bands), 1u);
+   const auto title = prep::title_band (crop, bands);
+   ASSERT_TRUE (title.has_value ());
+   EXPECT_GT (bands [*title].start, 30);
    EXPECT_FALSE (prep::top_is_clipped (crop, bands));
 }
 

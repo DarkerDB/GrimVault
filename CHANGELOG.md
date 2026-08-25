@@ -2,15 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
-## Unreleased
+## [2.0.7] - 2026-08-24
 
-- Fixed startup on Windows profiles with non-ASCII characters in the path
-- Restored localized OCR and dashboard language selection
-- Hardened WebView2 startup with clean-profile and software-rendering recovery
-- Removed the alternate QML tooltip renderer
-- Fixed dashboard hotkeys using F6 through F8
-- Added game-font OCR models for every supported language
-- Added opt-in collection of localized tooltip crops for OCR training
+- Restored localized OCR, dashboard language selection, and fully localized analysis cards
+- Added game-font OCR models and stronger item, rarity, and roll recognition across supported languages
+- Added opt-in private tooltip collection for continued recognition improvements
+- Hardened WebView2 startup and removed the inconsistent alternate renderer
+- Fixed startup on non-ASCII Windows profiles and dashboard function-key hotkeys
 
 ## [0.0.5] - 2026-08-15
 
