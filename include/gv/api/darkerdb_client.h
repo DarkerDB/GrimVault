@@ -467,6 +467,7 @@ public:
       std::string_view capture_backend,
       const std::unordered_map<std::string, std::string>& gems = {},
       const std::vector<std::string>& enabled_widgets = {},
+      std::string_view rarity = {},
       std::chrono::seconds cache_ttl = std::chrono::seconds (180)
    );
 

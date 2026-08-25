@@ -3,6 +3,7 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <string_view>
 
 namespace gv::ocr::preprocess {
 
@@ -122,10 +123,64 @@ std::optional<std::size_t> title_band (
    for (std::size_t index = first_tooltip_band (crop, bands); index < bands.size (); ++index) {
       const auto& band = bands [index];
       const cv::Mat line = crop (band, cv::Range::all ());
-      if (is_horizontal_rule (line) || band.size () < 18) continue;
+      const cv::Mat content = trim_title_rule (line);
+      if (content.rows < 18 || is_horizontal_rule (content)) continue;
       return index;
    }
    return std::nullopt;
+}
+
+std::optional<std::string> title_rarity (const cv::Mat& line)
+{
+   if (line.empty () || line.channels () < 3) return std::nullopt;
+   const cv::Mat title = trim_title_rule (line);
+   cv::Mat bgr;
+   if (title.channels () == 4) cv::cvtColor (title, bgr, cv::COLOR_BGRA2BGR);
+   else bgr = title;
+   int peak = 0;
+   for (int y = 0; y < bgr.rows; ++y) {
+      const auto* row = bgr.ptr<cv::Vec3b> (y);
+      for (int x = 0; x < bgr.cols; ++x)
+         peak = std::max ({ peak, static_cast<int> (row [x][0]),
+            static_cast<int> (row [x][1]), static_cast<int> (row [x][2]) });
+   }
+   if (peak < 80) return std::nullopt;
+
+   const int floor = std::max (72, peak - 24);
+   cv::Vec3d observed {};
+   int count = 0;
+   for (int y = 0; y < bgr.rows; ++y) {
+      const auto* row = bgr.ptr<cv::Vec3b> (y);
+      for (int x = 0; x < bgr.cols; ++x) {
+         if (std::max ({ row [x][0], row [x][1], row [x][2] }) < floor) continue;
+         observed += cv::Vec3d { static_cast<double> (row [x][2]),
+            static_cast<double> (row [x][1]), static_cast<double> (row [x][0]) };
+         ++count;
+      }
+   }
+   if (count < 4) return std::nullopt;
+   observed /= count;
+
+   const std::pair<std::string_view, cv::Vec3d> palette [] {
+      { "poor", { 136, 136, 136 } },
+      { "common", { 238, 238, 238 } },
+      { "uncommon", { 149, 250, 0 } },
+      { "rare", { 19, 187, 255 } },
+      { "epic", { 219, 139, 255 } },
+      { "legendary", { 255, 168, 36 } },
+      { "unique", { 230, 207, 149 } },
+      { "artifact", { 250, 21, 21 } },
+   };
+   std::string rarity;
+   double distance = 14'400.0;
+   for (const auto& [name, expected] : palette) {
+      const auto delta = observed - expected;
+      const double candidate = delta.dot (delta);
+      if (candidate >= distance) continue;
+      rarity = name;
+      distance = candidate;
+   }
+   return rarity.empty () ? std::nullopt : std::optional { rarity };
 }
 
 bool top_is_clipped (const cv::Mat& crop, const std::vector<cv::Range>& bands)

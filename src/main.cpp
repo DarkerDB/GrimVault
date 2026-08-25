@@ -611,6 +611,7 @@ namespace {
                   { "generation", sample.generation },
                   { "locale", sample.locale },
                   { "prediction", sample.text },
+                  { "rarity", sample.rarity },
                   { "confidence", sample.confidence },
                   { "capture_backend", std::string { gv::capture::backend_name (sample.backend) } },
                   { "rect", {

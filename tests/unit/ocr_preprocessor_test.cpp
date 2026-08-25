@@ -156,6 +156,41 @@ TEST (OcrPreprocessor, RemovesSeparatorMergedIntoTitle)
    EXPECT_GT (title.rows, 20);
 }
 
+TEST (OcrPreprocessor, FindsTitleMergedWithSeparator)
+{
+   cv::Mat crop { 150, 460, CV_8UC4, cv::Scalar { 8, 8, 8, 255 } };
+   cv::putText (crop, "Oil Lantern", { 125, 28 }, cv::FONT_HERSHEY_SIMPLEX,
+                0.75, cv::Scalar { 238, 238, 238, 255 }, 2);
+   cv::line (crop, { 4, 54 }, { 455, 54 }, cv::Scalar { 180, 160, 90, 255 }, 2);
+   cv::putText (crop, "Move Speed -10", { 125, 105 }, cv::FONT_HERSHEY_SIMPLEX,
+                0.65, cv::Scalar { 238, 238, 238, 255 }, 2);
+
+   const auto bands = prep::line_bands (crop);
+   const auto title = prep::title_band (crop, bands);
+   ASSERT_TRUE (title.has_value ());
+   EXPECT_EQ (*title, 0u);
+}
+
+TEST (OcrPreprocessor, ReadsRarityFromTitleColor)
+{
+   const std::pair<std::string, cv::Scalar> cases [] {
+      { "poor", { 100, 100, 100, 255 } },
+      { "common", { 210, 210, 210, 255 } },
+      { "uncommon", { 0, 220, 100, 255 } },
+      { "rare", { 255, 130, 0, 255 } },
+      { "epic", { 255, 73, 193, 255 } },
+      { "legendary", { 0, 139, 255, 255 } },
+      { "unique", { 130, 180, 210, 255 } },
+      { "artifact", { 10, 10, 220, 255 } },
+   };
+   for (const auto& [rarity, color] : cases) {
+      cv::Mat title { 44, 280, CV_8UC4, cv::Scalar { 8, 8, 8, 255 } };
+      cv::putText (title, "Grimoire", { 42, 32 }, cv::FONT_HERSHEY_SIMPLEX,
+                   0.9, color, 2);
+      EXPECT_EQ (prep::title_rarity (title), rarity);
+   }
+}
+
 TEST (OcrPreprocessor, IdentifiesThinHorizontalRule)
 {
    cv::Mat rule { 12, 480, CV_8UC4, cv::Scalar { 8, 8, 8, 255 } };

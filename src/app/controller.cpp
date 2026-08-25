@@ -313,7 +313,7 @@ struct Controller::Impl
          auto result = deps.api->analyze_tooltip (
             job.tooltip.text, job.language, job.tooltip.confidence,
             capture::backend_name (job.tooltip.backend), job.tooltip.gems,
-            job.enabled_widgets);
+            job.enabled_widgets, job.tooltip.rarity);
          const auto analysis_ms = std::chrono::duration_cast<std::chrono::milliseconds> (
             std::chrono::steady_clock::now () - analysis_started).count ();
 

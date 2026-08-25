@@ -21,6 +21,7 @@ struct RecognizedTooltip {
    std::uint64_t generation = 0;
    capture::Rect rect;
    std::string   text;
+   std::string   rarity;
    std::unordered_map<std::string, std::string> gems;
    float         confidence = 0.0f;
    capture::CaptureBackend backend = capture::CaptureBackend::Unknown;
@@ -34,6 +35,7 @@ struct TooltipSample {
    cv::Mat image;
    std::string locale;
    std::string text;
+   std::string rarity;
    float confidence = 0.0f;
    capture::CaptureBackend backend = capture::CaptureBackend::Unknown;
 };

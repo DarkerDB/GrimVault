@@ -700,6 +700,7 @@ struct Pipeline::Impl
          TooltipObservation observation;
          LanguageFamily family = LanguageFamily::English;
          std::string text;
+         std::string rarity;
          std::unordered_map<std::string, std::string> gems;
          float confidence = 0.0f;
       };
@@ -755,6 +756,7 @@ struct Pipeline::Impl
                         .generation = item.generation,
                         .rect = item.boxes.front ().rect,
                         .text = found->text,
+                        .rarity = found->rarity,
                         .gems = found->gems,
                         .confidence = found->confidence,
                         .backend = item.frame.backend,
@@ -808,6 +810,9 @@ struct Pipeline::Impl
 
             const auto t0    = std::chrono::steady_clock::now ();
             const auto title_band = preprocess::title_band (crop, bands);
+            const auto rarity = title_band.has_value ()
+               ? preprocess::title_rarity (crop (bands [*title_band], cv::Range::all ()))
+               : std::nullopt;
             const auto segmented_at = std::chrono::steady_clock::now ();
 
             // GRIMVAULT_OCR_DEBUG=1 → dump crop + bands to %TEMP%\grimvault-ocr
@@ -944,6 +949,7 @@ struct Pipeline::Impl
                         .generation  = item.generation,
                         .rect        = box.rect,
                         .text        = line_text,
+                        .rarity      = rarity.value_or (""),
                         .confidence  = line_confidence,
                         .backend     = item.frame.backend,
                         .preliminary = true,
@@ -969,6 +975,7 @@ struct Pipeline::Impl
                { "total_ms", std::to_string (ms) },
                { "lines", std::to_string (conf_n) },
                { "bands", std::to_string (bands.size ()) },
+               { "rarity", rarity.value_or ("unknown") },
                { "confidence", fmt::format ("{:.3f}",
                   conf_n ? conf_sum / conf_n : 0.0f) },
             });
@@ -985,6 +992,7 @@ struct Pipeline::Impl
                      .image = crop,
                      .locale = locale_name,
                      .text = text,
+                     .rarity = rarity.value_or (""),
                      .confidence = confidence,
                      .backend = item.frame.backend,
                   });
@@ -1003,15 +1011,16 @@ struct Pipeline::Impl
                newline += 2;
             }
             core::Logger::info (
-               "OCR result generation={} family={} confidence={:.3f} text=\"{}\"",
+               "OCR result generation={} family={} rarity={} confidence={:.3f} text=\"{}\"",
                item.generation, family_dir (family),
-               confidence, printable);
+               rarity.value_or ("unknown"), confidence, printable);
 
             if (cache.size () == 128) cache.erase (cache.begin ());
             cache.push_back (Cached {
                .observation = item.observation,
                .family = family,
                .text = text,
+               .rarity = rarity.value_or (""),
                .gems = gems,
                .confidence = confidence,
             });
@@ -1022,6 +1031,7 @@ struct Pipeline::Impl
                      .generation  = item.generation,
                      .rect        = box.rect,
                      .text        = std::move (text),
+                     .rarity      = rarity.value_or (""),
                      .gems        = std::move (gems),
                      .confidence  = confidence,
                      .backend     = item.frame.backend,

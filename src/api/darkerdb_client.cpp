@@ -1460,6 +1460,7 @@ core::Result<TooltipLookup> DDBClient::analyze_tooltip (
    std::string_view     capture_backend,
    const std::unordered_map<std::string, std::string>& gems,
    const std::vector<std::string>& enabled_widgets,
+   std::string_view rarity,
    std::chrono::seconds cache_ttl
 ) {
    const std::string lang { language };
@@ -1482,7 +1483,8 @@ core::Result<TooltipLookup> DDBClient::analyze_tooltip (
          .append ("\x1f").append (lang)
          .append ("\x1f").append (normalized_cache_text (text))
          .append ("\x1f").append (std::to_string (confidence_bucket))
-         .append ("\x1f").append (capture_backend);
+         .append ("\x1f").append (capture_backend)
+         .append ("\x1f").append (rarity);
       for (const auto& [line, family] : ordered_gems) {
          cache_key.append ("\x1e").append (line).append ("\x1f").append (family);
       }
@@ -1525,6 +1527,7 @@ core::Result<TooltipLookup> DDBClient::analyze_tooltip (
          { "raw_text",    text },
          { "confidence",  std::clamp (confidence, 0.0f, 1.0f) },
          { "gems",        gems },
+         { "rarity",      rarity },
       }},
       { "hints", {
          { "capture_backend", capture_backend.empty () ? "unknown" : capture_backend },
