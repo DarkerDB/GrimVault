@@ -7,6 +7,7 @@
 #include <gv/capture/capture_service.h>
 #include <gv/cli/cli.h>
 #include <gv/collection/collector.h>
+#include <gv/collection/log_artifact.h>
 #include <gv/core/crash_handler.h>
 #include <gv/core/env.h>
 #include <gv/core/env_resolver.h>
@@ -700,6 +701,21 @@ namespace {
          .capture_fps_locked = opts.fcr > 0.0,
       }};
       settings_bridge.reload ();
+
+      const auto collect_log = [&collection, &collection_install_id, &data_dir, &active_env] {
+         gv::collection::submit_latest_log (
+            collection,
+            data_dir / "logs",
+            collection_install_id,
+            gv::core::version::string,
+            active_env.name
+         );
+      };
+      QTimer log_collection_timer;
+      QObject::connect (&log_collection_timer, &QTimer::timeout, &app, collect_log);
+      QObject::connect (&settings_bridge, &gv::app::SettingsBridge::applied, &app, collect_log);
+      log_collection_timer.start (std::chrono::hours { 1 });
+      QTimer::singleShot (0, &app, collect_log);
 
       // ---- Tray icon ----
       if (!QSystemTrayIcon::isSystemTrayAvailable ()) {

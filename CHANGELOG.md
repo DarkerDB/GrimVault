@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [2.1.0] - 2026-08-24
 
 - Introduced multilingual OCR and localized analysis cards for supported game languages
-- Added dashboard language selection and opt-in private tooltip samples for continued recognition improvements
+- Added dashboard language selection and opt-in private tooltip samples plus daily diagnostic logs for continued improvements
 - Hardened WebView2 startup with clean-profile and software-rendering recovery
 - Fixed startup on Windows profiles containing non-Latin characters
 - Fixed the overlay remaining hidden after relaunch
