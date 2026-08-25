@@ -2,13 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
-## [2.0.7] - 2026-08-24
+## [2.1.0] - 2026-08-24
 
-- Restored localized OCR, dashboard language selection, and fully localized analysis cards
-- Added game-font OCR models and stronger item, rarity, and roll recognition across supported languages
-- Added opt-in private tooltip collection for continued recognition improvements
-- Hardened WebView2 startup and removed the inconsistent alternate renderer
-- Fixed startup on non-ASCII Windows profiles and dashboard function-key hotkeys
+- Introduced multilingual OCR and localized analysis cards for supported game languages
+- Added dashboard language selection and opt-in private tooltip samples for continued recognition improvements
+- Hardened WebView2 startup with clean-profile and software-rendering recovery
+- Fixed startup on Windows profiles containing non-Latin characters
+- Fixed the overlay remaining hidden after relaunch
 
 ## [0.0.5] - 2026-08-15
 

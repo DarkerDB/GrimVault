@@ -107,6 +107,7 @@ struct Controller::Impl
    // this, so a player in Manual who hides and re-shows the card lands back
    // in Manual rather than being silently upgraded to Auto.
    std::atomic<Mode>      configured_mode { Mode::Auto };
+   std::atomic<bool>      mode_adopted { false };
    std::atomic<bool>      debug_overlay { false };
 
    // Last known game window state (updated from tracker thread, read by
@@ -567,11 +568,13 @@ void Controller::stop ()
 
 void Controller::set_configured_mode (Mode m)
 {
-   // Only act when the DASHBOARD value actually moved. Every settings poll
-   // pushes the whole bundle, so comparing against the live mode instead
-   // would make an unrelated change (nudging opacity) silently undo an
-   // overlay the player had just hidden with the toggle_overlay hotkey.
-   if (impl_->configured_mode.exchange (m) == m) return;
+   const Mode previous = impl_->configured_mode.exchange (m);
+   const bool adopting = !impl_->mode_adopted.exchange (true);
+
+   if (adopting && m == Mode::Disabled)
+      m = Mode::Auto;
+   else if (previous == m)
+      return;
 
    if (impl_->mode.load () == m) return;
 
