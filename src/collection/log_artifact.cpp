@@ -67,7 +67,7 @@ bool submit_latest_log (
         !error && files != end; files.increment (error)) {
       if (!files->is_regular_file (error) || error) break;
       const auto date = date_of (files->path ());
-      if (date.empty () || date >= today || date <= latest_date) continue;
+      if (date.empty () || date > today || date <= latest_date) continue;
       const auto bytes = files->file_size (error);
       if (error || bytes == 0 || bytes > max_log_bytes) {
          error.clear ();

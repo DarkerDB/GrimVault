@@ -715,7 +715,7 @@ namespace {
       QTimer log_collection_timer;
       QObject::connect (&log_collection_timer, &QTimer::timeout, &app, collect_log);
       QObject::connect (&settings_bridge, &gv::app::SettingsBridge::applied, &app, collect_log);
-      log_collection_timer.start (std::chrono::hours { 1 });
+      log_collection_timer.start (std::chrono::hours { 12 });
       QTimer::singleShot (0, &app, collect_log);
 
       // ---- Tray icon ----

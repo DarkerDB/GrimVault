@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -36,7 +37,7 @@ TEST (CollectionCollector, RequiresConsentAndDeduplicatesSamples)
    EXPECT_EQ (calls.load (), 1);
 }
 
-TEST (CollectionCollector, SubmitsLatestCompletedDailyLog)
+TEST (CollectionCollector, SubmitsLatestLogIncludingCurrentDay)
 {
    std::promise<gv::api::CollectionSample> sent;
    auto completed = sent.get_future ();
@@ -50,9 +51,19 @@ TEST (CollectionCollector, SubmitsLatestCompletedDailyLog)
       / ("grimvault-collection-" + std::to_string (
          std::chrono::steady_clock::now ().time_since_epoch ().count ()));
    std::filesystem::create_directories (directory);
+   const auto now = std::chrono::system_clock::to_time_t (std::chrono::system_clock::now ());
+   std::tm parts {};
+#ifdef _WIN32
+   ::localtime_s (&parts, &now);
+#else
+   ::localtime_r (&now, &parts);
+#endif
+   char date [11] {};
+   std::strftime (date, sizeof (date), "%Y-%m-%d", &parts);
+   const auto current = std::string { date };
    {
       std::ofstream { directory / "grimvault_2000-01-01.txt" } << "older";
-      std::ofstream { directory / "grimvault_2001-01-01.txt" } << "latest";
+      std::ofstream { directory / ("grimvault_" + current + ".txt") } << "current";
       std::ofstream { directory / "unrelated.txt" } << "ignored";
    }
 
@@ -62,9 +73,9 @@ TEST (CollectionCollector, SubmitsLatestCompletedDailyLog)
    const auto sample = completed.get ();
    EXPECT_EQ (sample.channel, "log");
    EXPECT_EQ (sample.content_type, "text/plain");
-   EXPECT_EQ (sample.body, "latest");
-   EXPECT_EQ (sample.metadata ["date"], "2001-01-01");
-   EXPECT_EQ (sample.metadata ["filename"], "grimvault_2001-01-01.txt");
+   EXPECT_EQ (sample.body, "current");
+   EXPECT_EQ (sample.metadata ["date"], current);
+   EXPECT_EQ (sample.metadata ["filename"], "grimvault_" + current + ".txt");
    EXPECT_EQ (sample.metadata ["install_id"], "install");
    EXPECT_EQ (sample.metadata ["partition"], "logs");
 
