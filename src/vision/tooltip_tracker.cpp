@@ -10,6 +10,7 @@ namespace {
 
    constexpr int k_margin      = 20;    // search reach around each coarse edge
    constexpr int k_min_side    = 40;    // anything smaller is not a tooltip
+   constexpr int k_max_inward  = 8;
    constexpr int k_fp_h        = 24;    // fingerprint corner-block size
    constexpr int k_fp_w        = 48;
    constexpr int k_content_h   = 40;
@@ -220,6 +221,18 @@ TooltipSelection TooltipTracker::select (
    const cv::Mat& bgra, const capture::Rect& coarse)
 {
    const auto refined = refine (bgra, coarse);
+   if (refined.has_value ()) {
+      const int coarseRight = coarse.x + coarse.w;
+      const int coarseBottom = coarse.y + coarse.h;
+      const int refinedRight = refined->x + refined->w;
+      const int refinedBottom = refined->y + refined->h;
+      if (refined->x > coarse.x + k_max_inward
+          || refined->y > coarse.y + k_max_inward
+          || refinedRight < coarseRight - k_max_inward
+          || refinedBottom < coarseBottom - k_max_inward) {
+         return { .rect = coarse, .refined = false };
+      }
+   }
    return {
       .rect = refined.value_or (coarse),
       .refined = refined.has_value (),

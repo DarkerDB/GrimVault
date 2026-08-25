@@ -294,7 +294,6 @@ namespace {
       bool   highlight_game    = false;
       bool   detect_only   = false;
       bool   ocr_only      = false;
-      bool   collect_ocr   = false;
       double fcr           = 0.0;   // frames/s while active; 0 = default
    };
 
@@ -508,6 +507,7 @@ namespace {
 
       gv::api::DDBClient::Config api_cfg;
       api_cfg.base_url  = std::string { active_env.api_base_url };
+      api_cfg.collection_base_url = std::string { active_env.collection_base_url };
       api_cfg.client_id = std::string { active_env.client_id };
       gv::api::DDBClient api_client { api_cfg, &session, db->get () };
       gv::collection::Collector collection { api_client };
@@ -594,13 +594,6 @@ namespace {
             gv::core::Logger::info ("Evidence directory: {}",
                pipe_cfg.evidence_dir.string ());
          }
-         if (opts.collect_ocr) {
-            const auto root = active_env.name == "prod" ? data_dir : data_dir.parent_path ();
-            pipe_cfg.collector_dir = root / "ocr-samples" / "inbox";
-            gv::core::Logger::info ("OCR collector directory: {}",
-               pipe_cfg.collector_dir.string ());
-         }
-
          pipeline = std::make_unique<gv::ocr::Pipeline> (
             *capture, detector, langs, pipe_cfg);
          pipeline->on_sample ([&collection, &collection_install_id] (gv::ocr::TooltipSample sample) {
@@ -1137,8 +1130,7 @@ int main (int argc, char** argv)
           || a == "--debug"  || a.rfind ("--debug=", 0) == 0
           || a == "--detached"
           || a == "--detect-only"
-          || a == "--ocr-only"
-          || a == "--collect-ocr";
+          || a == "--ocr-only";
    };
 
    const bool all_gui_flags = !cli_args.empty () &&
@@ -1159,7 +1151,6 @@ int main (int argc, char** argv)
          if (a == "--debug" || a.rfind ("--debug=", 0) == 0) apply_debug_option (opts, a);
          if (a == "--detect-only")   opts.detect_only   = true;
          if (a == "--ocr-only")      opts.ocr_only      = true;
-         if (a == "--collect-ocr")   opts.collect_ocr   = true;
       }
       return run_gui (argc, argv, opts);
    }

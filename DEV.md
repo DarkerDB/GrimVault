@@ -150,15 +150,12 @@ grimvault --debug=highlight:game
 grimvault --debug=highlight:objects,highlight:game
                           # enable both borders
 grimvault --detect-only   # stop after detection: hover -> box, no OCR/lookup/augment
-grimvault --collect-ocr   # save unique tooltip and line crops for OCR training
 grimvault --fcr 10        # active frame capture rate, 1-60 fps (default 15;
                           # idle drops to 3 until something is detected)
 ```
 
-The collector dataset contains no full-screen frames. Each stable tooltip is stored once at
-`%LOCALAPPDATA%\GrimVault\ocr-samples\inbox\` with its locale, OCR output,
-tooltip crop, segmented line crops, and hashes. Run `grimvault dev --collect-ocr`,
-then hover each distinct tooltip until it is recognized.
+The dashboard improvement setting controls private tooltip sample submission.
+Only detected tooltip crops are submitted. Uploaded object paths are recorded in the log.
 
 ### Anchoring diagnostics
 

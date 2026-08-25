@@ -80,7 +80,8 @@ struct Collector::Impl
                + std::chrono::seconds { result->retry_after };
          }
          if (result->accepted) {
-            core::Logger::info ("collection: {} uploaded bytes={}", sample.channel, sample.body.size ());
+            core::Logger::info ("collection: {} uploaded bytes={} object={}",
+               sample.channel, sample.body.size (), result->object_key);
          } else {
             core::Logger::debug ("collection: {} skipped reason={}", sample.channel, result->reason);
          }

@@ -75,6 +75,7 @@ struct EnvDef {
    std::string_view name;
    std::string_view client_id;
    std::string_view api_base_url;
+   std::string_view collection_base_url;
    std::string_view auth_base_url;
    std::string_view spa_base_url;
 };
@@ -83,6 +84,7 @@ inline constexpr EnvDef k_env_dev {
    .name          = "dev",
    .client_id     = "grimvault",
    .api_base_url  = "https://api.dev.darkerdb.com",
+   .collection_base_url = "https://api.dev.katforge.com",
    .auth_base_url = "https://auth.dev.darkerdb.com",
    .spa_base_url  = "https://dev.darkerdb.com",
 };
@@ -91,6 +93,7 @@ inline constexpr EnvDef k_env_qa {
    .name          = "qa",
    .client_id     = "grimvault",
    .api_base_url  = "https://api.qa.darkerdb.com",
+   .collection_base_url = "https://api.qa.katforge.com",
    .auth_base_url = "https://auth.qa.darkerdb.com",
    .spa_base_url  = "https://qa.darkerdb.com",
 };
@@ -99,6 +102,7 @@ inline constexpr EnvDef k_env_prod {
    .name          = "prod",
    .client_id     = "grimvault",
    .api_base_url  = "https://api.darkerdb.com",
+   .collection_base_url = "https://api.katforge.com",
    .auth_base_url = "https://auth.darkerdb.com",
    .spa_base_url  = "https://darkerdb.com",
 };

@@ -414,6 +414,7 @@ struct CollectionResult {
    bool accepted = false;
    int retry_after = 0;
    std::string reason;
+   std::string object_key;
 };
 
 core::Result<SettingsBundle> parse_settings (std::string_view json);
@@ -434,6 +435,7 @@ class DDBClient
 public:
    struct Config {
       std::string base_url;              // from active_env ().api_base_url
+      std::string collection_base_url;
       std::string client_id;             // from active_env ().client_id (X-Client-Id)
       std::string user_agent     = "";   // computed if empty
       std::string ca_bundle      = "";

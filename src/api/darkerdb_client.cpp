@@ -1638,7 +1638,7 @@ core::Result<CollectionResult> DDBClient::collect (const CollectionSample& sampl
    if (sample.channel.empty () || sample.content_type.empty () || sample.body.empty ()
        || !sample.metadata.is_object ()) {
       return core::fail (core::Error::make (
-         core::ErrorKind::InvalidArgument, "darkerdb: invalid collection sample"));
+         core::ErrorKind::InvalidArgument, "katforge: invalid collection sample"));
    }
 
    const nlohmann::json authorization {
@@ -1650,7 +1650,7 @@ core::Result<CollectionResult> DDBClient::collect (const CollectionSample& sampl
    };
    Impl::Req authorize {
       .method = "POST",
-      .url = impl_->cfg.base_url + "/v2/grimvault/collection/authorize",
+      .url = impl_->cfg.collection_base_url + "/v1/collections/authorize",
       .body = authorization.dump (),
       .retryable = false,
    };
@@ -1658,28 +1658,29 @@ core::Result<CollectionResult> DDBClient::collect (const CollectionSample& sampl
    if (!response.has_value ()) return core::fail (response.error ());
    if (response->status == 401 || response->status == 403) {
       return core::fail (core::Error::make (
-         core::ErrorKind::Permission, "darkerdb: collection authorization denied"));
+         core::ErrorKind::Permission, "katforge: collection authorization denied"));
    }
    if (response->status < 200 || response->status >= 300) {
       return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
-         "darkerdb: collection authorization HTTP {}", response->status));
+         "katforge: collection authorization HTTP {}", response->status));
    }
 
    auto envelope = nlohmann::json::parse (response->body, nullptr, false);
    if (envelope.is_discarded ()) {
       return core::fail (core::Error::make (
-         core::ErrorKind::ExternalApi, "darkerdb: invalid collection authorization"));
+         core::ErrorKind::ExternalApi, "katforge: invalid collection authorization"));
    }
    const auto& body = body_of (envelope);
    if (!body.is_object ()) {
       return core::fail (core::Error::make (
-         core::ErrorKind::ExternalApi, "darkerdb: invalid collection authorization"));
+         core::ErrorKind::ExternalApi, "katforge: invalid collection authorization"));
    }
 
    CollectionResult result {
       .accepted = body.value ("accepted", false),
       .retry_after = body.value ("retry_after", 0),
       .reason = body.value ("reason", ""),
+      .object_key = body.value ("object_key", ""),
    };
    if (!result.accepted) return result;
 
@@ -1687,7 +1688,7 @@ core::Result<CollectionResult> DDBClient::collect (const CollectionSample& sampl
    const auto sample_id = body.value ("sample_id", "");
    if (upload == body.end () || !upload->is_object () || sample_id.empty ()) {
       return core::fail (core::Error::make (
-         core::ErrorKind::ExternalApi, "darkerdb: incomplete collection authorization"));
+         core::ErrorKind::ExternalApi, "katforge: incomplete collection authorization"));
    }
 
    std::vector<core::http::Header> headers;
@@ -1715,12 +1716,12 @@ core::Result<CollectionResult> DDBClient::collect (const CollectionSample& sampl
    if (!uploaded.has_value ()) return core::fail (uploaded.error ());
    if (uploaded->status < 200 || uploaded->status >= 300) {
       return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
-         "darkerdb: collection upload HTTP {}", uploaded->status));
+         "katforge: collection upload HTTP {}", uploaded->status));
    }
 
    Impl::Req complete {
       .method = "POST",
-      .url = impl_->cfg.base_url + "/v2/grimvault/collection/complete",
+      .url = impl_->cfg.collection_base_url + "/v1/collections/complete",
       .body = nlohmann::json ({ { "sample_id", sample_id } }).dump (),
       .retryable = false,
    };
@@ -1728,17 +1729,17 @@ core::Result<CollectionResult> DDBClient::collect (const CollectionSample& sampl
    if (!completed.has_value ()) return core::fail (completed.error ());
    if (completed->status < 200 || completed->status >= 300) {
       return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
-         "darkerdb: collection completion HTTP {}", completed->status));
+         "katforge: collection completion HTTP {}", completed->status));
    }
    auto completion_envelope = nlohmann::json::parse (completed->body, nullptr, false);
    if (completion_envelope.is_discarded ()) {
       return core::fail (core::Error::make (
-         core::ErrorKind::ExternalApi, "darkerdb: invalid collection completion"));
+         core::ErrorKind::ExternalApi, "katforge: invalid collection completion"));
    }
    const auto& completion = body_of (completion_envelope);
    if (!completion.is_object () || !completion.value ("completed", false)) {
       return core::fail (core::Error::make (
-         core::ErrorKind::ExternalApi, "darkerdb: collection completion rejected"));
+         core::ErrorKind::ExternalApi, "katforge: collection completion rejected"));
    }
 
    return result;

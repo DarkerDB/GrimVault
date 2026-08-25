@@ -85,6 +85,23 @@ TEST (TooltipTracker, SelectionUsesRefinedBoxWhenAvailable)
    EXPECT_NEAR (selected.rect.h, k_truth.h, 8);
 }
 
+TEST (TooltipTracker, SelectionRejectsInteriorFrameRidges)
+{
+   cv::Mat img = scene_with_tooltip (k_truth);
+   cv::line (img,
+      { k_truth.x, k_truth.y + 18 },
+      { k_truth.x + k_truth.w, k_truth.y + 18 },
+      cv::Scalar { 255, 255, 255, 255 }, 7);
+
+   const auto selected = TooltipTracker::select (img, k_truth);
+
+   EXPECT_EQ (selected.rect.x, k_truth.x);
+   EXPECT_EQ (selected.rect.y, k_truth.y);
+   EXPECT_EQ (selected.rect.w, k_truth.w);
+   EXPECT_EQ (selected.rect.h, k_truth.h);
+   EXPECT_FALSE (selected.refined);
+}
+
 TEST (TooltipTracker, VerifyMatchesAtTruthAndRejectsElsewhere)
 {
    const cv::Mat img = scene_with_tooltip (k_truth);

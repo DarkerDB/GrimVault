@@ -57,7 +57,6 @@ public:
       LanguageFamily              language           = LanguageFamily::Latin;
       std::filesystem::path       evidence_dir;
       std::uintmax_t              evidence_max_bytes = 250ull * 1024ull * 1024ull;
-      std::filesystem::path       collector_dir;
    };
 
    // Once a tooltip settles,
