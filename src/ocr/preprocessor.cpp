@@ -183,6 +183,31 @@ std::optional<std::string> title_rarity (const cv::Mat& line)
    return rarity.empty () ? std::nullopt : std::optional { rarity };
 }
 
+std::optional<std::string> tooltip_rarity (
+   const cv::Mat& crop, const std::vector<cv::Range>& bands)
+{
+   if (crop.empty () || crop.channels () < 3) return std::nullopt;
+   cv::Mat bgr;
+   if (crop.channels () == 4) cv::cvtColor (crop, bgr, cv::COLOR_BGRA2BGR);
+   else bgr = crop;
+   int artifact_pixels = 0;
+   for (int y = 0; y < bgr.rows && artifact_pixels < 12; ++y) {
+      const auto* row = bgr.ptr<cv::Vec3b> (y);
+      for (int x = 0; x < bgr.cols; ++x) {
+         const int blue = row [x][0];
+         const int green = row [x][1];
+         const int red = row [x][2];
+         if (red >= 140 && green <= 76 && blue <= 76 && red >= green * 2)
+            ++artifact_pixels;
+      }
+   }
+   if (artifact_pixels >= 12) return "artifact";
+   const auto title = title_band (crop, bands);
+   return title.has_value ()
+      ? title_rarity (crop (bands [*title], cv::Range::all ()))
+      : std::nullopt;
+}
+
 bool top_is_clipped (const cv::Mat& crop, const std::vector<cv::Range>& bands)
 {
    if (crop.empty ()) return false;

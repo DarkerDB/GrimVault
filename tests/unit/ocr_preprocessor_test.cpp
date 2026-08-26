@@ -204,6 +204,30 @@ TEST (OcrPreprocessor, ReadsRarityFromTitleColor)
    }
 }
 
+TEST (OcrPreprocessor, ReadsArtifactRarityWhenTitleIsMissing)
+{
+   cv::Mat crop { 240, 420, CV_8UC4, cv::Scalar { 8, 8, 8, 255 } };
+   cv::putText (crop, "Armor 43", { 145, 42 }, cv::FONT_HERSHEY_SIMPLEX,
+                0.7, cv::Scalar { 238, 238, 238, 255 }, 2);
+   cv::putText (crop, "Rarity Artifact", { 115, 190 }, cv::FONT_HERSHEY_SIMPLEX,
+                0.7, cv::Scalar { 15, 15, 230, 255 }, 2);
+
+   const auto rarity = prep::tooltip_rarity (crop, prep::line_bands (crop));
+   ASSERT_TRUE (rarity.has_value ());
+   EXPECT_EQ (*rarity, "artifact");
+}
+
+TEST (OcrPreprocessor, DoesNotTreatLegendaryOrangeAsArtifact)
+{
+   cv::Mat crop { 120, 420, CV_8UC4, cv::Scalar { 8, 8, 8, 255 } };
+   cv::putText (crop, "Royal Diamond", { 90, 42 }, cv::FONT_HERSHEY_SIMPLEX,
+                0.7, cv::Scalar { 0, 128, 255, 255 }, 2);
+
+   const auto rarity = prep::tooltip_rarity (crop, prep::line_bands (crop));
+   ASSERT_TRUE (rarity.has_value ());
+   EXPECT_EQ (*rarity, "legendary");
+}
+
 TEST (OcrPreprocessor, IdentifiesThinHorizontalRule)
 {
    cv::Mat rule { 12, 480, CV_8UC4, cv::Scalar { 8, 8, 8, 255 } };

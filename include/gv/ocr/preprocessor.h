@@ -14,6 +14,7 @@ std::vector<cv::Range> line_bands (const cv::Mat& crop);
 std::size_t            first_tooltip_band (const cv::Mat& crop, const std::vector<cv::Range>& bands);
 std::optional<std::size_t> title_band (const cv::Mat& crop, const std::vector<cv::Range>& bands);
 std::optional<std::string> title_rarity (const cv::Mat& line);
+std::optional<std::string> tooltip_rarity (const cv::Mat& crop, const std::vector<cv::Range>& bands);
 bool                   top_is_clipped (const cv::Mat& crop, const std::vector<cv::Range>& bands);
 cv::Mat                trim_cols  (const cv::Mat& line);
 std::vector<cv::Range> col_chunks (const cv::Mat& line);

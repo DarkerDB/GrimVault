@@ -808,11 +808,9 @@ struct Pipeline::Impl
                bands = preprocess::line_bands (crop);
             }
 
-            const auto t0    = std::chrono::steady_clock::now ();
+            const auto t0 = std::chrono::steady_clock::now ();
             const auto title_band = preprocess::title_band (crop, bands);
-            const auto rarity = title_band.has_value ()
-               ? preprocess::title_rarity (crop (bands [*title_band], cv::Range::all ()))
-               : std::nullopt;
+            const auto rarity = preprocess::tooltip_rarity (crop, bands);
             const auto segmented_at = std::chrono::steady_clock::now ();
 
             // GRIMVAULT_OCR_DEBUG=1 → dump crop + bands to %TEMP%\grimvault-ocr
