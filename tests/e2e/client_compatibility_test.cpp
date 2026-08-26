@@ -30,10 +30,12 @@ struct Model {
 constexpr std::array models {
    Model { LanguageFamily::English, "en",     gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict, true },
    Model { LanguageFamily::Latin,   "latin",  gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict, true },
+   Model { LanguageFamily::French,  "fr",     gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict, true },
    Model { LanguageFamily::Eslav,   "eslav",  gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict, true },
    Model { LanguageFamily::Korean,  "korean", gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict, true },
    Model { LanguageFamily::Japanese, "ja",    gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict, true },
    Model { LanguageFamily::Chinese, "ch",     gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict, true },
+   Model { LanguageFamily::TraditionalChinese, "ch-hant", gv::ocr::model_files::rec_tooltip_body, gv::ocr::model_files::rec_tooltip_dict, true },
 };
 
 cv::Mat gem_line (const cv::Scalar& bgra, double scale)

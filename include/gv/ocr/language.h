@@ -25,12 +25,14 @@ namespace model_files {
 } // namespace model_files
 
 enum class LanguageFamily {
-   English,  // en (narrow alphabet; higher English accuracy)
-   Latin,    // de, es, fr, pt-BR
-   Eslav,    // ru
-   Korean,   // ko
+   English,
+   Latin,
+   French,
+   Eslav,
+   Korean,
    Japanese,
-   Chinese,  // zh-Hans, zh-Hant
+   Chinese,
+   TraditionalChinese,
 };
 
 constexpr std::string_view family_dir (LanguageFamily f) noexcept
@@ -38,10 +40,12 @@ constexpr std::string_view family_dir (LanguageFamily f) noexcept
    switch (f) {
       case LanguageFamily::English: return "en";
       case LanguageFamily::Latin:   return "latin";
+      case LanguageFamily::French:  return "fr";
       case LanguageFamily::Eslav:   return "eslav";
       case LanguageFamily::Korean:  return "korean";
       case LanguageFamily::Japanese: return "ja";
       case LanguageFamily::Chinese: return "ch";
+      case LanguageFamily::TraditionalChinese: return "ch-hant";
    }
    return "latin";
 }
@@ -51,11 +55,12 @@ constexpr std::string_view family_dir (LanguageFamily f) noexcept
 constexpr LanguageFamily family_of (std::string_view game_locale) noexcept
 {
    if (game_locale == "en")      return LanguageFamily::English;
+   if (game_locale == "fr")      return LanguageFamily::French;
    if (game_locale == "ru")      return LanguageFamily::Eslav;
    if (game_locale == "ko")      return LanguageFamily::Korean;
    if (game_locale == "ja")      return LanguageFamily::Japanese;
    if (game_locale == "zh-Hans") return LanguageFamily::Chinese;
-   if (game_locale == "zh-Hant") return LanguageFamily::Chinese;
+   if (game_locale == "zh-Hant") return LanguageFamily::TraditionalChinese;
    return LanguageFamily::Latin;
 }
 

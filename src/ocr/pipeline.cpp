@@ -900,7 +900,7 @@ struct Pipeline::Impl
                }
 
                if (line_confidence_n > 1) line_confidence /= line_confidence_n;
-               if (family == LanguageFamily::Latin)
+               if (family == LanguageFamily::Latin || family == LanguageFamily::French)
                   canonicalize_latin (line_text);
                if (evidence.enabled ()) {
                   evidence_lines.push_back (EvidenceLine {
