@@ -512,7 +512,9 @@ struct Pipeline::Impl
          health.record_detection (detect_ms);
 
          std::optional<capture::Rect> selected;
+         std::optional<capture::Rect> detector_box;
          std::optional<TooltipObservation> observation;
+         bool refined = false;
          if (!detected.has_value ()) {
             ++health.errors;
             health.latest_error = detected.error ().message;
@@ -523,7 +525,10 @@ struct Pipeline::Impl
          }
          if (detected.has_value () && !detected->empty ()) {
             const auto* box = nearest_to_cursor (*detected, frame.cursor);
-            selected = box->rect;
+            detector_box = box->rect;
+            const auto selection = vision::TooltipTracker::select (image, box->rect);
+            selected = selection.rect;
+            refined = selection.refined;
             observation = TooltipObservation::read (image, *selected, frame.cursor);
             if (!observation.has_value ()) ++health.identity_failures;
          }
@@ -643,7 +648,12 @@ struct Pipeline::Impl
             { "y", std::to_string (selected->y) },
             { "w", std::to_string (selected->w) },
             { "h", std::to_string (selected->h) },
+            { "detector_x", std::to_string (detector_box->x) },
+            { "detector_y", std::to_string (detector_box->y) },
+            { "detector_w", std::to_string (detector_box->w) },
+            { "detector_h", std::to_string (detector_box->h) },
             { "detections", std::to_string (detected->size ()) },
+            { "refined", refined ? "1" : "0" },
             { "detect_ms", std::to_string (last_detect_ms.load ()) },
          });
 
@@ -779,6 +789,7 @@ struct Pipeline::Impl
             cv_box &= cv::Rect (0, 0, bgra.cols, bgra.rows);
 
             if (cv_box.area () <= 0) continue;
+            const cv::Rect sample_box = cv_box;
 
             auto make_crop = [&] {
                cv::Mat value = bgra (cv_box).clone ();
@@ -970,13 +981,14 @@ struct Pipeline::Impl
             const float confidence = conf_n ? conf_sum / conf_n : 0.0f;
             evidence.ocr (
                item.generation, crop, evidence_lines, text, confidence);
-            const capture::Rect sample_rect { cv_box.x, cv_box.y, cv_box.width, cv_box.height };
+            const capture::Rect sample_rect {
+               sample_box.x, sample_box.y, sample_box.width, sample_box.height };
             if (sample_cb) {
                try {
                   sample_cb (TooltipSample {
                      .generation = item.generation,
                      .rect = sample_rect,
-                     .image = crop,
+                     .image = bgra (sample_box).clone (),
                      .locale = locale_name,
                      .text = text,
                      .rarity = rarity.value_or (""),

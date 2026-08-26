@@ -53,6 +53,45 @@ TEST (TooltipTracker, VerifyMatchesAtTruthAndRejectsElsewhere)
    EXPECT_FALSE (TooltipTracker::verify (gone, a, k_truth.x, k_truth.y));
 }
 
+TEST (TooltipTracker, SelectSnapsEveryEdgePastInternalRules)
+{
+   cv::Mat image = scene_with_tooltip (k_truth);
+   cv::line (
+      image,
+      { k_truth.x + 16, k_truth.y + k_truth.h - 42 },
+      { k_truth.x + k_truth.w - 16, k_truth.y + k_truth.h - 42 },
+      cv::Scalar { 240, 240, 240, 255 },
+      3);
+   const Rect coarse {
+      k_truth.x - 13,
+      k_truth.y - 12,
+      k_truth.w + 25,
+      k_truth.h - 20,
+   };
+
+   const auto selected = TooltipTracker::select (image, coarse);
+
+   EXPECT_TRUE (selected.refined);
+   EXPECT_NEAR (selected.rect.x, k_truth.x, 3);
+   EXPECT_NEAR (selected.rect.y, k_truth.y, 3);
+   EXPECT_NEAR (selected.rect.x + selected.rect.w, k_truth.x + k_truth.w, 3);
+   EXPECT_NEAR (selected.rect.y + selected.rect.h, k_truth.y + k_truth.h, 3);
+}
+
+TEST (TooltipTracker, SelectKeepsCoarseBoxWithoutContinuousFrame)
+{
+   cv::Mat image { 600, 800, CV_8UC4, cv::Scalar { 18, 16, 14, 255 } };
+   const Rect coarse { 280, 180, 240, 320 };
+
+   const auto selected = TooltipTracker::select (image, coarse);
+
+   EXPECT_FALSE (selected.refined);
+   EXPECT_EQ (selected.rect.x, coarse.x);
+   EXPECT_EQ (selected.rect.y, coarse.y);
+   EXPECT_EQ (selected.rect.w, coarse.w);
+   EXPECT_EQ (selected.rect.h, coarse.h);
+}
+
 TEST (TooltipTracker, LocateAbsorbsPresentationErrorWithoutChangingBoxSize)
 {
    const cv::Mat img = scene_with_tooltip (k_truth);

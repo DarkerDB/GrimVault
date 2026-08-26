@@ -49,9 +49,16 @@ struct TooltipTracking {
    double content_confidence = 0.0;
 };
 
+struct TooltipSelection {
+   capture::Rect rect;
+   bool refined = false;
+};
+
 class TooltipTracker
 {
 public:
+   static TooltipSelection select (const cv::Mat& bgra,
+                                   const capture::Rect& coarse);
    static void remember (const cv::Mat& bgra, const capture::Rect& box, Anchor& anchor);
    static TooltipTracking track (const cv::Mat& bgra, const Anchor& anchor,
                                  int pred_x, int pred_y, int search_px = 24);

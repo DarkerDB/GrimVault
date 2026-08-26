@@ -8,6 +8,10 @@ namespace gv::vision {
 
 namespace {
 
+   constexpr int k_edge_search = 64;
+   constexpr int k_min_side = 40;
+   constexpr float k_edge_threshold = 64.0f;
+   constexpr double k_min_edge_coverage = 0.55;
    constexpr int k_fp_h        = 24;    // fingerprint corner-block size
    constexpr int k_fp_w        = 48;
    constexpr int k_content_h   = 40;
@@ -25,12 +29,52 @@ namespace {
       double confidence = 0.0;
    };
 
+   struct Edge {
+      int position = -1;
+      double score = 0.0;
+   };
+
    cv::Mat gray_of (const cv::Mat& bgra, const cv::Rect& roi)
    {
       cv::Mat gray;
       cv::cvtColor (bgra (roi), gray,
          bgra.channels () == 4 ? cv::COLOR_BGRA2GRAY : cv::COLOR_BGR2GRAY);
       return gray;
+   }
+
+   Edge edge (
+      const cv::Mat& gradient,
+      int expected,
+      int start,
+      int end,
+      bool vertical)
+   {
+      const int extent = vertical ? gradient.cols : gradient.rows;
+      const int limit = vertical ? gradient.rows : gradient.cols;
+      start = std::clamp (start, 0, limit);
+      end = std::clamp (end, 0, limit);
+      if (end - start < k_min_side) return {};
+
+      Edge best;
+      const int low = std::max (0, expected - k_edge_search);
+      const int high = std::min (extent - 1, expected + k_edge_search);
+      for (int position = low; position <= high; ++position) {
+         double strength = 0.0;
+         int active = 0;
+         for (int index = start; index < end; ++index) {
+            const float value = vertical
+               ? gradient.at<float> (index, position)
+               : gradient.at<float> (position, index);
+            strength += std::min (value, 320.0f);
+            active += value >= k_edge_threshold ? 1 : 0;
+         }
+         const double coverage = static_cast<double> (active) / (end - start);
+         if (coverage < k_min_edge_coverage) continue;
+         const double score = strength / (end - start)
+            + coverage * 128.0 - std::abs (position - expected) * 1.5;
+         if (best.position < 0 || score > best.score) best = { position, score };
+      }
+      return best;
    }
 
    Match match (
@@ -141,6 +185,64 @@ namespace {
    }
 
 } // namespace
+
+TooltipSelection TooltipTracker::select (
+   const cv::Mat& bgra, const capture::Rect& coarse)
+{
+   const cv::Rect frame { 0, 0, bgra.cols, bgra.rows };
+   cv::Rect bounded { coarse.x, coarse.y, coarse.w, coarse.h };
+   bounded &= frame;
+   if (bounded.width < k_min_side || bounded.height < k_min_side)
+      return { .rect = coarse };
+
+   cv::Rect search {
+      bounded.x - k_edge_search,
+      bounded.y - k_edge_search,
+      bounded.width + k_edge_search * 2,
+      bounded.height + k_edge_search * 2,
+   };
+   search &= frame;
+   const cv::Rect local {
+      bounded.x - search.x,
+      bounded.y - search.y,
+      bounded.width,
+      bounded.height,
+   };
+
+   const cv::Mat gray = gray_of (bgra, search);
+   cv::Mat horizontal;
+   cv::Mat vertical;
+   cv::Sobel (gray, horizontal, CV_32F, 1, 0, 3);
+   cv::Sobel (gray, vertical, CV_32F, 0, 1, 3);
+   horizontal = cv::abs (horizontal);
+   vertical = cv::abs (vertical);
+
+   const auto left = edge (
+      horizontal, local.x, local.y, local.y + local.height, true);
+   const auto right = edge (
+      horizontal, local.x + local.width, local.y,
+      local.y + local.height, true);
+   if (left.position < 0 || right.position - left.position < k_min_side)
+      return { .rect = coarse };
+
+   const auto top = edge (
+      vertical, local.y, left.position, right.position + 1, false);
+   const auto bottom = edge (
+      vertical, local.y + local.height,
+      left.position, right.position + 1, false);
+   if (top.position < 0 || bottom.position - top.position < k_min_side)
+      return { .rect = coarse };
+
+   return {
+      .rect = {
+         search.x + left.position,
+         search.y + top.position,
+         right.position - left.position + 1,
+         bottom.position - top.position + 1,
+      },
+      .refined = true,
+   };
+}
 
 void Anchor::acquire (
    const capture::Rect& box,
