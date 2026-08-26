@@ -28,6 +28,7 @@ struct Pricing {
    std::int64_t      market      = 0;   // alias for median; kept for overlay compat
    std::int64_t      quick_list  = 0;
    std::int64_t      lowest_ask  = 0;
+   std::int64_t      latest_listing = 0;
    std::int64_t      total_value = 0;
    std::string       confidence;
    double            mean_similarity = 0.0;

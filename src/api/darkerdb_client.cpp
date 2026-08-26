@@ -378,6 +378,7 @@ namespace {
       out.market          = out.median;
       out.quick_list      = integer_or_zero (j, "quick_list");
       out.lowest_ask      = integer_or_zero (j, "lowest_ask");
+      out.latest_listing  = integer_or_zero (j, "latest_listing");
       out.total_value     = integer_or_zero (j, "total_value");
       out.sample_size     = integer_or_zero (j, "sample_size");
       out.ttl_seconds     = static_cast<std::int32_t> (integer_or_zero (j, "ttl_seconds"));
@@ -950,6 +951,7 @@ nlohmann::json diagnostic (const TooltipLookup& lookup)
          { "high", lookup.pricing.high },
          { "quick_list", lookup.pricing.quick_list },
          { "lowest_ask", lookup.pricing.lowest_ask },
+         { "latest_listing", lookup.pricing.latest_listing },
          { "sample_size", lookup.pricing.sample_size },
          { "confidence", lookup.pricing.confidence },
          { "mean_similarity", lookup.pricing.mean_similarity },
