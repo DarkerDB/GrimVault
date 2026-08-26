@@ -106,6 +106,8 @@ Result<Response> perform (const Request& req)
    curl_easy_setopt (curl, CURLOPT_CONNECTTIMEOUT_MS, 5000L);
    curl_easy_setopt (curl, CURLOPT_FOLLOWLOCATION,    req.follow_redirects ? 1L : 0L);
    curl_easy_setopt (curl, CURLOPT_NOSIGNAL,          1L);
+   curl_easy_setopt (curl, CURLOPT_ACCEPT_ENCODING,   "");
+   curl_easy_setopt (curl, CURLOPT_HTTP_VERSION,      CURL_HTTP_VERSION_2TLS);
    apply_tls (curl, req.ca_bundle);
 
    if (!req.body.empty ()) {

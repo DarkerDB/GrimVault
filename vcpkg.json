@@ -5,7 +5,7 @@
    "default-features": [ "source-dependencies" ],
    "dependencies": [
       "cppwinrt",
-      { "name": "curl",      "features": [ "openssl" ] },
+      { "name": "curl",      "features": [ "http2", "openssl" ] },
       "directxtex",
       "directxtk",
       "fmt",

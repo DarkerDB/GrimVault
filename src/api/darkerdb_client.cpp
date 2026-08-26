@@ -1185,6 +1185,8 @@ struct DDBClient::Impl
       curl_easy_setopt (curl, CURLOPT_FOLLOWLOCATION,    0L);
       curl_easy_setopt (curl, CURLOPT_NOSIGNAL,          1L);
       curl_easy_setopt (curl, CURLOPT_TCP_KEEPALIVE,     1L);
+      curl_easy_setopt (curl, CURLOPT_ACCEPT_ENCODING,   "");
+      curl_easy_setopt (curl, CURLOPT_HTTP_VERSION,      CURL_HTTP_VERSION_2TLS);
       curl_easy_setopt (curl, CURLOPT_NOPROGRESS,        0L);
       curl_easy_setopt (curl, CURLOPT_XFERINFOFUNCTION,  &progress_cb);
       curl_easy_setopt (curl, CURLOPT_XFERINFODATA,      &cancel_state);
