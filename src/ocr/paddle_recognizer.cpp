@@ -70,6 +70,7 @@ struct PaddleRecognizer::Impl
    Session                  net;
    Session                  title_net;
    std::filesystem::path    model_path;
+   std::filesystem::path    title_model_path;
    bool                     loaded = false;
    bool                     title_loaded = false;
    std::vector<std::string> dict;
@@ -166,9 +167,17 @@ core::Result<void> PaddleRecognizer::initialize (
       impl_->model_width = impl_->net.width;
       impl_->title_loaded = false;
 
-      const auto title_path = model_path.parent_path () / model_files::rec_tooltip_title;
+      auto title_path = model_path.parent_path () / model_files::rec_tooltip_title;
+      auto title_dict_path = model_path.parent_path () / model_files::rec_tooltip_title_dict;
+      if (!std::filesystem::exists (title_path)
+          || !std::filesystem::exists (title_dict_path)) {
+         title_path = model_path.parent_path () / model_files::rec_ppocr_narrow;
+         title_dict_path = model_path.parent_path () / model_files::rec_ppocr_narrow_dict;
+      }
+      impl_->title_model_path = title_path;
       if (model_path.filename () == model_files::rec_tooltip_body
-          && std::filesystem::exists (title_path)) {
+          && std::filesystem::exists (title_path)
+          && std::filesystem::exists (title_dict_path)) {
          try {
             impl_->title_net = impl_->load (title_path, impl_->net.directml);
             impl_->title_loaded = true;
@@ -187,7 +196,6 @@ core::Result<void> PaddleRecognizer::initialize (
       }
 
       impl_->title_dict = impl_->dict;
-      const auto title_dict_path = model_path.parent_path () / model_files::rec_tooltip_title_dict;
       if (impl_->title_loaded && std::filesystem::exists (title_dict_path)) {
          auto title_dict = read_dictionary (title_dict_path);
          if (!title_dict) return core::fail (title_dict.error ());
@@ -205,7 +213,7 @@ core::Result<void> PaddleRecognizer::initialize (
          impl_->net.directml ? "DirectML" : "CPU", impl_->dict.size ());
       if (impl_->title_loaded) {
          core::Logger::info ("paddle_rec: loaded title model {} ({} chars in dict)",
-            model_files::rec_tooltip_title, impl_->title_dict.size ());
+            title_path.filename ().string (), impl_->title_dict.size ());
       }
 
       return {};
@@ -352,7 +360,7 @@ core::Result<RecognizerResult> PaddleRecognizer::read (const cv::Mat& line, bool
    try {
       const bool use_title = title && impl_->title_loaded;
       auto& net = use_title ? impl_->title_net : impl_->net;
-      const cv::Mat blob = preprocess (line, impl_->model_width);
+      const cv::Mat blob = preprocess (line, net.width);
 
       cv::Mat out;
       try {
@@ -361,9 +369,9 @@ core::Result<RecognizerResult> PaddleRecognizer::read (const cv::Mat& line, bool
          if (!net.directml) throw;
          core::Logger::warn (
             "paddle_rec: DirectML inference failed: {}; using CPU", error.what ());
-         net = impl_->load (use_title
-            ? impl_->model_path.parent_path () / model_files::rec_tooltip_title
-            : impl_->model_path, false);
+         auto fallback = impl_->model_path;
+         if (use_title) fallback = impl_->title_model_path;
+         net = impl_->load (fallback, false);
          out = impl_->run (net, blob);
       }
 

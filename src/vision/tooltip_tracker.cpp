@@ -8,9 +8,9 @@ namespace gv::vision {
 
 namespace {
 
-   constexpr int k_margin      = 20;    // search reach around each coarse edge
+   constexpr int k_margin      = 64;
    constexpr int k_min_side    = 40;    // anything smaller is not a tooltip
-   constexpr int k_max_inward  = 8;
+   constexpr int k_max_inward  = 48;
    constexpr int k_fp_h        = 24;    // fingerprint corner-block size
    constexpr int k_fp_w        = 48;
    constexpr int k_content_h   = 40;
@@ -39,7 +39,7 @@ namespace {
 
    // Strongest projection peak inside [lo, hi); -1 when nothing rises far
    // enough above the mean to be a frame edge.
-   int ridge_peak (const cv::Mat& projection, int lo, int hi)
+   int ridge_peak (const cv::Mat& projection, int lo, int hi, int expected)
    {
       lo = std::max (lo, 0);
       hi = std::min (hi, projection.rows * projection.cols);
@@ -51,14 +51,19 @@ namespace {
       }
       mean /= projection.rows * projection.cols;
 
-      int    best   = -1;
-      double best_v = 0.0;
+      double peak = 0.0;
       for (int i = lo; i < hi; ++i) {
-         const double v = projection.at<float> (i);
-         if (v > best_v) { best_v = v; best = i; }
+         peak = std::max (peak, static_cast<double> (projection.at<float> (i)));
       }
+      if (peak <= mean * k_ridge) return -1;
 
-      return (best >= 0 && best_v > mean * k_ridge) ? best : -1;
+      const double threshold = std::max (mean * k_ridge, peak * 0.35);
+      int best = -1;
+      for (int i = lo; i < hi; ++i) {
+         if (projection.at<float> (i) < threshold) continue;
+         if (best < 0 || std::abs (i - expected) < std::abs (best - expected)) best = i;
+      }
+      return best;
    }
 
    Match match (
@@ -391,10 +396,10 @@ std::optional<capture::Rect> TooltipTracker::refine (const cv::Mat& bgra,
    const int ex_t = coarse.y - roi.y;
    const int ex_b = ex_t + coarse.h;
 
-   const int left   = ridge_peak (colsum, ex_l - k_margin, ex_l + k_margin);
-   const int right  = ridge_peak (colsum, ex_r - k_margin, ex_r + k_margin);
-   const int top    = ridge_peak (rowsum, ex_t - k_margin, ex_t + k_margin);
-   const int bottom = ridge_peak (rowsum, ex_b - k_margin, ex_b + k_margin);
+   const int left   = ridge_peak (colsum, ex_l - k_margin, ex_l + k_margin, ex_l);
+   const int right  = ridge_peak (colsum, ex_r - k_margin, ex_r + k_margin, ex_r);
+   const int top    = ridge_peak (rowsum, ex_t - k_margin, ex_t + k_margin, ex_t);
+   const int bottom = ridge_peak (rowsum, ex_b - k_margin, ex_b + k_margin, ex_b);
 
    if (left < 0 || right < 0 || top < 0 || bottom < 0) return std::nullopt;
    if (right - left < k_min_side || bottom - top < k_min_side) return std::nullopt;

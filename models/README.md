@@ -13,13 +13,14 @@ models/
          rec-ppocr-48x{320,960}.onnx    stock PaddleOCR recognizer
          rec-ppocr-48x{320,960}.dict.txt  its character set
          rec-tooltip-body-48x960.onnx   ours, trained on the game's faces
-         rec-tooltip-title-48x960.onnx  ours, title lines
+         rec-tooltip-title-48x960.onnx  optional custom title recognizer
          rec-tooltip-48x960.dict.txt    its generated character set
          rec-tooltip-title-48x960.dict.txt  its title character set
 ```
 
 GrimVault prefers `rec-tooltip-body-48x960.onnx` when it and its dictionary are
-present, and falls back to stock PaddleOCR otherwise.
+present, and falls back to stock PaddleOCR otherwise. A missing custom title
+model uses the stock family recognizer while keeping the custom body model.
 
 A recognizer's name carries who trained it and the line geometry it expects —
 `ppocr` is upstream PaddleOCR on the family character set, `tooltip` is ours on
@@ -37,9 +38,10 @@ part of this public repository.
 **No reduced model ships today.** The client looks for
 `tooltip-yolox-nano-320.onnx` and quietly keeps the 416 model when it is
 absent, which is the current state: a 320 re-export of a 416-trained
-checkpoint localises too loosely for `TooltipTracker::refine`, which only
-searches 20 px around each coarse edge. Measured on the held-out split it
-lands inside that margin 19% of the time against the shipped model's 100%.
+checkpoint localises too loosely for `TooltipTracker::refine`. Measured on the
+held-out split it lands within 20 px on 19% of edges against the shipped
+model's 99%. The current refiner searches 64 physical pixels before snapping
+to the frame.
 The internal detector evaluation records the measurements and remediation.
 
 Filenames carry architecture and input edge because several `.onnx` files sit

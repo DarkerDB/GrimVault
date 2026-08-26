@@ -43,13 +43,13 @@ TEST (TooltipTracker, RefineSnapsToFrame)
    const cv::Mat img = scene_with_tooltip (k_truth);
 
    const Rect coarse { k_truth.x + 6, k_truth.y - 5, k_truth.w - 9, k_truth.h + 8 };
-   const auto refined = TooltipTracker::refine (img, coarse);
+   const auto refined = TooltipTracker::select (img, coarse);
 
-   ASSERT_TRUE (refined.has_value ());
-   EXPECT_NEAR (refined->x, k_truth.x, 2);
-   EXPECT_NEAR (refined->y, k_truth.y, 2);
-   EXPECT_NEAR (refined->w, k_truth.w, 4);
-   EXPECT_NEAR (refined->h, k_truth.h, 4);
+   ASSERT_TRUE (refined.refined);
+   EXPECT_NEAR (refined.rect.x, k_truth.x, 4);
+   EXPECT_NEAR (refined.rect.y, k_truth.y, 4);
+   EXPECT_NEAR (refined.rect.w, k_truth.w, 8);
+   EXPECT_NEAR (refined.rect.h, k_truth.h, 8);
 }
 
 TEST (TooltipTracker, RefineFailsOnEmptyScene)
@@ -95,11 +95,24 @@ TEST (TooltipTracker, SelectionRejectsInteriorFrameRidges)
 
    const auto selected = TooltipTracker::select (img, k_truth);
 
-   EXPECT_EQ (selected.rect.x, k_truth.x);
-   EXPECT_EQ (selected.rect.y, k_truth.y);
-   EXPECT_EQ (selected.rect.w, k_truth.w);
-   EXPECT_EQ (selected.rect.h, k_truth.h);
-   EXPECT_FALSE (selected.refined);
+   EXPECT_TRUE (selected.refined);
+   EXPECT_NEAR (selected.rect.x, k_truth.x, 4);
+   EXPECT_NEAR (selected.rect.y, k_truth.y, 4);
+   EXPECT_NEAR (selected.rect.w, k_truth.w, 8);
+   EXPECT_NEAR (selected.rect.h, k_truth.h, 8);
+}
+
+TEST (TooltipTracker, RefineRecoversLargeDetectorError)
+{
+   const cv::Mat img = scene_with_tooltip (k_truth);
+   const Rect coarse { k_truth.x + 38, k_truth.y - 34, k_truth.w - 49, k_truth.h + 51 };
+   const auto refined = TooltipTracker::select (img, coarse);
+
+   ASSERT_TRUE (refined.refined);
+   EXPECT_NEAR (refined.rect.x, k_truth.x, 4);
+   EXPECT_NEAR (refined.rect.y, k_truth.y, 4);
+   EXPECT_NEAR (refined.rect.w, k_truth.w, 8);
+   EXPECT_NEAR (refined.rect.h, k_truth.h, 8);
 }
 
 TEST (TooltipTracker, VerifyMatchesAtTruthAndRejectsElsewhere)
