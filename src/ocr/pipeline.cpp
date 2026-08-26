@@ -512,9 +512,7 @@ struct Pipeline::Impl
          health.record_detection (detect_ms);
 
          std::optional<capture::Rect> selected;
-         std::optional<capture::Rect> detector_box;
          std::optional<TooltipObservation> observation;
-         bool refined = false;
          if (!detected.has_value ()) {
             ++health.errors;
             health.latest_error = detected.error ().message;
@@ -525,10 +523,7 @@ struct Pipeline::Impl
          }
          if (detected.has_value () && !detected->empty ()) {
             const auto* box = nearest_to_cursor (*detected, frame.cursor);
-            detector_box = box->rect;
-            const auto selection = vision::TooltipTracker::select (image, box->rect);
-            selected = selection.rect;
-            refined = selection.refined;
+            selected = box->rect;
             observation = TooltipObservation::read (image, *selected, frame.cursor);
             if (!observation.has_value ()) ++health.identity_failures;
          }
@@ -648,12 +643,7 @@ struct Pipeline::Impl
             { "y", std::to_string (selected->y) },
             { "w", std::to_string (selected->w) },
             { "h", std::to_string (selected->h) },
-            { "detector_x", std::to_string (detector_box->x) },
-            { "detector_y", std::to_string (detector_box->y) },
-            { "detector_w", std::to_string (detector_box->w) },
-            { "detector_h", std::to_string (detector_box->h) },
             { "detections", std::to_string (detected->size ()) },
-            { "refined", refined ? "1" : "0" },
             { "detect_ms", std::to_string (last_detect_ms.load ()) },
          });
 
@@ -675,8 +665,7 @@ struct Pipeline::Impl
             *selected,
             image (crop_rect),
             observation->identity.image (),
-            observation->identity.key (),
-            refined);
+            observation->identity.key ());
 
          if (detect_only.load (std::memory_order_relaxed)) continue;
 

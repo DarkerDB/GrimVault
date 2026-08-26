@@ -37,8 +37,6 @@ public:
    // visibility (enabled + non-empty bounds -> shown).
    void set_region (const QRect& physical_bounds, bool game_visible);
 
-   // Anchor established or updated (offset in physical px, tooltip
-   // top-left minus cursor; size exact from the refiner).
    void set_anchor (std::uint64_t generation, const QPoint& offset, const QSize& size,
                     bool pinned_x, bool pinned_y, const QPoint& pin);
 

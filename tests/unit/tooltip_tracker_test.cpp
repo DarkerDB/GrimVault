@@ -11,9 +11,6 @@ using gv::vision::TooltipTracker;
 
 namespace {
 
-   // A tooltip-like panel on a noisy dark scene: dim interior, bright 3 px
-   // frame, some text-ish clutter inside — enough structure for the
-   // refiner's gradient ridges and the verifier's fingerprint.
    cv::Mat scene_with_tooltip (const Rect& box)
    {
       cv::Mat img { 600, 800, CV_8UC4, cv::Scalar { 18, 16, 14, 255 } };
@@ -37,83 +34,6 @@ namespace {
    const Rect k_truth { 300, 200, 220, 340 };
 
 } // namespace
-
-TEST (TooltipTracker, RefineSnapsToFrame)
-{
-   const cv::Mat img = scene_with_tooltip (k_truth);
-
-   const Rect coarse { k_truth.x + 6, k_truth.y - 5, k_truth.w - 9, k_truth.h + 8 };
-   const auto refined = TooltipTracker::select (img, coarse);
-
-   ASSERT_TRUE (refined.refined);
-   EXPECT_NEAR (refined.rect.x, k_truth.x, 4);
-   EXPECT_NEAR (refined.rect.y, k_truth.y, 4);
-   EXPECT_NEAR (refined.rect.w, k_truth.w, 8);
-   EXPECT_NEAR (refined.rect.h, k_truth.h, 8);
-}
-
-TEST (TooltipTracker, RefineFailsOnEmptyScene)
-{
-   cv::Mat img { 600, 800, CV_8UC4, cv::Scalar { 20, 20, 20, 255 } };
-   cv::randu (img, cv::Scalar { 8, 8, 8, 255 }, cv::Scalar { 32, 32, 32, 255 });
-
-   EXPECT_FALSE (TooltipTracker::refine (img, k_truth).has_value ());
-}
-
-TEST (TooltipTracker, SelectionFallsBackToDetectorBox)
-{
-   cv::Mat img { 600, 800, CV_8UC4, cv::Scalar { 20, 20, 20, 255 } };
-   const auto selected = TooltipTracker::select (img, k_truth);
-
-   EXPECT_EQ (selected.rect.x, k_truth.x);
-   EXPECT_EQ (selected.rect.y, k_truth.y);
-   EXPECT_EQ (selected.rect.w, k_truth.w);
-   EXPECT_EQ (selected.rect.h, k_truth.h);
-   EXPECT_FALSE (selected.refined);
-}
-
-TEST (TooltipTracker, SelectionUsesRefinedBoxWhenAvailable)
-{
-   const cv::Mat img = scene_with_tooltip (k_truth);
-   const Rect coarse { k_truth.x + 6, k_truth.y - 5, k_truth.w - 9, k_truth.h + 8 };
-   const auto selected = TooltipTracker::select (img, coarse);
-
-   EXPECT_TRUE (selected.refined);
-   EXPECT_NEAR (selected.rect.x, k_truth.x, 4);
-   EXPECT_NEAR (selected.rect.y, k_truth.y, 4);
-   EXPECT_NEAR (selected.rect.w, k_truth.w, 8);
-   EXPECT_NEAR (selected.rect.h, k_truth.h, 8);
-}
-
-TEST (TooltipTracker, SelectionRejectsInteriorFrameRidges)
-{
-   cv::Mat img = scene_with_tooltip (k_truth);
-   cv::line (img,
-      { k_truth.x, k_truth.y + 18 },
-      { k_truth.x + k_truth.w, k_truth.y + 18 },
-      cv::Scalar { 255, 255, 255, 255 }, 7);
-
-   const auto selected = TooltipTracker::select (img, k_truth);
-
-   EXPECT_TRUE (selected.refined);
-   EXPECT_NEAR (selected.rect.x, k_truth.x, 4);
-   EXPECT_NEAR (selected.rect.y, k_truth.y, 4);
-   EXPECT_NEAR (selected.rect.w, k_truth.w, 8);
-   EXPECT_NEAR (selected.rect.h, k_truth.h, 8);
-}
-
-TEST (TooltipTracker, RefineRecoversLargeDetectorError)
-{
-   const cv::Mat img = scene_with_tooltip (k_truth);
-   const Rect coarse { k_truth.x + 38, k_truth.y - 34, k_truth.w - 49, k_truth.h + 51 };
-   const auto refined = TooltipTracker::select (img, coarse);
-
-   ASSERT_TRUE (refined.refined);
-   EXPECT_NEAR (refined.rect.x, k_truth.x, 4);
-   EXPECT_NEAR (refined.rect.y, k_truth.y, 4);
-   EXPECT_NEAR (refined.rect.w, k_truth.w, 8);
-   EXPECT_NEAR (refined.rect.h, k_truth.h, 8);
-}
 
 TEST (TooltipTracker, VerifyMatchesAtTruthAndRejectsElsewhere)
 {

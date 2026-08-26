@@ -51,7 +51,7 @@ struct DebugOverlay::Impl
    bool   uploaded = false;
    std::uint64_t generation = 0;
    QPoint offset;                       // tooltip top-left minus cursor
-   QSize  size;                         // exact, from the refiner
+   QSize  size;
    bool   pinned_x = false;
    bool   pinned_y = false;
    QPoint pin;

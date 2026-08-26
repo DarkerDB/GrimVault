@@ -8,15 +8,11 @@ namespace gv::vision {
 
 namespace {
 
-   constexpr int k_margin      = 64;
-   constexpr int k_min_side    = 40;    // anything smaller is not a tooltip
-   constexpr int k_max_inward  = 48;
    constexpr int k_fp_h        = 24;    // fingerprint corner-block size
    constexpr int k_fp_w        = 48;
    constexpr int k_content_h   = 40;
    constexpr int k_content_w   = 192;
    constexpr int k_content_search = 8;
-   constexpr double k_ridge    = 3.0;   // peak must be this x mean to count
    constexpr double k_verify   = 0.85;  // NCC acceptance
    constexpr double k_absent   = 0.45;
    constexpr double k_content_present = 0.72;
@@ -35,35 +31,6 @@ namespace {
       cv::cvtColor (bgra (roi), gray,
          bgra.channels () == 4 ? cv::COLOR_BGRA2GRAY : cv::COLOR_BGR2GRAY);
       return gray;
-   }
-
-   // Strongest projection peak inside [lo, hi); -1 when nothing rises far
-   // enough above the mean to be a frame edge.
-   int ridge_peak (const cv::Mat& projection, int lo, int hi, int expected)
-   {
-      lo = std::max (lo, 0);
-      hi = std::min (hi, projection.rows * projection.cols);
-      if (hi - lo < 3) return -1;
-
-      double mean = 0.0;
-      for (int i = 0; i < projection.rows * projection.cols; ++i) {
-         mean += projection.at<float> (i);
-      }
-      mean /= projection.rows * projection.cols;
-
-      double peak = 0.0;
-      for (int i = lo; i < hi; ++i) {
-         peak = std::max (peak, static_cast<double> (projection.at<float> (i)));
-      }
-      if (peak <= mean * k_ridge) return -1;
-
-      const double threshold = std::max (mean * k_ridge, peak * 0.35);
-      int best = -1;
-      for (int i = lo; i < hi; ++i) {
-         if (projection.at<float> (i) < threshold) continue;
-         if (best < 0 || std::abs (i - expected) < std::abs (best - expected)) best = i;
-      }
-      return best;
    }
 
    Match match (
@@ -222,28 +189,6 @@ void Anchor::update (
       near_edge_px, near_edge_px);
 }
 
-TooltipSelection TooltipTracker::select (
-   const cv::Mat& bgra, const capture::Rect& coarse)
-{
-   const auto refined = refine (bgra, coarse);
-   if (refined.has_value ()) {
-      const int coarseRight = coarse.x + coarse.w;
-      const int coarseBottom = coarse.y + coarse.h;
-      const int refinedRight = refined->x + refined->w;
-      const int refinedBottom = refined->y + refined->h;
-      if (refined->x > coarse.x + k_max_inward
-          || refined->y > coarse.y + k_max_inward
-          || refinedRight < coarseRight - k_max_inward
-          || refinedBottom < coarseBottom - k_max_inward) {
-         return { .rect = coarse, .refined = false };
-      }
-   }
-   return {
-      .rect = refined.value_or (coarse),
-      .refined = refined.has_value (),
-   };
-}
-
 void TooltipTracker::remember (
    const cv::Mat& bgra, const capture::Rect& box, Anchor& anchor)
 {
@@ -363,53 +308,6 @@ TooltipTracking TooltipTracker::rebase (
    else if (result.content_confidence < k_content_changed || weakest < k_absent)
       result.presence = TooltipPresence::Changed;
    return result;
-}
-
-std::optional<capture::Rect> TooltipTracker::refine (const cv::Mat& bgra,
-                                                     const capture::Rect& coarse)
-{
-   const cv::Rect frame_rect { 0, 0, bgra.cols, bgra.rows };
-   cv::Rect roi {
-      coarse.x - k_margin, coarse.y - k_margin,
-      coarse.w + 2 * k_margin, coarse.h + 2 * k_margin };
-   roi &= frame_rect;
-
-   if (roi.width < k_min_side || roi.height < k_min_side) return std::nullopt;
-
-   const cv::Mat gray = gray_of (bgra, roi);
-
-   cv::Mat gx, gy;
-   cv::Sobel (gray, gx, CV_32F, 1, 0, 3);
-   cv::Sobel (gray, gy, CV_32F, 0, 1, 3);
-   gx = cv::abs (gx);
-   gy = cv::abs (gy);
-
-   // Vertical frame edges light up column sums of |d/dx|; horizontal edges
-   // light up row sums of |d/dy|.
-   cv::Mat colsum, rowsum;
-   cv::reduce (gx, colsum, 0, cv::REDUCE_AVG, CV_32F);   // 1 x W
-   cv::reduce (gy, rowsum, 1, cv::REDUCE_AVG, CV_32F);   // H x 1
-   colsum = colsum.reshape (1, colsum.cols);
-
-   const int ex_l = coarse.x - roi.x;                    // expected edges, roi space
-   const int ex_r = ex_l + coarse.w;
-   const int ex_t = coarse.y - roi.y;
-   const int ex_b = ex_t + coarse.h;
-
-   const int left   = ridge_peak (colsum, ex_l - k_margin, ex_l + k_margin, ex_l);
-   const int right  = ridge_peak (colsum, ex_r - k_margin, ex_r + k_margin, ex_r);
-   const int top    = ridge_peak (rowsum, ex_t - k_margin, ex_t + k_margin, ex_t);
-   const int bottom = ridge_peak (rowsum, ex_b - k_margin, ex_b + k_margin, ex_b);
-
-   if (left < 0 || right < 0 || top < 0 || bottom < 0) return std::nullopt;
-   if (right - left < k_min_side || bottom - top < k_min_side) return std::nullopt;
-
-   return capture::Rect {
-      roi.x + left,
-      roi.y + top,
-      right - left,
-      bottom - top,
-   };
 }
 
 cv::Mat TooltipTracker::fingerprint (const cv::Mat& bgra, const capture::Rect& box,

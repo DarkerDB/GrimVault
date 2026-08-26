@@ -83,8 +83,7 @@ void Evidence::begin (
    const capture::Rect& selected,
    const cv::Mat& tooltip,
    const cv::Mat& identity,
-   std::uint64_t identity_key,
-   bool refined)
+   std::uint64_t identity_key)
 {
    if (!enabled () || image.empty () || tooltip.empty ()) return;
    std::lock_guard lock { mutex_ };
@@ -128,7 +127,6 @@ void Evidence::begin (
          } },
          { "detections", std::move (detections) },
          { "selected", rect_json (selected) },
-         { "refined", refined },
          { "tooltip_file", "tooltip.png" },
          { "identity_file", "identity.png" },
       };
@@ -137,7 +135,6 @@ void Evidence::begin (
       append (path, generation, "accepted", {
          { "identity", hex (identity_key) },
          { "detections", std::to_string (boxes.size ()) },
-         { "refined", refined ? "1" : "0" },
       });
       trim (root_, max_bytes_);
       std::erase_if (bundles_, [] (const auto& value) {

@@ -39,8 +39,7 @@ public:
       const capture::Rect& selected,
       const cv::Mat& tooltip,
       const cv::Mat& identity,
-      std::uint64_t identity_key,
-      bool refined);
+      std::uint64_t identity_key);
    void observe (
       const capture::Frame& frame,
       const cv::Mat& image,

@@ -12,15 +12,6 @@ namespace gv::vision {
 
 enum class AxisPin : std::uint8_t { Free, Low, High };
 
-// Anchoring's vision primitives. The
-// detector finds a tooltip coarsely; these run at full resolution:
-//
-//    refine       snap a coarse box to the tooltip's frame art, ~1 px
-//    fingerprint  grab a small border patch for later verification
-//    verify       is the fingerprint still at the predicted position?
-//
-// Pure OpenCV, no Qt, no state: unit-testable against synthetic frames.
-
 struct Anchor {
    int      offset_x = 0;        // tooltip top-left minus cursor, physical px
    int      offset_y = 0;
@@ -58,27 +49,14 @@ struct TooltipTracking {
    double content_confidence = 0.0;
 };
 
-struct TooltipSelection {
-   capture::Rect rect;
-   bool refined = false;
-};
-
 class TooltipTracker
 {
 public:
-   static TooltipSelection select (const cv::Mat& bgra,
-                                   const capture::Rect& coarse);
    static void remember (const cv::Mat& bgra, const capture::Rect& box, Anchor& anchor);
    static TooltipTracking track (const cv::Mat& bgra, const Anchor& anchor,
                                  int pred_x, int pred_y, int search_px = 24);
    static TooltipTracking rebase (const cv::Mat& bgra, const Anchor& anchor,
                                   const capture::Rect& box, int search_px = 32);
-
-   // Snap each edge of `coarse` to the strongest gradient ridge within
-   // the search margin. Returns nullopt when no convincing ridge exists
-   // (mid fade-in, occlusion, detector ghost).
-   static std::optional<capture::Rect> refine (const cv::Mat& bgra,
-                                               const capture::Rect& coarse);
 
    // Border patch from the box's top frame; fills fp_dx / fp_dy.
    static cv::Mat fingerprint (const cv::Mat& bgra, const capture::Rect& box,

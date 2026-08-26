@@ -77,8 +77,7 @@ TEST_F (EvidenceTest, WritesCorrelatedDetectionOcrAndLossEvidence)
       selected,
       image ({ 30, 20, 100, 80 }),
       cv::Mat { 32, 32, CV_8UC1, cv::Scalar { 255 } },
-      42,
-      true);
+      42);
    evidence.ocr (7, image ({ 30, 20, 100, 80 }), {}, "Low Boots", 0.95f);
    evidence.snapshot (7, "lost", image, {});
    evidence.event (7, "analysis_ready", { { "item_id", "low-boots" } });
