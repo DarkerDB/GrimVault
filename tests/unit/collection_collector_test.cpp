@@ -15,6 +15,8 @@ TEST (CollectionCollector, RequiresConsentAndDeduplicatesSamples)
    std::atomic<int> calls { 0 };
    std::promise<void> sent;
    auto completed = sent.get_future ();
+   std::promise<std::string> uploaded;
+   auto upload = uploaded.get_future ();
    gv::collection::Collector collector {
       [&calls, &sent] (const gv::api::CollectionSample&) -> gv::core::Result<gv::api::CollectionResult> {
          ++calls;
@@ -22,6 +24,9 @@ TEST (CollectionCollector, RequiresConsentAndDeduplicatesSamples)
          return gv::api::CollectionResult { .accepted = true };
       }
    };
+   collector.on_uploaded ([&uploaded] (const gv::api::CollectionSample& sample) {
+      uploaded.set_value (sample.channel);
+   });
    gv::api::CollectionSample sample {
       .channel = "tooltip",
       .content_type = "image/png",
@@ -33,6 +38,7 @@ TEST (CollectionCollector, RequiresConsentAndDeduplicatesSamples)
    EXPECT_TRUE (collector.submit (sample));
    EXPECT_FALSE (collector.submit (sample));
    completed.wait ();
+   EXPECT_EQ (upload.get (), "tooltip");
    collector.stop ();
    EXPECT_EQ (calls.load (), 1);
 }

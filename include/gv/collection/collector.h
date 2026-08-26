@@ -12,6 +12,7 @@ class Collector
 {
 public:
    using Sender = std::function<core::Result<api::CollectionResult> (const api::CollectionSample&)>;
+   using Uploaded = std::function<void (const api::CollectionSample&)>;
 
    explicit Collector (api::DDBClient& client);
    explicit Collector (Sender sender);
@@ -21,6 +22,7 @@ public:
    Collector& operator= (const Collector&) = delete;
 
    void set_enabled (bool enabled);
+   void on_uploaded (Uploaded callback);
    bool enabled () const noexcept;
    bool submit (api::CollectionSample sample);
    void stop ();

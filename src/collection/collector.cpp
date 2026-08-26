@@ -49,6 +49,7 @@ struct Collector::Impl
    std::deque<api::CollectionSample> queue;
    std::unordered_set<std::string> seen;
    std::unordered_map<std::string, std::chrono::steady_clock::time_point> blocked;
+   Uploaded uploaded;
    bool stopping = false;
    std::thread worker;
 
@@ -82,6 +83,12 @@ struct Collector::Impl
          if (result->accepted) {
             core::Logger::info ("collection: {} uploaded bytes={} object={}",
                sample.channel, sample.body.size (), result->object_key);
+            Uploaded callback;
+            {
+               std::lock_guard guard { lock };
+               callback = uploaded;
+            }
+            if (callback) callback (sample);
          } else {
             core::Logger::debug ("collection: {} skipped reason={}", sample.channel, result->reason);
          }
@@ -105,6 +112,12 @@ void Collector::set_enabled (bool enabled)
       impl_->queue.clear ();
    }
    impl_->ready.notify_all ();
+}
+
+void Collector::on_uploaded (Uploaded callback)
+{
+   std::lock_guard guard { impl_->lock };
+   impl_->uploaded = std::move (callback);
 }
 
 bool Collector::enabled () const noexcept { return impl_->active.load (); }

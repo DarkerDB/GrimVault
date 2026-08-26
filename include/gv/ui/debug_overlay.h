@@ -5,6 +5,7 @@
 #include <QRect>
 #include <QSize>
 
+#include <cstdint>
 #include <memory>
 
 namespace gv::ui {
@@ -38,8 +39,10 @@ public:
 
    // Anchor established or updated (offset in physical px, tooltip
    // top-left minus cursor; size exact from the refiner).
-   void set_anchor (const QPoint& offset, const QSize& size,
+   void set_anchor (std::uint64_t generation, const QPoint& offset, const QSize& size,
                     bool pinned_x, bool pinned_y, const QPoint& pin);
+
+   void mark_uploaded (std::uint64_t generation);
 
    // Anchor lost: hide the box immediately.
    void clear_anchor ();

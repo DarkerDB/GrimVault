@@ -142,13 +142,13 @@ grimvault doctor        # end-to-end diagnostics (tokens, JWKS, ping)
 
 grimvault                 # GUI foreground: logs stream to this terminal, Ctrl+C quits
 grimvault --detached      # GUI in the background, returns immediately
-grimvault --debug         # + verbose logs and OCR stage dumps (%TEMP%\grimvault-ocr)
+grimvault --debug         # + verbose logs, OCR dumps, and tooltip upload-state boxes
 grimvault --debug=highlight:objects
-                          # + red borders around detected tooltip boxes
+                          # equivalent tooltip-region highlighting
 grimvault --debug=highlight:game
                           # + red border around the game/capture region
 grimvault --debug=highlight:objects,highlight:game
-                          # enable both borders
+                          # tooltip upload state plus the game border
 grimvault --detect-only   # stop after detection: hover -> box, no OCR/lookup/augment
 grimvault --fcr 10        # active frame capture rate, 1-60 fps (default 15;
                           # idle drops to 3 until something is detected)
@@ -196,8 +196,9 @@ clamp(cursor + offset) at 120 Hz with per-frame presence and identity checks
 for immediate disappearance and settled replacement.
 
 `run-dev.ps1` (and its original `dev-run.ps1` target) launches the full
-pipeline with `--debug` by default, with no red highlight borders (`-NoDebug`
-disables debug logging; `-DetectOnly` skips OCR, lookup, and augment) and builds
+pipeline with `--debug` by default. Tooltip regions start red and turn green
+after collection upload completes. `-NoDebug` disables debug logging and
+region boxes; `-DetectOnly` skips OCR, lookup, and augment. The script builds
 RelWithDebInfo — the Debug preset's debug OpenCV makes detection ~10x slower.
 
 ### Switching env at runtime

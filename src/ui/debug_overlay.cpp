@@ -20,6 +20,7 @@ namespace {
 
    // DDB blood red, same accent the tray menu uses.
    const QColor k_border { 0xEF, 0x1F, 0x1F };
+   const QColor k_uploaded { 0x38, 0xD4, 0x6A };
 
    constexpr int k_border_px = 2;
 
@@ -47,6 +48,8 @@ struct DebugOverlay::Impl
    qreal  scale = 1.0;
 
    bool   anchored = false;
+   bool   uploaded = false;
+   std::uint64_t generation = 0;
    QPoint offset;                       // tooltip top-left minus cursor
    QSize  size;                         // exact, from the refiner
    bool   pinned_x = false;
@@ -109,12 +112,14 @@ void DebugOverlay::set_region (const QRect& physical_bounds, bool game_visible)
    refresh ();
 }
 
-void DebugOverlay::set_anchor (const QPoint& offset, const QSize& size,
+void DebugOverlay::set_anchor (std::uint64_t generation, const QPoint& offset, const QSize& size,
                                bool pinned_x, bool pinned_y, const QPoint& pin)
 {
    const bool fresh = !impl_->anchored;
+   if (generation != impl_->generation) impl_->uploaded = false;
 
    impl_->anchored = true;
+   impl_->generation = generation;
    impl_->offset   = offset;
    impl_->size     = size;
    impl_->pinned_x = pinned_x;
@@ -129,6 +134,13 @@ void DebugOverlay::set_anchor (const QPoint& offset, const QSize& size,
    }
 
    if (!impl_->present.isActive ()) impl_->present.start ();
+   if (isVisible ()) update ();
+}
+
+void DebugOverlay::mark_uploaded (std::uint64_t generation)
+{
+   if (!impl_->anchored || generation != impl_->generation || impl_->uploaded) return;
+   impl_->uploaded = true;
    if (isVisible ()) update ();
 }
 
@@ -202,11 +214,13 @@ void DebugOverlay::paintEvent (QPaintEvent*)
    p.fillRect (QRect { 0, 0, width (), height () }, Qt::transparent);
    p.setCompositionMode (QPainter::CompositionMode_SourceOver);
 
-   QPen pen { k_border };
+   QPen pen { impl_->uploaded ? k_uploaded : k_border };
    pen.setWidth (k_border_px);
    p.setPen (pen);
 
    if (impl_->highlight_game) {
+      pen.setColor (k_border);
+      p.setPen (pen);
       // Capture region: border just inside the window edge.
       const int inset = k_border_px / 2;
       p.drawRect (QRect {
@@ -217,6 +231,9 @@ void DebugOverlay::paintEvent (QPaintEvent*)
    }
 
    if (!impl_->highlight_objects || !impl_->anchored) return;
+
+   pen.setColor (impl_->uploaded ? k_uploaded : k_border);
+   p.setPen (pen);
 
    // The anchored tooltip, frame-relative physical -> logical.
    p.drawRect (QRect {

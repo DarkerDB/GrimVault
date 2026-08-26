@@ -13,8 +13,8 @@
    Skip the launch step. Useful when you just want to verify the build.
 
 .PARAMETER NoDebug
-   Launch without --debug (no verbose logs or OCR stage dumps). Diagnostic
-   borders are separately opt-in via --debug=highlight:objects,highlight:game.
+   Launch without --debug, verbose logs, OCR stage dumps, or tooltip region
+   upload-state boxes.
 
 .PARAMETER DetectOnly
    Stop after tooltip detection (no OCR / lookup / augment). The full

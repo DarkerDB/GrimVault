@@ -241,7 +241,8 @@ struct Controller::Impl
          game, offset, tip, live_anchor.pinned_x, live_anchor.pinned_y, pin);
       if (deps.debug && debug_overlay.load ()) {
          deps.debug->set_anchor (
-            offset, tip, live_anchor.pinned_x, live_anchor.pinned_y, pin);
+            live_anchor.generation, offset, tip,
+            live_anchor.pinned_x, live_anchor.pinned_y, pin);
       }
    }
 

@@ -651,9 +651,17 @@ namespace {
          .overlay       = &overlay,
          .debug         = &debug_overlay,
          .highlight_game = opts.highlight_game,
-         .highlight_objects = opts.highlight_objects,
+         .highlight_objects = opts.debug,
       };
       gv::app::Controller controller { deps };
+      collection.on_uploaded ([&debug_overlay] (const gv::api::CollectionSample& sample) {
+         if (sample.channel != "tooltip") return;
+         const auto generation = sample.metadata.value ("generation", std::uint64_t { 0 });
+         if (generation == 0) return;
+         QMetaObject::invokeMethod (&debug_overlay, [&debug_overlay, generation] {
+            debug_overlay.mark_uploaded (generation);
+         }, Qt::QueuedConnection);
+      });
       controller.set_authenticated (
          session.signed_in (), session.principal ().value_or (""));
 
