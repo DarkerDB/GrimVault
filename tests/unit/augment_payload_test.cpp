@@ -88,6 +88,7 @@ TEST (AugmentPayload, CompleteAnalysisRendersPremiumSections)
    lookup.pricing.high        = 500;
    lookup.pricing.quick_list  = 389;
    lookup.pricing.lowest_ask  = 405;
+   lookup.pricing.highest_reasonable_ask = 445;
    lookup.pricing.latest_listing = 455;
    lookup.pricing.sample_size = 28;
    lookup.pricing.confidence  = "high";
@@ -243,6 +244,7 @@ TEST (AugmentPayload, CompleteAnalysisRendersPremiumSections)
    EXPECT_EQ (analysis ["market"]["active_listings"], 17);
    EXPECT_EQ (analysis ["market"]["days_supply"], 18.2);
    EXPECT_EQ (analysis ["pricing"]["latest_listing"], 455);
+   EXPECT_EQ (analysis ["pricing"]["highest_reasonable_ask"], 445);
    EXPECT_EQ (analysis ["market"]["price_stability"], "stable");
    EXPECT_EQ (analysis ["similar_sales"][0]["price"], 425);
    EXPECT_EQ (analysis ["similar_sales"][0]["similarity"], 94);
