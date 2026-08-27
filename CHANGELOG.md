@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [2.1.0] - 2026-08-24
+## [2.1.0] - 2026-08-26
 
 - Introduced multilingual OCR and localized analysis cards for supported game languages
 - Added dashboard language selection and opt-in private tooltip samples plus daily diagnostic logs for continued improvements
