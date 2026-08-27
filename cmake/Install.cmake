@@ -47,7 +47,12 @@ qt_generate_deploy_app_script (
       --qmldir "${CMAKE_SOURCE_DIR}/qml"
 )
 
-install (SCRIPT  "${qt_deploy_script}"  COMPONENT application)
+install (CODE "
+   set (QT_DEPLOY_BIN_DIR \".\")
+   set (QT_DEPLOY_PLUGINS_DIR \"plugins\")
+   set (QT_DEPLOY_QML_DIR \"qml\")
+   include (\"${qt_deploy_script}\")
+" COMPONENT application)
 
 # ---- Compiler runtime ----
 set (CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION .)
