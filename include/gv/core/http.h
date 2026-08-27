@@ -4,8 +4,10 @@
 
 #include <curl/curl.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -32,6 +34,13 @@ struct Request {
    std::chrono::milliseconds timeout { 15000 };
    std::size_t         max_response_bytes { 1024 * 1024 };
    bool                follow_redirects   = false;
+
+   // Cooperative cancellation. When cancel_epoch is set, the transfer aborts
+   // as soon as the epoch moves away from cancel_epoch_at, mirroring the
+   // persistent-handle lane in DDBClient so a long upload can be torn down at
+   // shutdown instead of blocking on the full timeout.
+   const std::atomic<std::uint64_t>* cancel_epoch    = nullptr;
+   std::uint64_t                     cancel_epoch_at = 0;
 };
 
 // Process-scoped libcurl lifetime. Construct this before every object that

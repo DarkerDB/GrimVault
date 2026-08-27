@@ -161,14 +161,8 @@ void SettingsSync::poll_now ()
 
             int changed = 0;
 
-            constexpr std::string_view managed_prefixes [] = {
-               "overlay:", "tooltip:", "pricing:", "behavior:", "collection:", "hotkeys:"
-            };
             for (const auto& [key, value] : existing) {
-               const bool managed = std::any_of (
-                  std::begin (managed_prefixes), std::end (managed_prefixes),
-                  [&key] (std::string_view prefix) { return key.starts_with (prefix); });
-               if (!managed || bundle->values.contains (key)) continue;
+               if (!is_managed_setting (key) || bundle->values.contains (key)) continue;
 
                if (auto erased = impl_->repo->erase (key); !erased.has_value ()) {
                   log.warn ("settings sync: erase failed for {}: {}",

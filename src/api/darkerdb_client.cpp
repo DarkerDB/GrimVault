@@ -1286,7 +1286,7 @@ struct DDBClient::Impl
 
    core::Result<Res> http (const Req& req)
    {
-      const int attempts = req.retryable ? 1 + static_cast<int> (k_retry_delays_ms.size ()) : 1;
+      int attempts = req.retryable ? 1 + static_cast<int> (k_retry_delays_ms.size ()) : 1;
 
       core::Result<Res> last = core::fail (core::Error::make (core::ErrorKind::ExternalApi,
          "darkerdb: no attempts"));
@@ -1315,11 +1315,15 @@ struct DDBClient::Impl
          }
 
          if (res->status == 401 && req.authenticated && !did_refresh_after_401 && session) {
-            // Per contract §4.4 / §3.7: trigger one refresh, retry. If refresh
-            // fails the session sign-outs itself and the next bearer_for ()
-            // returns "not signed in".
+            // Per contract §4.4 / §3.7: trigger one refresh, retry. Grant the
+            // retry an attempt of its own so it still runs when the 401 lands
+            // on the last (or only, for non-retryable requests) attempt;
+            // otherwise the loop falls through to the stale sentinel and the
+            // real error is lost. If refresh fails the session sign-outs
+            // itself and the next bearer_for () returns "not signed in".
             did_refresh_after_401 = true;
             session->invalidate ();
+            ++attempts;
             delay_ms = 0;
             continue;
          }
@@ -1721,6 +1725,8 @@ core::Result<CollectionResult> DDBClient::collect (const CollectionSample& sampl
       .headers = std::move (headers),
       .timeout = std::chrono::milliseconds { 30000 },
       .max_response_bytes = 64 * 1024,
+      .cancel_epoch = &impl_->general_cancel_epoch,
+      .cancel_epoch_at = impl_->general_cancel_epoch.load (std::memory_order_relaxed),
    });
    if (!uploaded.has_value ()) return core::fail (uploaded.error ());
    if (uploaded->status < 200 || uploaded->status >= 300) {

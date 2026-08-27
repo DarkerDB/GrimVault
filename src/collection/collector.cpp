@@ -43,6 +43,7 @@ struct Collector::Impl
    explicit Impl (Sender send) : sender (std::move (send)), worker ([this] { run (); }) {}
 
    Sender sender;
+   std::function<void ()> cancel;
    std::atomic<bool> active { false };
    std::mutex lock;
    std::condition_variable ready;
@@ -98,7 +99,9 @@ struct Collector::Impl
 
 Collector::Collector (api::DDBClient& client)
    : Collector ([&client] (const api::CollectionSample& sample) { return client.collect (sample); })
-{}
+{
+   impl_->cancel = [&client] { client.cancel_pending (); };
+}
 
 Collector::Collector (Sender sender) : impl_ (std::make_unique<Impl> (std::move (sender))) {}
 
@@ -142,6 +145,9 @@ bool Collector::submit (api::CollectionSample sample)
 void Collector::stop ()
 {
    if (!impl_ || !impl_->worker.joinable ()) return;
+   // Abort an in-flight upload before joining, so quitting mid-upload does not
+   // block the main thread on the full request timeout.
+   if (impl_->cancel) impl_->cancel ();
    {
       std::lock_guard guard { impl_->lock };
       impl_->stopping = true;

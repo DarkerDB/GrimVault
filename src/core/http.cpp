@@ -34,6 +34,17 @@ namespace {
       return n;
    }
 
+   struct CancelState {
+      const std::atomic<std::uint64_t>* epoch = nullptr;
+      std::uint64_t                     request_epoch = 0;
+   };
+
+   int progress_cb (void* user, curl_off_t, curl_off_t, curl_off_t, curl_off_t)
+   {
+      const auto* state = static_cast<const CancelState*> (user);
+      return state && state->epoch->load (std::memory_order_relaxed) != state->request_epoch;
+   }
+
 } // namespace
 
 Global::Global ()
@@ -110,6 +121,14 @@ Result<Response> perform (const Request& req)
    curl_easy_setopt (curl, CURLOPT_HTTP_VERSION,      CURL_HTTP_VERSION_2TLS);
    apply_tls (curl, req.ca_bundle);
 
+   CancelState cancel_state;
+   if (req.cancel_epoch) {
+      cancel_state = { req.cancel_epoch, req.cancel_epoch_at };
+      curl_easy_setopt (curl, CURLOPT_NOPROGRESS,       0L);
+      curl_easy_setopt (curl, CURLOPT_XFERINFOFUNCTION, &progress_cb);
+      curl_easy_setopt (curl, CURLOPT_XFERINFODATA,     &cancel_state);
+   }
+
    if (!req.body.empty ()) {
       curl_easy_setopt (curl, CURLOPT_POSTFIELDS,    req.body.data ());
       curl_easy_setopt (curl, CURLOPT_POSTFIELDSIZE, static_cast<long> (req.body.size ()));
@@ -130,6 +149,9 @@ Result<Response> perform (const Request& req)
    curl_easy_cleanup   (curl);
 
    if (rc != CURLE_OK) {
+      if (rc == CURLE_ABORTED_BY_CALLBACK) {
+         return fail (Error::make (ErrorKind::ExternalApi, "http: request cancelled"));
+      }
       if (rc == CURLE_WRITE_ERROR && write_state.exceeded) {
          return fail (Error::make (ErrorKind::ExternalApi,
             "http: response exceeded {} bytes", req.max_response_bytes));

@@ -3,14 +3,32 @@
 #include <QObject>
 #include <QString>
 
+#include <algorithm>
 #include <chrono>
+#include <iterator>
 #include <memory>
+#include <string_view>
 
 namespace gv::api  { class DDBClient; }
 namespace gv::auth { class Session;        }
 namespace gv::db   { class UserSettingsRepo; }
 
 namespace gv::app {
+
+// Key prefixes for the settings the dashboard owns. Both the sync poller
+// (which unsets a key the dashboard dropped) and account scoping in main ()
+// (which clears the previous account's values on a switch) key off this one
+// list, so a new managed family is added in a single place.
+inline constexpr std::string_view managed_setting_prefixes [] = {
+   "behavior:", "collection:", "hotkeys:", "overlay:", "pricing:", "tooltip:"
+};
+
+inline bool is_managed_setting (std::string_view key)
+{
+   return std::any_of (
+      std::begin (managed_setting_prefixes), std::end (managed_setting_prefixes),
+      [key] (std::string_view prefix) { return key.starts_with (prefix); });
+}
 
 // Background poller that mirrors dashboard-controlled settings from
 // /v2/grimvault/settings into the local UserSettingsRepo. The dashboard is

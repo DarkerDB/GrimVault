@@ -209,15 +209,9 @@ namespace {
       auto all = repo.all ();
       if (!all.has_value ()) return gv::core::fail (all.error ());
 
-      constexpr std::string_view prefixes [] = {
-         "behavior:", "hotkeys:", "overlay:", "pricing:", "tooltip:"
-      };
       for (const auto& [key, value] : *all) {
          (void) value;
-         const bool managed = std::any_of (
-            std::begin (prefixes), std::end (prefixes),
-            [&key] (std::string_view prefix) { return key.starts_with (prefix); });
-         if (!managed) continue;
+         if (!gv::app::is_managed_setting (key)) continue;
 
          auto erased = repo.erase (key);
          if (!erased.has_value ()) return gv::core::fail (erased.error ());
