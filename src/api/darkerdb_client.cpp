@@ -577,7 +577,8 @@ namespace {
          SimilarSale parsed {
             .price        = integer_or_zero (sale, "price"),
             .similarity   = static_cast<std::int32_t> (integer_or_zero (sale, "similarity")),
-            .sold_at      = sale.value ("sold_at", ""),
+            // Listing evidence reuses this shape with `listed_at`.
+            .sold_at      = sale.value ("sold_at", sale.value ("listed_at", "")),
             .age_seconds  = integer_or_zero (sale, "age_seconds"),
             .sale_seconds = optional_number<std::int64_t> (sale, "sale_seconds"),
             .highlight_label = sale.value ("highlight_label", ""),
@@ -696,6 +697,7 @@ namespace {
       with_object (body, "quality",   [&] (const nlohmann::json& s) { parse_quality     (s, out); });
       with_object (body, "market",    [&] (const nlohmann::json& s) { parse_market      (s, out.market_analysis); });
       with_array  (body, "similar_sales", [&] (const nlohmann::json& s) { parse_similar_sales (s, out.similar_sales); });
+      with_array  (body, "similar_listings", [&] (const nlohmann::json& s) { parse_similar_sales (s, out.similar_listings); });
       with_object (body, "utility",   [&] (const nlohmann::json& s) { parse_utility     (s, out.utility); });
       with_array  (body, "quests",    [&] (const nlohmann::json& s) { parse_quests      (s, out.quests); });
       with_array  (body, "recipes",   [&] (const nlohmann::json& s) { parse_recipes     (s, out.recipes); });

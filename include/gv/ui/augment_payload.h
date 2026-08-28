@@ -157,6 +157,32 @@ inline nlohmann::json analysis_entity (const gv::api::TooltipLookup& lookup,
          { "items", std::move (items) },
       });
    }
+   const auto comparable_rows = [] (const std::vector<gv::api::SimilarSale>& comparables) {
+      nlohmann::json rows = nlohmann::json::array ();
+      for (const auto& sale : comparables) {
+         nlohmann::json sale_rolls = nlohmann::json::array ();
+         for (const auto& roll : sale.rolls) {
+            sale_rolls.push_back ({
+               { "attribute_id", roll.attribute_id },
+               { "label", roll.label },
+               { "formatted_value", roll.formatted_value },
+            });
+         }
+         nlohmann::json row {
+            { "price", sale.price },
+            { "similarity", sale.similarity },
+            { "sold_at", sale.sold_at },
+            { "age_seconds", sale.age_seconds },
+            { "highlight_label", sale.highlight_label },
+            { "highlight_value", sale.highlight_value },
+            { "rolls", std::move (sale_rolls) },
+         };
+         if (sale.sale_seconds) row ["sale_seconds"] = *sale.sale_seconds;
+         rows.push_back (std::move (row));
+      }
+      return rows;
+   };
+   nlohmann::json similar_listings = comparable_rows (lookup.similar_listings);
    nlohmann::json similar_sales = nlohmann::json::array ();
    for (const auto& sale : lookup.similar_sales) {
       nlohmann::json sale_rolls = nlohmann::json::array ();
@@ -263,6 +289,7 @@ inline nlohmann::json analysis_entity (const gv::api::TooltipLookup& lookup,
          { "liquidity", lookup.market_analysis.liquidity },
       } },
       { "similar_sales", std::move (similar_sales) },
+      { "similar_listings", std::move (similar_listings) },
       { "trade_chat", {
          { "mentions_14d", lookup.trade_chat.mentions_14d },
          { "messages", std::move (trade_messages) },

@@ -287,6 +287,7 @@ struct TooltipLookup {
    std::optional<ValueDriver>     value_driver;
    MarketAnalysis                 market_analysis;
    std::vector<SimilarSale>        similar_sales;
+   std::vector<SimilarSale>        similar_listings;
    std::optional<SourceAnalysis>  source_analysis;
    TradeChatAnalysis              trade_chat;
    UtilityAnalysis                utility;
