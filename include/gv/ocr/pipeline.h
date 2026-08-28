@@ -82,8 +82,6 @@ public:
    using AnchorCallback     = std::function<void (const AnchorEvent&)>;
    using SampleCallback     = std::function<void (TooltipSample)>;
 
-   // immediate = vision confirmed disappearance, so
-   // hide now. False remains available for future soft-loss sources.
    using AnchorLostCallback = std::function<void (bool immediate)>;
 
    Pipeline (

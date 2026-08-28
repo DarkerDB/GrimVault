@@ -625,7 +625,7 @@ struct Pipeline::Impl
              && transition != TooltipTransition::Replaced) continue;
 
          if (was_active) {
-            if (anchor_lost_cb) anchor_lost_cb (true);
+            if (anchor_lost_cb) anchor_lost_cb (false);
             evidence.event (previous_generation, "replaced", {
                { "identity_distance", std::to_string (
                   update.identity_distance) },
