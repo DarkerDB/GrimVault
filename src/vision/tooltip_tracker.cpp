@@ -458,6 +458,7 @@ TooltipTracking TooltipTracker::rebase (
    const cv::Mat& bgra,
    const Anchor& anchor,
    const capture::Rect& box,
+   bool sensitive,
    int search_px)
 {
    TooltipTracking result { .box = box };
@@ -469,32 +470,51 @@ TooltipTracking TooltipTracker::rebase (
 
    const auto frame = match (
       bgra, anchor.fingerprint, anchor.fp_dx, anchor.fp_dy,
-      box.w, box.h, box.x, box.y, search_px, search_px);
+      anchor.identity_w, anchor.identity_h,
+      box.x, box.y, search_px, search_px);
    result.frame_confidence = frame.confidence;
 
    double total = 0.0;
    double weakest = 1.0;
    int count = 0;
+   std::array<int, 4> content_x {};
+   std::array<int, 4> content_y {};
+   int located = 0;
    for (std::size_t index = 0; index < anchor.content_fingerprints.size (); ++index) {
       const auto& fingerprint = anchor.content_fingerprints [index];
       if (fingerprint.empty ()) continue;
-      const int dx = (box.w - fingerprint.cols) / 2;
-      const int dy = index == 3 ? box.h - fingerprint.rows - 1
-         : 8 + static_cast<int> (index) * (box.h - fingerprint.rows - 16) / 3;
       const auto content = match (
-         bgra, fingerprint, dx, dy, box.w, box.h,
+         bgra, fingerprint,
+         anchor.content_dx [index], anchor.content_dy [index],
+         anchor.identity_w, anchor.identity_h,
          box.x, box.y, search_px, search_px);
       total += content.confidence;
       weakest = std::min (weakest, content.confidence);
+      if (content.confidence >= k_absent) {
+         content_x [located] = content.box.x;
+         content_y [located] = content.box.y;
+         ++located;
+      }
       ++count;
    }
    if (count == 0) return result;
 
    result.content_confidence = total / count;
-   if (result.content_confidence >= k_rebase_content_present && weakest >= k_absent)
-      result.presence = TooltipPresence::Present;
-   else if (result.content_confidence < k_content_changed || weakest < k_absent)
+   if (result.content_confidence >= k_rebase_content_present && weakest >= k_absent) {
+      std::sort (content_x.begin (), content_x.begin () + located);
+      std::sort (content_y.begin (), content_y.begin () + located);
+      result.box = {
+         content_x [located / 2],
+         content_y [located / 2],
+         anchor.identity_w,
+         anchor.identity_h,
+      };
+      result.presence = signature_changed (bgra, anchor, result.box, sensitive)
+         ? TooltipPresence::Changed
+         : TooltipPresence::Present;
+   } else if (result.content_confidence < k_content_changed || weakest < k_absent) {
       result.presence = TooltipPresence::Changed;
+   }
    return result;
 }
 

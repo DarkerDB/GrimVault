@@ -471,6 +471,7 @@ struct Pipeline::Impl
          bool detection_due = forced || !state.active ()
             || now - last_detection >= detection_interval ();
          bool content_changed = false;
+         bool sensitive = false;
 
          if (state.active () && !forced && !anchor.fingerprint.empty ()) {
             const int pred_x = anchor.axis_x != vision::AxisPin::Free
@@ -479,7 +480,7 @@ struct Pipeline::Impl
             const int pred_y = anchor.axis_y != vision::AxisPin::Free
                ? anchor.pin_y
                : frame.cursor.valid ? frame.cursor.y + anchor.offset_y : anchor.pin_y;
-            const bool sensitive = anchor.identity_cursor.valid && frame.cursor.valid
+            sensitive = anchor.identity_cursor.valid && frame.cursor.valid
                && std::max (
                   std::abs (frame.cursor.x - anchor.identity_cursor.x),
                   std::abs (frame.cursor.y - anchor.identity_cursor.y))
@@ -543,7 +544,7 @@ struct Pipeline::Impl
          if (!forced && state.active () && selected.has_value ()
              && !anchor.fingerprint.empty ()) {
             const auto recovered = vision::TooltipTracker::rebase (
-               image, anchor, *selected);
+               image, anchor, *selected, sensitive);
             content_changed = content_changed
                || recovered.presence == vision::TooltipPresence::Changed;
             if (!content_changed

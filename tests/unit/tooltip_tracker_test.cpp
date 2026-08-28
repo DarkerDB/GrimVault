@@ -278,6 +278,27 @@ TEST (TooltipTracker, RebaseRejectsContentReplacement)
    EXPECT_NE (tracked.presence, TooltipPresence::Present);
 }
 
+TEST (TooltipTracker, SensitiveRebaseDetectsSingleTileChange)
+{
+   const cv::Mat first = scene_with_tooltip (k_truth);
+   cv::Mat changed = first.clone ();
+   cv::rectangle (
+      changed,
+      { k_truth.x + 101, k_truth.y + 171, 5, 5 },
+      cv::Scalar { 240, 190, 80, 255 },
+      cv::FILLED);
+   Anchor anchor;
+   TooltipTracker::remember (first, k_truth, anchor);
+
+   const auto tracked = TooltipTracker::rebase (
+      changed,
+      anchor,
+      { k_truth.x + 3, k_truth.y - 2, k_truth.w - 5, k_truth.h + 4 },
+      true);
+
+   EXPECT_EQ (tracked.presence, TooltipPresence::Changed);
+}
+
 TEST (TooltipTracker, RebaseRejectsSizeReplacement)
 {
    const cv::Mat img = scene_with_tooltip (k_truth);

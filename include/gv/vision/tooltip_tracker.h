@@ -68,7 +68,8 @@ public:
                                  int pred_x, int pred_y, bool sensitive = false,
                                  int search_px = 24);
    static TooltipTracking rebase (const cv::Mat& bgra, const Anchor& anchor,
-                                  const capture::Rect& box, int search_px = 32);
+                                  const capture::Rect& box, bool sensitive = false,
+                                  int search_px = 32);
 
    // Border patch from the box's top frame; fills fp_dx / fp_dy.
    static cv::Mat fingerprint (const cv::Mat& bgra, const capture::Rect& box,
