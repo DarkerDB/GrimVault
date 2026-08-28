@@ -25,6 +25,12 @@ StatusBadge::StatusBadge (QWindow* parent)
    setColor (Qt::transparent);
    setResizeMode (QQuickView::SizeViewToRootObject);
 
+   // set_locale rewidths the QML label and SizeViewToRootObject resizes the
+   // view after the fact; re-pin so the bottom-right margin survives a wider
+   // locale ("(zh-Hans)" vs "(en)").
+   connect (this, &QWindow::widthChanged,  this, [this] { apply_placement (); });
+   connect (this, &QWindow::heightChanged, this, [this] { apply_placement (); });
+
    setSource (QUrl (QStringLiteral ("qrc:/qml/StatusBadge.qml")));
 
    hide ();
@@ -66,18 +72,22 @@ void StatusBadge::set_game (const QRect& bounds, bool active)
    // window instead of waiting for the next one.
    game_        = bounds;
    game_active_ = active;
+   apply_placement ();
+}
 
-   if (!active || !enabled_) {
+void StatusBadge::apply_placement ()
+{
+   if (!game_active_ || !enabled_) {
       hide ();
       return;
    }
 
    // bounds arrive as Win32 physical pixels; width()/height() are logical.
-   const qreal s = screen::scale_at (bounds.center ());
+   const qreal s = screen::scale_at (game_.center ());
 
    const QPoint target {
-      bounds.right ()  - qRound ((width ()  + k_margin) * s),
-      bounds.bottom () - qRound ((height () + k_margin) * s)
+      game_.right ()  - qRound ((width ()  + k_margin) * s),
+      game_.bottom () - qRound ((height () + k_margin) * s)
    };
 
    // Idempotent: window events repeat identical bounds; re-moving and

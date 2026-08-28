@@ -1286,7 +1286,7 @@ struct DDBClient::Impl
 
    core::Result<Res> http (const Req& req)
    {
-      int attempts = req.retryable ? 1 + static_cast<int> (k_retry_delays_ms.size ()) : 1;
+      const int attempts = req.retryable ? 1 + static_cast<int> (k_retry_delays_ms.size ()) : 1;
 
       core::Result<Res> last = core::fail (core::Error::make (core::ErrorKind::ExternalApi,
          "darkerdb: no attempts"));
@@ -1315,15 +1315,17 @@ struct DDBClient::Impl
          }
 
          if (res->status == 401 && req.authenticated && !did_refresh_after_401 && session) {
-            // Per contract §4.4 / §3.7: trigger one refresh, retry. Grant the
-            // retry an attempt of its own so it still runs when the 401 lands
-            // on the last (or only, for non-retryable requests) attempt;
-            // otherwise the loop falls through to the stale sentinel and the
-            // real error is lost. If refresh fails the session sign-outs
-            // itself and the next bearer_for () returns "not signed in".
+            // Per contract §4.4 / §3.7: trigger one refresh, then redo this
+            // same attempt with the new token so the retry still runs when the
+            // 401 lands on the last (or only, for non-retryable requests)
+            // attempt; otherwise the loop falls through to the stale sentinel
+            // and the real error is lost. Redoing the attempt rather than
+            // extending `attempts` keeps the k_retry_delays_ms index in
+            // bounds. If refresh fails the session signs itself out and the
+            // next bearer_for () returns "not signed in".
             did_refresh_after_401 = true;
             session->invalidate ();
-            ++attempts;
+            --attempt;
             delay_ms = 0;
             continue;
          }

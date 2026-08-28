@@ -33,6 +33,8 @@ protected:
    void exposeEvent (QExposeEvent* event) override;
 
 private:
+   void apply_placement ();
+
    QPoint applied_;
    QRect  game_;
    bool   game_active_ = false;
