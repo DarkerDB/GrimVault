@@ -23,6 +23,12 @@ namespace {
    constexpr double k_content_changed = 0.55;
    constexpr double k_rebase_content_present = 0.80;
    constexpr double k_rebase_size_ratio = 1.2;
+   constexpr int k_signature_inset = 8;
+   constexpr int k_signature_tile_w = 24;
+   constexpr int k_signature_tile_h = 16;
+   constexpr int k_signature_luma = 16;
+   constexpr double k_signature_changed = 0.12;
+   constexpr double k_signature_sensitive = 0.05;
 
    struct Match {
       capture::Rect box;
@@ -130,6 +136,70 @@ namespace {
       cv::Rect patch { box.x + dx, box.y + dy, width, height };
       patch &= cv::Rect { 0, 0, bgra.cols, bgra.rows };
       return gray_of (bgra, patch).clone ();
+   }
+
+   cv::Mat content_signature (const cv::Mat& bgra, const capture::Rect& box)
+   {
+      cv::Rect patch {
+         box.x + k_signature_inset,
+         box.y + k_signature_inset,
+         box.w - k_signature_inset * 2,
+         box.h - k_signature_inset * 2,
+      };
+      patch &= cv::Rect { 0, 0, bgra.cols, bgra.rows };
+      if (patch.width < k_signature_tile_w || patch.height < k_signature_tile_h)
+         return {};
+      return gray_of (bgra, patch).clone ();
+   }
+
+   bool signature_changed (
+      const cv::Mat& bgra,
+      const Anchor& anchor,
+      const capture::Rect& box,
+      bool sensitive)
+   {
+      if (anchor.content_signature.empty ()) return false;
+      const auto current = content_signature (bgra, box);
+      if (current.size () != anchor.content_signature.size ()) return true;
+
+      cv::Mat difference;
+      cv::absdiff (anchor.content_signature, current, difference);
+      cv::threshold (
+         difference, difference, k_signature_luma, 255, cv::THRESH_BINARY);
+      cv::Mat integral;
+      cv::integral (difference, integral, CV_32S);
+
+      const double threshold = sensitive
+         ? k_signature_sensitive
+         : k_signature_changed;
+      const int required = sensitive ? 1 : 2;
+      int changed = 0;
+      for (int y = 0; y + k_signature_tile_h <= difference.rows;
+           y += k_signature_tile_h / 2) {
+         for (int x = 0; x + k_signature_tile_w <= difference.cols;
+              x += k_signature_tile_w / 2) {
+            const int right = x + k_signature_tile_w;
+            const int bottom = y + k_signature_tile_h;
+            const int pixels = (
+               integral.at<int> (bottom, right)
+               - integral.at<int> (y, right)
+               - integral.at<int> (bottom, x)
+               + integral.at<int> (y, x)) / 255;
+            const double ratio = static_cast<double> (pixels)
+               / (k_signature_tile_w * k_signature_tile_h);
+            if (ratio >= threshold && ++changed >= required) return true;
+         }
+      }
+      return false;
+   }
+
+   bool distinct (const cv::Mat& image)
+   {
+      if (image.empty ()) return false;
+      cv::Scalar mean;
+      cv::Scalar deviation;
+      cv::meanStdDev (image, mean, deviation);
+      return deviation [0] >= 1.0;
    }
 
    bool size_changed (int first, int second)
@@ -257,6 +327,7 @@ void Anchor::acquire (
    h = box.h;
    pin_x = box.x;
    pin_y = box.y;
+   identity_cursor = cursor;
    axis_x = pin (box.x, box.w, frame_width, near_edge_px, right_edge_px);
    axis_y = pin (box.y, box.h, frame_height, near_edge_px, near_edge_px);
    release_x = 0;
@@ -296,11 +367,14 @@ void TooltipTracker::remember (
 {
    anchor.w = box.w;
    anchor.h = box.h;
+   anchor.identity_w = box.w;
+   anchor.identity_h = box.h;
    anchor.fingerprint = fingerprint (bgra, box, anchor.fp_dx, anchor.fp_dy);
    for (std::size_t index = 0; index < anchor.content_fingerprints.size (); ++index) {
       anchor.content_fingerprints [index] = content_fingerprint (
          bgra, box, index, anchor.content_dx [index], anchor.content_dy [index]);
    }
+   anchor.content_signature = content_signature (bgra, box);
 }
 
 TooltipTracking TooltipTracker::track (
@@ -308,11 +382,13 @@ TooltipTracking TooltipTracker::track (
    const Anchor& anchor,
    int pred_x,
    int pred_y,
+   bool sensitive,
    int search_px)
 {
    const auto frame = match (
       bgra, anchor.fingerprint, anchor.fp_dx, anchor.fp_dy,
-      anchor.w, anchor.h, pred_x, pred_y, search_px, search_px);
+      anchor.identity_w, anchor.identity_h,
+      pred_x, pred_y, search_px, search_px);
 
    TooltipTracking result {
       .box = frame.box,
@@ -323,6 +399,11 @@ TooltipTracking TooltipTracker::track (
       return result;
    }
    if (frame.confidence < k_verify) return result;
+   if (distinct (anchor.fingerprint)
+       && signature_changed (bgra, anchor, frame.box, sensitive)) {
+      result.presence = TooltipPresence::Changed;
+      return result;
+   }
 
    double total = 0.0;
    double weakest = 1.0;
@@ -337,8 +418,8 @@ TooltipTracking TooltipTracker::track (
          anchor.content_fingerprints [index],
          anchor.content_dx [index],
          anchor.content_dy [index],
-         anchor.w,
-         anchor.h,
+         anchor.identity_w,
+         anchor.identity_h,
          pred_x,
          pred_y,
          std::max (k_content_search, search_px),
@@ -360,6 +441,10 @@ TooltipTracking TooltipTracker::track (
       std::sort (content_y.begin (), content_y.begin () + located);
       result.box.x = content_x [located / 2];
       result.box.y = content_y [located / 2];
+      if (signature_changed (bgra, anchor, result.box, sensitive)) {
+         result.presence = TooltipPresence::Changed;
+         return result;
+      }
       result.presence = TooltipPresence::Present;
       return result;
    }
@@ -376,7 +461,8 @@ TooltipTracking TooltipTracker::rebase (
    int search_px)
 {
    TooltipTracking result { .box = box };
-   if (size_changed (anchor.w, box.w) || size_changed (anchor.h, box.h)) {
+   if (size_changed (anchor.identity_w, box.w)
+       || size_changed (anchor.identity_h, box.h)) {
       result.presence = TooltipPresence::Changed;
       return result;
    }

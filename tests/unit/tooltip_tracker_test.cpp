@@ -191,7 +191,43 @@ TEST (TooltipTracker, TrackEscalatesSmallContentChange)
    const auto tracked = TooltipTracker::track (
       changed, anchor, k_truth.x, k_truth.y);
 
-   EXPECT_NE (tracked.presence, TooltipPresence::Present);
+   EXPECT_EQ (tracked.presence, TooltipPresence::Changed);
+}
+
+TEST (TooltipTracker, SensitiveTrackingDetectsSingleTileChange)
+{
+   const cv::Mat first = scene_with_tooltip (k_truth);
+   cv::Mat changed = first.clone ();
+   cv::rectangle (
+      changed,
+      { k_truth.x + 108, k_truth.y + 168, 5, 5 },
+      cv::Scalar { 240, 190, 80, 255 },
+      cv::FILLED);
+   Anchor anchor;
+   TooltipTracker::remember (first, k_truth, anchor);
+
+   const auto tracked = TooltipTracker::track (
+      changed, anchor, k_truth.x, k_truth.y, true);
+
+   EXPECT_EQ (tracked.presence, TooltipPresence::Changed);
+}
+
+TEST (TooltipTracker, SensitiveTrackingDetectsBoundaryChange)
+{
+   const cv::Mat first = scene_with_tooltip (k_truth);
+   cv::Mat changed = first.clone ();
+   cv::rectangle (
+      changed,
+      { k_truth.x + 101, k_truth.y + 171, 5, 5 },
+      cv::Scalar { 240, 190, 80, 255 },
+      cv::FILLED);
+   Anchor anchor;
+   TooltipTracker::remember (first, k_truth, anchor);
+
+   const auto tracked = TooltipTracker::track (
+      changed, anchor, k_truth.x, k_truth.y, true);
+
+   EXPECT_EQ (tracked.presence, TooltipPresence::Changed);
 }
 
 TEST (TooltipTracker, TrackEscalatesSizeReplacement)

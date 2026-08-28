@@ -60,6 +60,29 @@ TEST (TooltipState, TransientReplacementIsIgnored)
    EXPECT_EQ (state.observe (observation (0)).transition, TooltipTransition::Same);
 }
 
+TEST (TooltipState, ContentChangeRequiresStableReplacement)
+{
+   TooltipState state;
+   state.observe (observation (0));
+   state.observe (observation (0));
+   const auto first = state.observe (observation (0), false, true);
+   const auto second = state.observe (observation (0), false, true);
+   EXPECT_EQ (first.relation, TooltipRelation::Different);
+   EXPECT_EQ (first.transition, TooltipTransition::Candidate);
+   EXPECT_EQ (second.transition, TooltipTransition::Replaced);
+}
+
+TEST (TooltipState, TransientContentChangeIsIgnored)
+{
+   TooltipState state;
+   state.observe (observation (0));
+   state.observe (observation (0));
+   EXPECT_EQ (
+      state.observe (observation (0), false, true).transition,
+      TooltipTransition::Candidate);
+   EXPECT_EQ (state.observe (observation (0)).transition, TooltipTransition::Same);
+}
+
 TEST (TooltipState, RequiresTwoMissesToLose)
 {
    TooltipState state;

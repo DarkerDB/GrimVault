@@ -470,6 +470,7 @@ struct Pipeline::Impl
          const auto now = std::chrono::steady_clock::now ();
          bool detection_due = forced || !state.active ()
             || now - last_detection >= detection_interval ();
+         bool content_changed = false;
 
          if (state.active () && !forced && !anchor.fingerprint.empty ()) {
             const int pred_x = anchor.axis_x != vision::AxisPin::Free
@@ -478,8 +479,13 @@ struct Pipeline::Impl
             const int pred_y = anchor.axis_y != vision::AxisPin::Free
                ? anchor.pin_y
                : frame.cursor.valid ? frame.cursor.y + anchor.offset_y : anchor.pin_y;
+            const bool sensitive = anchor.identity_cursor.valid && frame.cursor.valid
+               && std::max (
+                  std::abs (frame.cursor.x - anchor.identity_cursor.x),
+                  std::abs (frame.cursor.y - anchor.identity_cursor.y))
+                  >= config.identity_position_px;
             const auto tracked = vision::TooltipTracker::track (
-               image, anchor, pred_x, pred_y);
+               image, anchor, pred_x, pred_y, sensitive);
 
             if (tracked.presence == vision::TooltipPresence::Present) {
                ++health.tracked;
@@ -490,6 +496,7 @@ struct Pipeline::Impl
                emit_anchor (anchor);
                continue;
             } else {
+               content_changed = tracked.presence == vision::TooltipPresence::Changed;
                core::log::vision.event ("tooltip_tracking", {
                   { "generation", std::to_string (anchor_generation) },
                   { "presence", std::string (presence_name (tracked.presence)) },
@@ -537,12 +544,14 @@ struct Pipeline::Impl
              && !anchor.fingerprint.empty ()) {
             const auto recovered = vision::TooltipTracker::rebase (
                image, anchor, *selected);
-            if (recovered.presence == vision::TooltipPresence::Present) {
+            content_changed = content_changed
+               || recovered.presence == vision::TooltipPresence::Changed;
+            if (!content_changed
+                && recovered.presence == vision::TooltipPresence::Present) {
                state.confirm ();
                anchor.update (
                   *selected, frame.cursor, frame.width, frame.height,
                   config.pin_near_edge_px, config.pin_right_edge_px);
-               vision::TooltipTracker::remember (image, *selected, anchor);
                core::log::vision.event ("tooltip_recovered", {
                   { "generation", std::to_string (anchor_generation) },
                   { "frame_confidence", fmt::format (
@@ -557,7 +566,7 @@ struct Pipeline::Impl
 
          const bool was_active = state.active ();
          const auto previous_generation = anchor_generation;
-         const auto update = state.observe (observation, forced);
+         const auto update = state.observe (observation, forced, content_changed);
          const auto transition = update.transition;
 
          if (!observation.has_value () || transition == TooltipTransition::Candidate) {
@@ -603,7 +612,6 @@ struct Pipeline::Impl
             anchor.update (
                *selected, frame.cursor, frame.width, frame.height,
                config.pin_near_edge_px, config.pin_right_edge_px);
-            vision::TooltipTracker::remember (image, *selected, anchor);
             emit_anchor (anchor);
             continue;
          }

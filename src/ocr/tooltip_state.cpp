@@ -144,7 +144,9 @@ bool TooltipState::agrees (
 }
 
 TooltipUpdate TooltipState::observe (
-   std::optional<TooltipObservation> observation, bool force)
+   std::optional<TooltipObservation> observation,
+   bool force,
+   bool content_changed)
 {
    TooltipUpdate update;
    if (!observation.has_value ()) {
@@ -161,6 +163,7 @@ TooltipUpdate TooltipState::observe (
    missing_ = 0;
    update.relation = TooltipRelation::Different;
    if (current_.has_value ()) update = compare (*current_, *observation);
+   if (content_changed && current_.has_value ()) update.relation = TooltipRelation::Different;
    if (!force && update.relation != TooltipRelation::Different) {
       current_ = std::move (observation);
       candidate_.reset ();

@@ -194,6 +194,8 @@ cache, so the common second hover avoids another network round trip.
 Tooltip tracking detects once, refines to ~1px at full resolution, then draws from
 clamp(cursor + offset) at 120 Hz with per-frame presence and identity checks
 for immediate disappearance and settled replacement.
+Content identity remains fixed for each augment. Overlapping interior pixel tiles
+use a lower replacement threshold after the cursor moves substantially.
 
 `run-dev.ps1` (and its original `dev-run.ps1` target) launches the full
 pipeline with `--debug` by default. Tooltip regions start red and turn green

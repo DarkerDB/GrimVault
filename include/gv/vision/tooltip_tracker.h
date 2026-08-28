@@ -23,12 +23,16 @@ struct Anchor {
    int      pin_y    = 0;
    int      w        = 0;
    int      h        = 0;
+   int      identity_w = 0;
+   int      identity_h = 0;
    cv::Mat  fingerprint;         // gray patch
+   cv::Mat  content_signature;
    int      fp_dx    = 0;        // fingerprint offset inside the box
    int      fp_dy    = 0;
    std::array<cv::Mat, 4> content_fingerprints;
    std::array<int, 4> content_dx {};
    std::array<int, 4> content_dy {};
+   capture::CursorPos identity_cursor;
    int      release_x = 0;
    int      release_y = 0;
 
@@ -61,7 +65,8 @@ public:
                                    const capture::Rect& coarse);
    static void remember (const cv::Mat& bgra, const capture::Rect& box, Anchor& anchor);
    static TooltipTracking track (const cv::Mat& bgra, const Anchor& anchor,
-                                 int pred_x, int pred_y, int search_px = 24);
+                                 int pred_x, int pred_y, bool sensitive = false,
+                                 int search_px = 24);
    static TooltipTracking rebase (const cv::Mat& bgra, const Anchor& anchor,
                                   const capture::Rect& box, int search_px = 32);
 
