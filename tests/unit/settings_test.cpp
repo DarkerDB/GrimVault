@@ -1,6 +1,5 @@
-#include <gv/api/darkerdb_client.h>
-
 #include <gtest/gtest.h>
+#include <gv/api/darkerdb_client.h>
 
 TEST (Settings, ParsesBehavior)
 {
@@ -86,7 +85,7 @@ TEST (Settings, ParsesImprovementCollectionConsent)
    EXPECT_EQ (settings->values.at ("collection:is_improvement_enabled"), "false");
 }
 
-TEST (Settings, ImprovementCollectionDefaultsToEnabled)
+TEST (Settings, ImprovementCollectionDefaultsToDisabled)
 {
    const auto settings = gv::api::parse_settings (R"({
       "body": {
@@ -99,6 +98,6 @@ TEST (Settings, ImprovementCollectionDefaultsToEnabled)
    })");
 
    ASSERT_TRUE (settings.has_value ()) << settings.error ().message;
-   EXPECT_TRUE (settings->collection.is_improvement_enabled);
-   EXPECT_EQ (settings->values.at ("collection:is_improvement_enabled"), "true");
+   EXPECT_FALSE (settings->collection.is_improvement_enabled);
+   EXPECT_EQ (settings->values.at ("collection:is_improvement_enabled"), "false");
 }

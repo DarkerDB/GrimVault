@@ -2,38 +2,41 @@
 
 #include <gv/core/result.h>
 
-#include <nlohmann/json.hpp>
-
 #include <chrono>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
 
-namespace gv::db   { class Database; }
-namespace gv::auth { class Session;   }
+namespace gv::db {
+class Database;
+}
+namespace gv::auth {
+class Session;
+}
 
 namespace gv::api {
 
 struct Pricing {
-   std::string       currency    = "gold";
-   std::int64_t      low         = 0;
-   std::int64_t      median      = 0;
-   std::int64_t      high        = 0;
-   std::int64_t      sample_size = 0;
-   std::int32_t      ttl_seconds = 0;
-   std::string       as_of;
-   std::int64_t      market      = 0;   // alias for median; kept for overlay compat
-   std::int64_t      quick_list  = 0;
-   std::int64_t      lowest_ask  = 0;
-   std::int64_t      highest_reasonable_ask = 0;
-   std::int64_t      latest_listing = 0;
-   std::int64_t      total_value = 0;
-   std::string       confidence;
-   double            mean_similarity = 0.0;
-   nlohmann::json    raw;
+   std::string currency = "gold";
+   std::int64_t low = 0;
+   std::int64_t median = 0;
+   std::int64_t high = 0;
+   std::int64_t sample_size = 0;
+   std::int32_t ttl_seconds = 0;
+   std::string as_of;
+   std::int64_t market = 0;  // alias for median; kept for overlay compat
+   std::int64_t quick_list = 0;
+   std::int64_t lowest_ask = 0;
+   std::int64_t highest_reasonable_ask = 0;
+   std::int64_t latest_listing = 0;
+   std::int64_t total_value = 0;
+   std::string confidence;
+   double mean_similarity = 0.0;
+   nlohmann::json raw;
 };
 
 struct TooltipAttribute {
@@ -42,17 +45,17 @@ struct TooltipAttribute {
 };
 
 struct AnalysisRoll {
-   std::string           attribute_id;
-   std::string           label;
-   std::string           slot;
-   double                value = 0.0;
-   std::string           formatted_value;
-   std::string           gem;
-   std::string           gem_icon_url;
+   std::string attribute_id;
+   std::string label;
+   std::string slot;
+   double value = 0.0;
+   std::string formatted_value;
+   std::string gem;
+   std::string gem_icon_url;
    std::optional<double> minimum;
    std::optional<double> maximum;
-   std::optional<int>    roll_percentile;
-   std::string           grade;
+   std::optional<int> roll_percentile;
+   std::string grade;
 };
 
 struct GemChange {
@@ -68,30 +71,30 @@ struct GemChange {
 };
 
 struct GemPlan {
-   int                    sockets         = 0;
+   int sockets = 0;
    std::vector<GemChange> changes;
    std::int64_t projected_value = 0;
-   std::int64_t value_uplift    = 0;
-   std::int64_t socket_fee      = 0;
-   std::int64_t net_uplift      = 0;
-   std::string  confidence;
-   std::int64_t sample_size     = 0;
+   std::int64_t value_uplift = 0;
+   std::int64_t socket_fee = 0;
+   std::int64_t net_uplift = 0;
+   std::string confidence;
+   std::int64_t sample_size = 0;
 };
 
 struct GemOptimization {
-   std::string            assumption;
-   std::vector<GemPlan>    plans;
+   std::string assumption;
+   std::vector<GemPlan> plans;
    // Parsed aliases for servers and callers that still use the original
    // fixed one/two-plan contract.
    std::optional<GemPlan> one_socket;
    std::optional<GemPlan> two_socket;
-   std::string            reason;
-   std::string            note;
+   std::string reason;
+   std::string note;
 };
 
 struct ActivityCount {
    std::int64_t count = 0;
-   bool         capped = false;
+   bool capped = false;
    std::int64_t window_hours = 0;
 };
 
@@ -104,9 +107,9 @@ struct MarketAnalysis {
    std::optional<std::int64_t> median_sale_price;
    std::optional<double> trend_percent;
    std::optional<std::int64_t> median_sale_seconds;
-   std::optional<double>       days_supply;
-   std::string                  price_stability;
-   std::string        liquidity;
+   std::optional<double> days_supply;
+   std::string price_stability;
+   std::string liquidity;
 };
 
 struct SimilarSaleRoll {
@@ -119,23 +122,23 @@ struct SimilarSaleRoll {
 // `rolls` is additive to the original highlight pair so mixed client/server
 // versions keep rendering during rollout.
 struct SimilarSale {
-   std::int64_t                price        = 0;
-   std::int32_t                similarity   = 0;
-   std::string                 sold_at;
-   std::int64_t                age_seconds  = 0;
+   std::int64_t price = 0;
+   std::int32_t similarity = 0;
+   std::string sold_at;
+   std::int64_t age_seconds = 0;
    std::optional<std::int64_t> sale_seconds;
    std::vector<SimilarSaleRoll> rolls;
-   std::string                 highlight_label;
-   std::string                 highlight_value;
+   std::string highlight_label;
+   std::string highlight_value;
 };
 
 // One quest that wants this item. `merchant_*` and the chain position are
 // absent when the quest's chapter doesn't resolve to a merchant.
 struct QuestUse {
-   std::string                 merchant_id;
-   std::string                 merchant_name;
-   std::string                 merchant_icon_url;
-   std::string                 quest_name;
+   std::string merchant_id;
+   std::string merchant_name;
+   std::string merchant_icon_url;
+   std::string quest_name;
    std::optional<std::int64_t> quest_index;
    std::optional<std::int64_t> quest_count;
    std::optional<std::int64_t> quantity;
@@ -143,58 +146,58 @@ struct QuestUse {
 
 // One material line in a recipe. `is_this` marks the hovered item.
 struct RecipeItem {
-   std::string  item_id;
-   std::string  name;
-   std::string  rarity;
-   std::string  icon_url;
+   std::string item_id;
+   std::string name;
+   std::string rarity;
+   std::string icon_url;
    std::int64_t quantity = 1;
-   bool         is_this  = false;
+   bool is_this = false;
 };
 
 // A recipe the hovered item is a material for.
 struct RecipeUse {
-   std::string             merchant_id;
-   std::string             merchant_name;
-   std::string             merchant_icon_url;
+   std::string merchant_id;
+   std::string merchant_name;
+   std::string merchant_icon_url;
    std::optional<RecipeItem> output;
    std::vector<RecipeItem> materials;
 };
 
 struct UtilityAnalysis {
-   std::int64_t vendor_value     = 0;
-   std::int64_t vendor_total     = 0;
+   std::int64_t vendor_value = 0;
+   std::int64_t vendor_total = 0;
    std::int64_t adventure_points = 0;
-   std::int64_t gear_score       = 0;
-   std::int64_t max_stack_size   = 0;
+   std::int64_t gear_score = 0;
+   std::int64_t max_stack_size = 0;
    std::optional<std::int64_t> value_per_slot;
 };
 
 struct ValueDriver {
-   std::string  attribute_id;
-   std::string  label;
+   std::string attribute_id;
+   std::string label;
    std::int64_t gold_contribution = 0;
-   std::string  basis;
+   std::string basis;
 };
 
 struct SourceAlternative {
-   std::string           id;
-   std::string           icon_url;
-   std::string           name;
+   std::string id;
+   std::string icon_url;
+   std::string name;
    std::optional<double> drop_rate;
 };
 
 struct SourceAnalysis {
-   std::string           kind;
-   std::string           heading;
-   std::string           id;
-   std::string           icon_url;
-   std::string           name;
-   std::string           context;
-   std::string           mode;
-   std::optional<int>    reward_quests;
+   std::string kind;
+   std::string heading;
+   std::string id;
+   std::string icon_url;
+   std::string name;
+   std::string context;
+   std::string mode;
+   std::optional<int> reward_quests;
    std::optional<double> drop_rate;
    std::optional<double> luck_drop_rate;
-   std::optional<int>    luck;
+   std::optional<int> luck;
    std::vector<SourceAlternative> alternates;
 };
 
@@ -205,14 +208,14 @@ struct TradeChatItem {
 };
 
 struct TradeChatMessage {
-   std::string  message;
-   std::string  observed_at;
+   std::string message;
+   std::string observed_at;
    std::int64_t age_seconds = 0;
    std::vector<TradeChatItem> items;
 };
 
 struct TradeChatAnalysis {
-   std::int64_t                 mentions_14d = 0;
+   std::int64_t mentions_14d = 0;
    std::vector<TradeChatMessage> messages;
 };
 
@@ -229,20 +232,20 @@ struct LockedWidget {
 // "the analyzer had nothing to say", so the augment can upsell instead of
 // silently rendering a gap.
 struct Entitlement {
-   std::string               plan;
+   std::string plan;
 
    // The wire field is `slots`; that is a Qt keyword macro, and every UI
    // translation unit includes both this header and <QObject>.
-   std::int64_t              slot_limit = 0;
+   std::int64_t slot_limit = 0;
 
-   std::vector<std::string>  granted;
+   std::vector<std::string> granted;
    std::vector<LockedWidget> locked;
 
    // Which tier each widget belongs to, and the tier order cheapest-first.
    // The card groups its sections by plan and cannot derive that from
    // `locked`, which is empty for a player who already owns everything.
    std::vector<std::pair<std::string, std::string>> tiers;
-   std::vector<std::string>                         ladder;
+   std::vector<std::string> ladder;
 
    // Inline so the header-only augment payload builder (and its hermetic
    // unit test) need no link against gv::api.
@@ -266,37 +269,37 @@ struct Entitlement {
 struct TooltipLookup {
    // Client-side OCR text used for the diagnostic augment body. It is not
    // populated by or sent back to the API.
-   std::string                    recognized_text;
-   std::string                    item_id;
-   std::string                    canonical_name;
-   std::string                    display_name;
-   std::string                    language = "en";
-   std::string                    rarity;
-   std::string                    artifact_type;
-   double                         match_confidence = 0.0;
-   std::int64_t                   quantity = 1;
-   bool                           tradeable = true;
-   std::vector<AnalysisRoll>       rolls;
-   std::vector<TooltipAttribute>  primary;
-   std::vector<TooltipAttribute>  secondary;
-   std::vector<TooltipAttribute>  details;
-   Pricing                        pricing;
-   std::optional<int>             roll_score;
-   std::optional<int>             weighted_roll_score;
-   std::optional<int>             relative_percentile;
-   std::optional<ValueDriver>     value_driver;
-   MarketAnalysis                 market_analysis;
-   std::vector<SimilarSale>        similar_sales;
-   std::vector<SimilarSale>        similar_listings;
-   std::optional<SourceAnalysis>  source_analysis;
-   TradeChatAnalysis              trade_chat;
-   UtilityAnalysis                utility;
-   std::vector<QuestUse>          quests;
-   std::vector<RecipeUse>         recipes;
-   GemOptimization                gem_optimization;
-   Entitlement                    entitlement;
-   std::string                    request_id;
-   nlohmann::json                 raw;
+   std::string recognized_text;
+   std::string item_id;
+   std::string canonical_name;
+   std::string display_name;
+   std::string language = "en";
+   std::string rarity;
+   std::string artifact_type;
+   double match_confidence = 0.0;
+   std::int64_t quantity = 1;
+   bool tradeable = true;
+   std::vector<AnalysisRoll> rolls;
+   std::vector<TooltipAttribute> primary;
+   std::vector<TooltipAttribute> secondary;
+   std::vector<TooltipAttribute> details;
+   Pricing pricing;
+   std::optional<int> roll_score;
+   std::optional<int> weighted_roll_score;
+   std::optional<int> relative_percentile;
+   std::optional<ValueDriver> value_driver;
+   MarketAnalysis market_analysis;
+   std::vector<SimilarSale> similar_sales;
+   std::vector<SimilarSale> similar_listings;
+   std::optional<SourceAnalysis> source_analysis;
+   TradeChatAnalysis trade_chat;
+   UtilityAnalysis utility;
+   std::vector<QuestUse> quests;
+   std::vector<RecipeUse> recipes;
+   GemOptimization gem_optimization;
+   Entitlement entitlement;
+   std::string request_id;
+   nlohmann::json raw;
 };
 
 nlohmann::json diagnostic (const TooltipLookup& lookup);
@@ -324,13 +327,13 @@ nlohmann::json diagnostic (const TooltipLookup& lookup);
 // `raw` preserves the unmodified server envelope for diagnostics.
 struct SettingsBundle {
    struct Overlay {
-      std::string  mode      = "automatic";
-      std::string  alignment = "attached";
-      std::string  columns   = "auto";
-      double       opacity   = 0.9;
-      double       scale     = 1.0;
-      std::int32_t offset_x  = 20;
-      std::int32_t offset_y  = 20;
+      std::string mode = "automatic";
+      std::string alignment = "attached";
+      std::string columns = "auto";
+      double opacity = 0.9;
+      double scale = 1.0;
+      std::int32_t offset_x = 20;
+      std::int32_t offset_y = 20;
 
       // The bottom-right corner badge, not the augment card — a player who
       // sets mode=disabled keeps it, so it carries its own toggle.
@@ -338,17 +341,17 @@ struct SettingsBundle {
    };
 
    struct TooltipSections {
-      bool header    = true;
-      bool primary   = true;
+      bool header = true;
+      bool primary = true;
       bool secondary = true;
-      bool details   = true;
-      bool quests    = true;
-      bool pricing   = true;
+      bool details = true;
+      bool quests = true;
+      bool pricing = true;
    };
 
    struct Tooltip {
       TooltipSections sections;
-      bool            is_price_history_sparkline_visible = true;
+      bool is_price_history_sparkline_visible = true;
 
       // tooltip.analysis.* — the per-widget visibility toggles that drive
       // the augment's `visible_sections`. Deliberately NOT a fixed struct:
@@ -376,34 +379,34 @@ struct SettingsBundle {
    };
 
    struct Behavior {
-      bool is_auto_update_enabled       = true;
+      bool is_auto_update_enabled = true;
       bool is_launch_on_startup_enabled = true;
-      bool is_performance_mode_enabled  = false;
-      std::int32_t capture_fps          = 15;
-      std::string capture_mode          = "automatic";
-      std::string language              = "automatic";
+      bool is_performance_mode_enabled = false;
+      std::int32_t capture_fps = 15;
+      std::string capture_mode = "automatic";
+      std::string language = "automatic";
    };
 
    struct Hotkeys {
-      std::string toggle_overlay  = "Ctrl+Shift+G";
-      std::string force_refresh   = "F5";
+      std::string toggle_overlay = "Ctrl+Shift+G";
+      std::string force_refresh = "F5";
       std::string open_in_browser = "Ctrl+Shift+D";
    };
 
    struct Collection {
-      bool is_improvement_enabled = true;
+      bool is_improvement_enabled = false;
    };
 
-   Overlay   overlay;
-   Tooltip   tooltip;
-   Pricing   pricing;
-   Behavior  behavior;
+   Overlay overlay;
+   Tooltip tooltip;
+   Pricing pricing;
+   Behavior behavior;
    Collection collection;
-   Hotkeys   hotkeys;
+   Hotkeys hotkeys;
    std::string updated_at;
 
    std::unordered_map<std::string, std::string> values;
-   nlohmann::json                                raw;
+   nlohmann::json raw;
 };
 
 struct CollectionSample {
@@ -421,58 +424,59 @@ struct CollectionResult {
 };
 
 core::Result<SettingsBundle> parse_settings (std::string_view json);
+core::Result<TooltipLookup> parse_lookup_response (std::string_view json);
+core::Result<TooltipLookup> parse_analysis_response (std::string_view json);
 
 // Probe response from /v2/grimvault/ping. Used by CLI `status` / `doctor`.
 struct PingResult {
-   bool         ok = false;
-   std::string  player_id;
-   std::string  user_id;
-   std::string  env;
-   std::string  server_time;
-   std::string  request_id;
+   bool ok = false;
+   std::string player_id;
+   std::string user_id;
+   std::string env;
+   std::string server_time;
+   std::string request_id;
    nlohmann::json raw;
 };
 
+core::Result<PingResult> parse_ping_response (std::string_view json);
+
 class DDBClient
 {
-public:
+  public:
    struct Config {
-      std::string base_url;              // from active_env ().api_base_url
+      std::string base_url;  // from active_env ().api_base_url
       std::string collection_base_url;
-      std::string client_id;             // from active_env ().client_id (X-Client-Id)
-      std::string user_agent     = "";   // computed if empty
-      std::string ca_bundle      = "";
+      std::vector<std::string> collection_upload_hosts {
+         "katforge-collections.s3.us-east-2.amazonaws.com"
+      };
+      std::string client_id;        // from active_env ().client_id (X-Client-Id)
+      std::string user_agent = "";  // computed if empty
+      std::string ca_bundle = "";
       std::chrono::milliseconds timeout { 15000 };
    };
 
    // The session is the source of truth for the bearer token. Borrowed; the
    // session must outlive the client.
-   DDBClient  (Config cfg, gv::auth::Session* session, gv::db::Database* cache_db = nullptr);
+   DDBClient (Config cfg, gv::auth::Session* session, gv::db::Database* cache_db = nullptr);
    ~DDBClient ();
 
-   DDBClient (const DDBClient&)            = delete;
+   DDBClient (const DDBClient&) = delete;
    DDBClient& operator= (const DDBClient&) = delete;
 
    // POST /v2/grimvault/lookup. Personalized responses are partitioned by
    // account and cached briefly so repeated hovers do not repeat a round trip.
    core::Result<TooltipLookup> lookup_tooltip (
-      std::string_view raw_text,
-      std::string_view language,
-      std::chrono::seconds cache_ttl = std::chrono::seconds (300)
-   );
+      std::string_view raw_text, std::string_view language,
+      std::chrono::seconds cache_ttl = std::chrono::seconds (300));
 
    // POST /v2/grimvault/analyze. Resolves the complete OCR tooltip against
    // DDB, prices the exact rolls, and returns premium gem optimization.
    core::Result<TooltipLookup> analyze_tooltip (
-      std::string_view raw_text,
-      std::string_view language,
-      float            confidence,
+      std::string_view raw_text, std::string_view language, float confidence,
       std::string_view capture_backend,
       const std::unordered_map<std::string, std::string>& gems = {},
-      const std::vector<std::string>& enabled_widgets = {},
-      std::string_view rarity = {},
-      std::chrono::seconds cache_ttl = std::chrono::seconds (180)
-   );
+      const std::vector<std::string>& enabled_widgets = {}, std::string_view rarity = {},
+      std::chrono::seconds cache_ttl = std::chrono::seconds (180));
 
    // POST /v2/grimvault/ping. Auth probe; no quota consumption per §4.7.
    core::Result<PingResult> ping ();
@@ -491,9 +495,9 @@ public:
    /// continue while a newly hovered item supersedes an older analysis.
    void cancel_analysis () noexcept;
 
-private:
+  private:
    struct Impl;
    std::unique_ptr<Impl> impl_;
 };
 
-} // namespace gv::api
+}  // namespace gv::api

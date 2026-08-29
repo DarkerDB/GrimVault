@@ -1,1081 +1,97 @@
-#include <gv/ocr/pipeline.h>
-#include <gv/ocr/capture_policy.h>
-#include <gv/ocr/evidence.h>
-#include <gv/ocr/preprocessor.h>
-#include <gv/ocr/tooltip_state.h>
 #include <gv/core/environment.h>
 #include <gv/core/logger.h>
+#include <gv/ocr/capture_policy.h>
+#include <gv/ocr/evidence.h>
+#include <gv/ocr/pipeline.h>
+#include <gv/ocr/preprocessor.h>
+#include <gv/ocr/tooltip_state.h>
 #include <gv/vision/gem_detector.h>
 #include <gv/vision/tooltip_tracker.h>
-
-#include <opencv2/imgcodecs.hpp>
-#include <opencv2/imgproc.hpp>
 
 #include <algorithm>
 #include <atomic>
 #include <cctype>
 #include <filesystem>
 #include <mutex>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 #include <optional>
 #include <thread>
 
+#include "pipeline_impl.h"
+
 namespace gv::ocr {
 
-namespace {
-
-void replace_all (std::string& text, std::string_view from, std::string_view to)
+Pipeline::Impl::Impl (capture::CaptureService& c, vision::TooltipDetector& d, LanguageRegistry& r,
+                      Config cfg)
+    : capture (c),
+      detector (d),
+      registry (r),
+      config (std::move (cfg)),
+      evidence (config.evidence_dir, config.evidence_max_bytes),
+      capture_fps (std::clamp (config.capture_fps, minimum_capture_fps, 60.0)),
+      capture_mode (c.mode ()),
+      language (config.language)
 {
-   for (std::size_t pos = 0; (pos = text.find (from, pos)) != std::string::npos;) {
-      text.replace (pos, from.size (), to);
-      pos += to.size ();
-   }
 }
 
-// The game's serif face draws dotted Latin glyphs with an accent-like stroke,
-// and the multilingual Paddle model often chooses the accented codepoint with
-// high confidence. Item lookup wants semantic ASCII, not a faithful encoding
-// of that font quirk. Keep this intentionally conservative and Latin-only.
-void canonicalize_latin (std::string& text)
+void Pipeline::Impl::queue_scans (int requested)
 {
-   constexpr std::pair<std::string_view, std::string_view> replacements[] = {
-      { "á", "a" }, { "à", "a" }, { "â", "a" }, { "ä", "a" },
-      { "é", "e" }, { "è", "e" }, { "ê", "e" }, { "ë", "e" },
-      { "í", "i" }, { "ì", "i" }, { "î", "i" }, { "ï", "i" },
-      { "ó", "o" }, { "ò", "o" }, { "ô", "o" }, { "ö", "o" },
-      { "ú", "u" }, { "ù", "u" }, { "û", "u" }, { "ü", "u" },
-      { "−", "-" }, { "–", "-" }, { "’", "'" },
-   };
-   for (const auto& [from, to] : replacements) replace_all (text, from, to);
+   int pending = force_scans.load (std::memory_order_relaxed);
+   while (pending < requested &&
+          !force_scans.compare_exchange_weak (pending, requested, std::memory_order_relaxed)) {}
 }
 
-std::string_view relation_name (TooltipRelation relation)
+std::chrono::milliseconds Pipeline::Impl::current_interval () const
 {
-   switch (relation) {
-      case TooltipRelation::Same: return "same";
-      case TooltipRelation::Ambiguous: return "ambiguous";
-      case TooltipRelation::Different: return "different";
-      default: return "missing";
-   }
+   const bool active = tracking.load (std::memory_order_relaxed);
+   const double fps = frame_fps (
+      capture_fps.load (std::memory_order_relaxed), config.performance_fps, config.tracking_fps,
+      config.performance_tracking_fps, performance_mode.load (std::memory_order_relaxed), active);
+
+   return std::chrono::duration_cast<std::chrono::milliseconds> (
+      std::chrono::duration<double> (1.0 / fps));
 }
 
-std::string_view presence_name (vision::TooltipPresence presence)
+std::chrono::milliseconds Pipeline::Impl::detection_interval () const
 {
-   switch (presence) {
-      case vision::TooltipPresence::Present: return "present";
-      case vision::TooltipPresence::Changed: return "changed";
-      case vision::TooltipPresence::Absent: return "absent";
-      default: return "uncertain";
-   }
+   const double fps =
+      detector_fps (capture_fps.load (std::memory_order_relaxed), config.performance_fps,
+                    performance_mode.load (std::memory_order_relaxed));
+   return std::chrono::duration_cast<std::chrono::milliseconds> (
+      std::chrono::duration<double> (1.0 / fps));
 }
 
-struct VisionHealth
+Pipeline::Pipeline (capture::CaptureService& capture, vision::TooltipDetector& detector,
+                    LanguageRegistry& registry, Config config)
 {
-   std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now ();
-   std::uint64_t frames = 0;
-   std::uint64_t scans = 0;
-   std::uint64_t boxes = 0;
-   std::uint64_t empty = 0;
-   std::uint64_t errors = 0;
-   std::uint64_t identity_failures = 0;
-   std::uint64_t tracked = 0;
-   std::uint64_t accepted = 0;
-   std::uint64_t cursor_valid = 0;
-   long long detect_ms_total = 0;
-   long long detect_ms_max = 0;
-   capture::CaptureBackend backend = capture::CaptureBackend::Unknown;
-   std::string latest_error;
-
-   void record (const capture::Frame& frame)
-   {
-      ++frames;
-      cursor_valid += frame.cursor.valid ? 1 : 0;
-      backend = frame.backend;
-   }
-
-   void record_detection (long long detect_ms)
-   {
-      ++scans;
-      detect_ms_total += detect_ms;
-      detect_ms_max = std::max (detect_ms_max, detect_ms);
-   }
-
-   void report_if_due (bool active)
-   {
-      const auto now = std::chrono::steady_clock::now ();
-      if (now - started < std::chrono::seconds { 10 }) return;
-      core::log::vision.event ("pipeline_health", {
-         { "active", active ? "1" : "0" },
-         { "frames", std::to_string (frames) },
-         { "scans", std::to_string (scans) },
-         { "boxes", std::to_string (boxes) },
-         { "empty", std::to_string (empty) },
-         { "errors", std::to_string (errors) },
-         { "identity_failures", std::to_string (identity_failures) },
-         { "tracked", std::to_string (tracked) },
-         { "accepted", std::to_string (accepted) },
-         { "cursor_valid", std::to_string (cursor_valid) },
-         { "backend", std::string { capture::backend_name (backend) } },
-         { "detect_ms_avg", std::to_string (scans ? detect_ms_total / scans : 0) },
-         { "detect_ms_max", std::to_string (detect_ms_max) },
-         { "latest_error", latest_error.empty () ? "none" : latest_error },
-      });
-      *this = VisionHealth {};
-   }
-};
-
-} // namespace
-
-struct Pipeline::Impl
-{
-   Impl (capture::CaptureService& c, vision::TooltipDetector& d, LanguageRegistry& r, Config cfg)
-      : capture (c), detector (d), registry (r), config (std::move (cfg)),
-        evidence (config.evidence_dir, config.evidence_max_bytes),
-        capture_fps (std::clamp (config.capture_fps, minimum_capture_fps, 60.0)),
-        capture_mode (c.mode ()), language (config.language)
-   {}
-
-   capture::CaptureService&  capture;
-   vision::TooltipDetector&  detector;
-   LanguageRegistry&         registry;
-   Config                    config;
-   Evidence                  evidence;
-   std::atomic<double>       capture_fps;
-   std::atomic<capture::CaptureMode> capture_mode { capture::CaptureMode::Automatic };
-
-   std::atomic<bool>         running   { false };
-   std::atomic<bool>         enabled   { true };
-   std::atomic<bool>         automatic { true };
-   std::atomic<bool>         performance_mode { false };
-   std::atomic<bool>         detect_only { false };
-   std::atomic<bool>         tracking { false };
-   std::atomic<bool>         reset_requested { false };
-   std::atomic<std::uint64_t> generation { 0 };
-   std::atomic<void*>        window    { nullptr };
-   std::mutex                language_lock;
-   LanguageFamily            language;
-   std::string               locale { "en" };
-
-   std::thread               capture_thread;
-   std::thread               vision_thread;
-   std::thread               ocr_thread;
-
-   std::mutex capture_lock;
-   std::optional<capture::Frame> pending_frame;
-   struct VisionOut {
-      capture::Frame                     frame;
-      std::vector<vision::TooltipBox>    boxes;
-      std::uint64_t                      generation = 0;
-      TooltipObservation                 observation;
-      bool                               refresh = false;
-   };
-   std::mutex vision_lock;
-   std::optional<VisionOut> pending_vision;
-
-   TooltipCallback           callback;
-   AnchorCallback            anchor_cb;
-   AnchorLostCallback        anchor_lost_cb;
-   SampleCallback            sample_cb;
-
-   std::atomic<long long>    last_detect_ms { 0 };
-
-   std::atomic<int>          force_scans { 0 };
-
-   void queue_scans (int requested)
-   {
-      int pending = force_scans.load (std::memory_order_relaxed);
-      while (pending < requested && !force_scans.compare_exchange_weak (
-         pending, requested, std::memory_order_relaxed)) {}
-   }
-
-   std::chrono::milliseconds current_interval () const
-   {
-      const bool active = tracking.load (std::memory_order_relaxed);
-      const double fps = frame_fps (
-         capture_fps.load (std::memory_order_relaxed),
-         config.performance_fps,
-         config.tracking_fps,
-         config.performance_tracking_fps,
-         performance_mode.load (std::memory_order_relaxed),
-         active);
-
-      return std::chrono::duration_cast<std::chrono::milliseconds> (
-         std::chrono::duration<double> (1.0 / fps));
-   }
-
-   std::chrono::milliseconds detection_interval () const
-   {
-      const double fps = detector_fps (
-         capture_fps.load (std::memory_order_relaxed),
-         config.performance_fps,
-         performance_mode.load (std::memory_order_relaxed));
-      return std::chrono::duration_cast<std::chrono::milliseconds> (
-         std::chrono::duration<double> (1.0 / fps));
-   }
-
-   void capture_loop ()
-   {
-      void* current_target  = nullptr;
-      bool  session_active  = false;
-      int   continuous_errors = 0;
-      auto  continuous_backoff = continuous_backoff_min;
-      auto  continuous_retry_at = std::chrono::steady_clock::now ();
-      auto  applied_mode    = capture.mode ();
-      int   dropped_frames  = 0;
-      auto  last_drop_report = std::chrono::steady_clock::now ();
-
-      const auto rearm_continuous = [&] {
-         continuous_errors   = 0;
-         continuous_backoff  = continuous_backoff_min;
-         continuous_retry_at = std::chrono::steady_clock::now ();
-      };
-
-      const auto degrade_continuous = [&] (const core::Error& cause) {
-         if (session_active) {
-            capture.stop_continuous ();
-            session_active = false;
-         }
-         if (capture.demote (cause)) {
-            rearm_continuous ();
-            return;
-         }
-         continuous_errors   = 0;
-         continuous_retry_at = std::chrono::steady_clock::now () + continuous_backoff;
-         continuous_backoff  = next_continuous_backoff (continuous_backoff);
-      };
-
-      while (running.load (std::memory_order_relaxed)) {
-         // The service is owned by this thread once the loop runs, so mode
-         // changes from the settings bridge land here, between frames. A
-         // rejected mode is not retried — the service kept its previous
-         // strategy and the next settings change re-arms the check.
-         const auto want_mode = capture_mode.load (std::memory_order_relaxed);
-         if (want_mode != applied_mode) {
-            if (session_active) {
-               capture.stop_continuous ();
-               session_active = false;
-            }
-            if (auto r = capture.set_mode (want_mode); !r.has_value ()) {
-               core::Logger::warn ("pipeline: capture mode {} rejected: {}",
-                  capture::capture_mode_name (want_mode), r.error ().message);
-            }
-            applied_mode   = want_mode;
-            current_target = nullptr;
-            rearm_continuous ();
-         }
-
-         void* now_target = window.load ();
-         const bool forced = force_scans.load (std::memory_order_relaxed) > 0;
-         const bool auto_scan = automatic.load (std::memory_order_relaxed);
-
-         if (!capture_active (
-               enabled.load (std::memory_order_relaxed),
-               auto_scan,
-               tracking.load (std::memory_order_relaxed),
-               forced)) {
-            capture.stop_continuous ();
-            session_active = false;
-            std::this_thread::sleep_for (std::chrono::milliseconds (100));
-            continue;
-         }
-
-         // No game window: the pipeline sleeps outright instead of running
-         // detection against monitor frames — that's pure CPU burn with
-         // nothing to find. A forced scan (F5) still grabs one monitor
-         // frame so desktop testing works without the game.
-         if (!capture_targeted (now_target != nullptr, forced)) {
-            capture.stop_continuous ();
-            session_active = false;
-            std::this_thread::sleep_for (std::chrono::milliseconds (250));
-            continue;
-         }
-
-         // (Re)start the continuous session when the target changed or the
-         // session was torn down during a no-window pause.
-         const bool target_changed = now_target != current_target;
-         if (target_changed) rearm_continuous ();
-
-         const bool retry_due =
-            std::chrono::steady_clock::now () >= continuous_retry_at;
-         if (capture.supports_continuous () && retry_due
-               && (!session_active || target_changed)) {
-            if (session_active) capture.stop_continuous ();
-            auto r = capture.start_continuous (
-               now_target, /*is_window=*/ now_target != nullptr);
-            session_active = r.has_value ();
-            if (session_active) {
-               continuous_errors = 0;
-            } else {
-               core::Logger::warn ("pipeline: continuous start failed: {}",
-                  r.error ().message);
-               degrade_continuous (r.error ());
-            }
-         }
-         current_target = now_target;
-
-         core::Result<capture::Frame> frame_res = core::fail (core::Error {
-            core::ErrorKind::Capture, "init" });
-
-         if (session_active) {
-            frame_res = capture.latest_frame (std::chrono::milliseconds (200));
-            if (frame_res.has_value ()) {
-               continuous_errors = 0;
-            } else if (++continuous_errors >= continuous_error_limit) {
-               core::Logger::warn ("pipeline: continuous capture failed repeatedly: {}",
-                  frame_res.error ().message);
-               degrade_continuous (frame_res.error ());
-            }
-         } else {
-            frame_res = now_target
-               ? capture.capture_window  (now_target)
-               : capture.capture_monitor (nullptr);
-         }
-
-         if (frame_res.has_value () && !frame_res->empty ()) {
-            std::lock_guard lock { capture_lock };
-            if (pending_frame.has_value ()) ++dropped_frames;
-            pending_frame = std::move (*frame_res);
-         }
-
-         if (const auto now = std::chrono::steady_clock::now ();
-             now - last_drop_report > std::chrono::seconds { 10 }) {
-            if (dropped_frames > 0) {
-               core::log::vision.event ("frame_drops", {
-                  { "dropped", std::to_string (dropped_frames) },
-                  { "window_s", "10" },
-               });
-               dropped_frames = 0;
-            }
-            last_drop_report = now;
-         }
-
-         std::this_thread::sleep_for (current_interval ());
-      }
-
-      if (session_active) {
-         capture.stop_continuous ();
-      }
-   }
-
-   void vision_loop ()
-   {
-      TooltipState state {{
-         .stable_frames = config.stability_frames,
-         .missing_frames = config.missing_frames,
-         .identity_bits = config.identity_bits,
-         .position_px = config.identity_position_px,
-         .size_ratio = config.identity_size_ratio,
-      }};
-      vision::Anchor anchor;
-      std::uint64_t anchor_generation = 0;
-      auto last_detection = std::chrono::steady_clock::now () - detection_interval ();
-      VisionHealth health;
-
-      const auto emit_anchor = [this, &anchor_generation] (const vision::Anchor& value) {
-         if (!anchor_cb) return;
-         anchor_cb (AnchorEvent {
-            .generation = anchor_generation,
-            .offset_x = value.offset_x,
-            .offset_y = value.offset_y,
-            .locked_x = value.locked_x,
-            .locked_y = value.locked_y,
-            .pinned_x = value.axis_x != vision::AxisPin::Free,
-            .pinned_y = value.axis_y != vision::AxisPin::Free,
-            .pin_x = value.pin_x,
-            .pin_y = value.pin_y,
-            .w = value.w,
-            .h = value.h,
-         });
-      };
-
-      const auto nearest_to_cursor = [] (
-         const std::vector<vision::TooltipBox>& boxes,
-         const capture::CursorPos& cursor) -> const vision::TooltipBox* {
-         const auto* selected = &boxes.front ();
-         if (!cursor.valid || boxes.size () == 1) return selected;
-         long best = -1;
-         for (const auto& box : boxes) {
-            const long dx = cursor.x < box.rect.x
-               ? box.rect.x - cursor.x
-               : cursor.x > box.rect.x + box.rect.w
-                  ? cursor.x - box.rect.x - box.rect.w
-                  : 0;
-            const long dy = cursor.y < box.rect.y
-               ? box.rect.y - cursor.y
-               : cursor.y > box.rect.y + box.rect.h
-                  ? cursor.y - box.rect.y - box.rect.h
-                  : 0;
-            const long distance = dx * dx + dy * dy;
-            if (best < 0 || distance < best) {
-               best = distance;
-               selected = &box;
-            }
-         }
-         return selected;
-      };
-
-      const auto lose = [&] (std::string reason) {
-         if (!state.active ()) return;
-         const auto lost_generation = anchor_generation;
-         state.reset ();
-         anchor = {};
-         tracking.store (false, std::memory_order_relaxed);
-         generation.fetch_add (1, std::memory_order_relaxed);
-         anchor_generation = 0;
-         if (anchor_lost_cb) anchor_lost_cb (true);
-         core::log::vision.event ("tooltip_lost", {
-            { "generation", std::to_string (lost_generation) },
-            { "reason", reason },
-         });
-         evidence.event (lost_generation, "lost", {
-            { "reason", reason },
-         });
-      };
-
-      while (running.load (std::memory_order_relaxed)) {
-         std::optional<capture::Frame> next;
-         {
-            std::lock_guard lock { capture_lock };
-            next = std::move (pending_frame);
-            pending_frame.reset ();
-         }
-         if (!next.has_value ()) {
-            std::this_thread::sleep_for (std::chrono::milliseconds (5));
-            continue;
-         }
-
-         capture::Frame frame = std::move (*next);
-         frame.cursor = frame.local_cursor ();
-         health.report_if_due (state.active ());
-         health.record (frame);
-
-         if (reset_requested.exchange (false, std::memory_order_relaxed)) {
-            lose ("runtime_policy");
-            state.reset ();
-            if (!enabled.load (std::memory_order_relaxed)) continue;
-         }
-
-         int pending = force_scans.load (std::memory_order_relaxed);
-         while (pending > 0 && !force_scans.compare_exchange_weak (
-            pending, pending - 1, std::memory_order_relaxed)) {}
-         const bool forced = pending > 0;
-
-         cv::Mat image {
-            frame.height,
-            frame.width,
-            CV_8UC4,
-            frame.data.get (),
-            static_cast<std::size_t> (frame.stride),
-         };
-
-         const auto now = std::chrono::steady_clock::now ();
-         bool detection_due = forced || !state.active ()
-            || now - last_detection >= detection_interval ();
-         bool content_changed = false;
-         bool sensitive = false;
-
-         if (state.active () && !forced && !anchor.fingerprint.empty ()) {
-            const int pred_x = anchor.axis_x != vision::AxisPin::Free
-               ? anchor.pin_x
-               : frame.cursor.valid ? frame.cursor.x + anchor.offset_x : anchor.pin_x;
-            const int pred_y = anchor.axis_y != vision::AxisPin::Free
-               ? anchor.pin_y
-               : frame.cursor.valid ? frame.cursor.y + anchor.offset_y : anchor.pin_y;
-            sensitive = anchor.identity_cursor.valid && frame.cursor.valid
-               && std::max (
-                  std::abs (frame.cursor.x - anchor.identity_cursor.x),
-                  std::abs (frame.cursor.y - anchor.identity_cursor.y))
-                  >= config.identity_position_px;
-            const auto tracked = vision::TooltipTracker::track (
-               image, anchor, pred_x, pred_y, sensitive);
-
-            if (tracked.presence == vision::TooltipPresence::Present) {
-               ++health.tracked;
-               state.confirm ();
-               anchor.update (
-                  tracked.box, frame.cursor, frame.width, frame.height,
-                  config.pin_near_edge_px, config.pin_right_edge_px);
-               emit_anchor (anchor);
-               continue;
-            } else {
-               content_changed = tracked.presence == vision::TooltipPresence::Changed;
-               core::log::vision.event ("tooltip_tracking", {
-                  { "generation", std::to_string (anchor_generation) },
-                  { "presence", std::string (presence_name (tracked.presence)) },
-                  { "frame_confidence", fmt::format ("{:.3f}", tracked.frame_confidence) },
-                  { "content_confidence", fmt::format (
-                     "{:.3f}", tracked.content_confidence) },
-               });
-               detection_due = true;
-            }
-         }
-
-         if (!detection_due) continue;
-
-         const auto started = std::chrono::steady_clock::now ();
-         auto detected = detector.detect (frame);
-         last_detection = now;
-         const auto detect_ms = std::chrono::duration_cast<std::chrono::milliseconds> (
-            std::chrono::steady_clock::now () - started).count ();
-         last_detect_ms.store (detect_ms);
-         health.record_detection (detect_ms);
-
-         std::optional<capture::Rect> selected;
-         std::optional<capture::Rect> detector_box;
-         std::optional<TooltipObservation> observation;
-         bool refined = false;
-         if (!detected.has_value ()) {
-            ++health.errors;
-            health.latest_error = detected.error ().message;
-         } else if (detected->empty ()) {
-            ++health.empty;
-         } else {
-            health.boxes += detected->size ();
-         }
-         if (detected.has_value () && !detected->empty ()) {
-            const auto* box = nearest_to_cursor (*detected, frame.cursor);
-            detector_box = box->rect;
-            const auto selection = vision::TooltipTracker::select (image, box->rect);
-            selected = selection.rect;
-            refined = selection.refined;
-            observation = TooltipObservation::read (image, *selected, frame.cursor);
-            if (!observation.has_value ()) ++health.identity_failures;
-         }
-
-         if (!forced && state.active () && selected.has_value ()
-             && !anchor.fingerprint.empty ()) {
-            const auto recovered = vision::TooltipTracker::rebase (
-               image, anchor, *selected, sensitive);
-            content_changed = content_changed
-               || recovered.presence == vision::TooltipPresence::Changed;
-            if (!content_changed
-                && recovered.presence == vision::TooltipPresence::Present) {
-               state.confirm ();
-               anchor.update (
-                  *selected, frame.cursor, frame.width, frame.height,
-                  config.pin_near_edge_px, config.pin_right_edge_px);
-               core::log::vision.event ("tooltip_recovered", {
-                  { "generation", std::to_string (anchor_generation) },
-                  { "frame_confidence", fmt::format (
-                     "{:.3f}", recovered.frame_confidence) },
-                  { "content_confidence", fmt::format (
-                     "{:.3f}", recovered.content_confidence) },
-               });
-               emit_anchor (anchor);
-               continue;
-            }
-         }
-
-         const bool was_active = state.active ();
-         const auto previous_generation = anchor_generation;
-         const auto update = state.observe (observation, forced, content_changed);
-         const auto transition = update.transition;
-
-         if (!observation.has_value () || transition == TooltipTransition::Candidate) {
-            static const std::vector<vision::TooltipBox> empty;
-            std::string reason;
-            if (!detected.has_value ())
-               reason = "detector_error: " + detected.error ().message;
-            else if (detected->empty ())
-               reason = "no_detection";
-            else if (!observation.has_value ())
-               reason = "identity_failed";
-            else
-               reason = "candidate_" + std::string (relation_name (update.relation));
-            evidence.observe (
-               frame, image, detected.has_value () ? *detected : empty, reason);
-         }
-
-         if (transition == TooltipTransition::Lost) {
-            static const std::vector<vision::TooltipBox> empty;
-            anchor = {};
-            tracking.store (false, std::memory_order_relaxed);
-            generation.fetch_add (1, std::memory_order_relaxed);
-            anchor_generation = 0;
-            if (anchor_lost_cb) anchor_lost_cb (true);
-            evidence.snapshot (
-               previous_generation,
-               "lost",
-               image,
-               detected.has_value () ? *detected : empty);
-            core::log::vision.event ("tooltip_lost", {
-               { "generation", std::to_string (previous_generation) },
-               { "reason", "detector_misses" },
-            });
-            evidence.event (previous_generation, "lost", {
-               { "reason", "detector_misses" },
-            });
-            continue;
-         }
-
-         if (!observation.has_value () || !selected.has_value ()) continue;
-
-         if (transition == TooltipTransition::Same) {
-            anchor.update (
-               *selected, frame.cursor, frame.width, frame.height,
-               config.pin_near_edge_px, config.pin_right_edge_px);
-            emit_anchor (anchor);
-            continue;
-         }
-
-         if (transition == TooltipTransition::Candidate) {
-            if (state.active ()) emit_anchor (anchor);
-            continue;
-         }
-         if (transition != TooltipTransition::Acquired
-             && transition != TooltipTransition::Replaced) continue;
-
-         if (was_active) {
-            if (anchor_lost_cb) anchor_lost_cb (false);
-            evidence.event (previous_generation, "replaced", {
-               { "identity_distance", std::to_string (
-                  update.identity_distance) },
-               { "size_changed", update.size_changed ? "1" : "0" },
-               { "position_unexplained", update.position_unexplained ? "1" : "0" },
-            });
-         }
-
-         anchor_generation = generation.fetch_add (1, std::memory_order_relaxed) + 1;
-         ++health.accepted;
-         tracking.store (true, std::memory_order_relaxed);
-         anchor.acquire (
-            *selected, frame.cursor, frame.width, frame.height,
-            config.pin_near_edge_px, config.pin_right_edge_px);
-         vision::TooltipTracker::remember (image, *selected, anchor);
-         force_scans.store (0, std::memory_order_relaxed);
-
-         core::log::vision.event ("tooltip_accepted", {
-            { "generation", std::to_string (anchor_generation) },
-            { "transition", transition == TooltipTransition::Replaced
-               ? "replaced"
-               : "acquired" },
-            { "identity", std::to_string (observation->identity.key ()) },
-            { "relation", std::string (relation_name (update.relation)) },
-            { "identity_distance", std::to_string (update.identity_distance) },
-            { "size_changed", update.size_changed ? "1" : "0" },
-            { "position_unexplained", update.position_unexplained ? "1" : "0" },
-            { "x", std::to_string (selected->x) },
-            { "y", std::to_string (selected->y) },
-            { "w", std::to_string (selected->w) },
-            { "h", std::to_string (selected->h) },
-            { "detector_x", std::to_string (detector_box->x) },
-            { "detector_y", std::to_string (detector_box->y) },
-            { "detector_w", std::to_string (detector_box->w) },
-            { "detector_h", std::to_string (detector_box->h) },
-            { "detections", std::to_string (detected->size ()) },
-            { "refined", refined ? "1" : "0" },
-            { "detect_ms", std::to_string (last_detect_ms.load ()) },
-         });
-
-         emit_anchor (anchor);
-
-         cv::Rect crop_rect {
-            selected->x,
-            selected->y,
-            selected->w,
-            selected->h,
-         };
-         crop_rect &= cv::Rect { 0, 0, image.cols, image.rows };
-         if (crop_rect.area () <= 0) continue;
-         evidence.begin (
-            anchor_generation,
-            frame,
-            image,
-            *detected,
-            *selected,
-            image (crop_rect),
-            observation->identity.image (),
-            observation->identity.key ());
-
-         if (detect_only.load (std::memory_order_relaxed)) continue;
-
-         VisionOut output {
-            std::move (frame),
-            { vision::TooltipBox { .rect = *selected } },
-            anchor_generation,
-            *observation,
-            forced,
-         };
-         {
-            std::lock_guard lock { vision_lock };
-            pending_vision = std::move (output);
-         }
-      }
-   }
-
-   void ocr_loop ()
-   {
-      struct Cached {
-         TooltipObservation observation;
-         LanguageFamily family = LanguageFamily::English;
-         std::string text;
-         std::string rarity;
-         std::unordered_map<std::string, std::string> gems;
-         float confidence = 0.0f;
-      };
-      std::vector<Cached> cache;
-      std::uint64_t last_completed_generation = 0;
-      while (running.load (std::memory_order_relaxed)) {
-         std::optional<VisionOut> next;
-         {
-            std::lock_guard lock { vision_lock };
-            next = std::move (pending_vision);
-            pending_vision.reset ();
-         }
-         if (!next.has_value ()) {
-            std::this_thread::sleep_for (std::chrono::milliseconds (5));
-            continue;
-         }
-
-         VisionOut item = std::move (*next);
-
-         if (item.generation != generation.load (std::memory_order_relaxed)
-             || item.generation == last_completed_generation) continue;
-
-         if (!item.frame.data || item.frame.empty ()) {
-            core::Logger::warn ("pipeline: dropping frame with no pixel data");
-            continue;
-         }
-
-         LanguageFamily family;
-         std::string locale_name;
-         {
-            std::lock_guard lock { language_lock };
-            family = language;
-            locale_name = locale;
-         }
-         const auto identity_key = item.observation.identity.key ();
-         if (!item.refresh) {
-            const auto found = std::find_if (cache.begin (), cache.end (), [&] (const Cached& value) {
-               return value.family == family && value.observation.cacheable (
-                  item.observation, config.identity_bits, config.identity_size_px);
-            });
-            if (found != cache.end ()) {
-               evidence.event (item.generation, "ocr_cache_hit", {
-                  { "identity", std::to_string (identity_key) },
-               });
-               core::log::ocr.event ("cache_hit", {
-                  { "generation", std::to_string (item.generation) },
-                  { "identity", std::to_string (identity_key) },
-               });
-               last_completed_generation = item.generation;
-               if (callback) {
-                  try {
-                     callback (RecognizedTooltip {
-                        .generation = item.generation,
-                        .rect = item.boxes.front ().rect,
-                        .text = found->text,
-                        .rarity = found->rarity,
-                        .gems = found->gems,
-                        .confidence = found->confidence,
-                        .backend = item.frame.backend,
-                        .preliminary = false,
-                        .captured_at = item.frame.timestamp,
-                     });
-                  } catch (const std::exception& error) {
-                     core::Logger::error (
-                        "pipeline: tooltip callback threw: {}", error.what ());
-                  }
-               }
-               continue;
-            }
-         }
-
-         evidence.event (item.generation, "ocr_started", {
-            { "identity", std::to_string (identity_key) },
-         });
-         auto rec = registry.acquire (family);
-         if (!rec.has_value ()) {
-            core::Logger::error ("pipeline: language acquire failed: {}", rec.error ().message);
-            continue;
-         }
-
-         cv::Mat bgra { item.frame.height, item.frame.width, CV_8UC4,
-                        item.frame.data.get (),
-                        static_cast<std::size_t> (item.frame.stride) };
-
-         for (const auto& box : item.boxes) {
-            cv::Rect cv_box { box.rect.x, box.rect.y, box.rect.w, box.rect.h };
-            cv_box &= cv::Rect (0, 0, bgra.cols, bgra.rows);
-
-            if (cv_box.area () <= 0) continue;
-            const cv::Rect sample_box = cv_box;
-
-            auto make_crop = [&] {
-               cv::Mat value = bgra (cv_box).clone ();
-               if (value.cols > 24 && value.rows > 24)
-                  value = value (cv::Rect (6, 6, value.cols - 12, value.rows - 12));
-               return value;
-            };
-
-            cv::Mat crop = make_crop ();
-            auto bands = preprocess::line_bands (crop);
-            if (preprocess::top_is_clipped (crop, bands) && cv_box.y > 0) {
-               const int extension = std::min (64, cv_box.y);
-               cv_box.y -= extension;
-               cv_box.height += extension;
-               crop = make_crop ();
-               bands = preprocess::line_bands (crop);
-            }
-
-            const auto t0 = std::chrono::steady_clock::now ();
-            const auto title_band = preprocess::title_band (crop, bands);
-            const auto rarity = preprocess::tooltip_rarity (crop, bands);
-            const auto segmented_at = std::chrono::steady_clock::now ();
-
-            // GRIMVAULT_OCR_DEBUG=1 → dump crop + bands to %TEMP%\grimvault-ocr
-            // for offline segmentation tuning.
-            static const bool dump_bands = [] {
-               const auto value = core::environment::get ("GRIMVAULT_OCR_DEBUG");
-               return !value.empty () && value != "0";
-            } ();
-
-            int dump_index = -1;
-            std::filesystem::path dump_dir;
-            if (dump_bands) {
-               static std::atomic<int> seq { 0 };
-               dump_index = seq++;
-               dump_dir = std::filesystem::temp_directory_path () / "grimvault-ocr";
-               std::error_code ec;
-               std::filesystem::create_directories (dump_dir, ec);
-               cv::imwrite ((dump_dir / (std::to_string (dump_index) + "_crop.png")).string (), crop);
-               int b = 0;
-               for (const auto& band : bands) {
-                  cv::imwrite ((dump_dir / (std::to_string (dump_index) + "_band" + std::to_string (b++) + ".png")).string (),
-                     preprocess::trim_cols (crop (band, cv::Range::all ())));
-               }
-            }
-
-            std::string text;
-            std::unordered_map<std::string, std::string> gems;
-            float       conf_sum = 0.0f;
-            int         conf_n   = 0;
-            bool        preliminary_sent = false;
-            std::vector<EvidenceLine> evidence_lines;
-
-            std::size_t source_band_index = 0;
-            for (const auto& band : bands) {
-               const auto source_index = source_band_index++;
-               if (item.generation != generation.load (std::memory_order_relaxed)) break;
-               if (!title_band.has_value () || source_index < *title_band) continue;
-               // Rule classification must see the original tooltip-wide
-               // band. Once tightly column-trimmed, an ordinary title can
-               // occupy >50% of its row and masquerade as a separator.
-               cv::Mat raw_line = crop (band, cv::Range::all ());
-               const bool is_rule = preprocess::is_horizontal_rule (raw_line);
-               // Artifact tooltips can expose the decorated panel's top edge
-               // as a tiny standalone band before the actual title. In
-               // contrast, a title merged with its lower separator is tall.
-               // Skip only the thin standalone form without consuming the
-               // title slot.
-               const bool is_title = source_index == *title_band;
-               // The title and its lower ornament can be merged into one
-               // geometric band. Never reject the first band as a rule
-               // before removing that ornament, or the first stat is
-               // promoted to the title. Later bands are safe to classify at
-               // tooltip width, before column trimming.
-               if (!is_title && is_rule) continue;
-               // A failed title recognition must not cause the first stat to
-               // become the title on the next iteration. Band identity is
-               // geometric, not conditional on OCR success.
-               if (is_title) raw_line = preprocess::trim_title_rule (raw_line);
-               cv::Mat line = preprocess::trim_cols (raw_line);
-               if (dump_index >= 0) {
-                  cv::imwrite ((dump_dir / (std::to_string (dump_index) + "_input"
-                     + std::to_string (source_index) + ".png")).string (), line);
-               }
-
-               std::string line_text;
-               float line_confidence = 0.0f;
-               int line_confidence_n = 0;
-               const std::vector<cv::Range> whole_line {
-                  cv::Range { 0, line.cols }
-               };
-               if (is_title && (*rec)->has_title_model ()) {
-                  // The font-trained model learns spaces and punctuation as
-                  // CTC classes. Feed the complete title once; geometric word
-                  // splitting created false boundaries inside serif names.
-                  auto full = (*rec)->read (line, /*title=*/ true);
-                  if (full.has_value ()) {
-                     line_text = full->text;
-                     line_confidence = full->confidence;
-                     line_confidence_n = 1;
-                     conf_sum += full->confidence;
-                     ++conf_n;
-                  }
-               } else {
-                  const auto chunks = (*rec)->is_wide ()
-                     ? whole_line : preprocess::col_chunks (line);
-                  for (const auto& chunk : chunks) {
-                     if (item.generation != generation.load (std::memory_order_relaxed)) break;
-                     auto res = (*rec)->read (line (cv::Range::all (), chunk));
-                     if (!res.has_value () || res->text.empty ()) continue;
-
-                     if (!line_text.empty ()) line_text.push_back (' ');
-                     line_text += res->text;
-                     conf_sum  += res->confidence;
-                     ++conf_n;
-                     line_confidence += res->confidence;
-                     ++line_confidence_n;
-                  }
-               }
-
-               if (line_confidence_n > 1) line_confidence /= line_confidence_n;
-               if (family == LanguageFamily::Latin || family == LanguageFamily::French)
-                  canonicalize_latin (line_text);
-               if (evidence.enabled ()) {
-                  evidence_lines.push_back (EvidenceLine {
-                     .image = line.clone (), .source_band = source_index,
-                     .title = is_title, .prediction = line_text,
-                     .confidence = line_confidence,
-                  });
-               }
-               if (line_text.empty ()) continue;
-               if (!is_title && std::any_of (
-                     line_text.begin (), line_text.end (), [] (char ch) {
-                        return std::isdigit (static_cast<unsigned char> (ch)) != 0;
-                     })) {
-                  if (auto gem_family = vision::detect_gem_family (raw_line); gem_family.has_value ()) {
-                     gems [line_text] = *gem_family;
-                  }
-               }
-               if (!text.empty ()) text.push_back ('\n');
-               text += line_text;
-
-               if (!preliminary_sent && is_title
-                   && line_text.size () >= 2 && line_confidence >= 0.65f
-                   && item.generation == generation.load (std::memory_order_relaxed)
-                   && callback) {
-                  preliminary_sent = true;
-                  core::log::ocr.event ("title_ready", {
-                     { "generation", std::to_string (item.generation) },
-                     { "confidence", fmt::format ("{:.3f}", line_confidence) },
-                     { "text", line_text },
-                  });
-                  try {
-                     callback (RecognizedTooltip {
-                        .generation  = item.generation,
-                        .rect        = box.rect,
-                        .text        = line_text,
-                        .rarity      = rarity.value_or (""),
-                        .confidence  = line_confidence,
-                        .backend     = item.frame.backend,
-                        .preliminary = true,
-                        .captured_at = item.frame.timestamp,
-                     });
-                  } catch (const std::exception& e) {
-                     core::Logger::error ("pipeline: preliminary callback threw: {}", e.what ());
-                  }
-               }
-            }
-
-            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds> (
-               std::chrono::steady_clock::now () - t0).count ();
-            const auto segment_us = std::chrono::duration_cast<std::chrono::microseconds> (
-               segmented_at - t0).count ();
-
-            core::Logger::info ("pipeline: timings detect={}ms ocr={}ms lines={}/{}",
-               last_detect_ms.load (), ms, conf_n, bands.size ());
-            core::log::ocr.event ("recognition", {
-               { "generation", std::to_string (item.generation) },
-               { "family", std::string { family_dir (family) } },
-               { "segment_us", std::to_string (segment_us) },
-               { "total_ms", std::to_string (ms) },
-               { "lines", std::to_string (conf_n) },
-               { "bands", std::to_string (bands.size ()) },
-               { "rarity", rarity.value_or ("unknown") },
-               { "confidence", fmt::format ("{:.3f}",
-                  conf_n ? conf_sum / conf_n : 0.0f) },
-            });
-
-            const float confidence = conf_n ? conf_sum / conf_n : 0.0f;
-            evidence.ocr (
-               item.generation, crop, evidence_lines, text, confidence);
-            const capture::Rect sample_rect {
-               sample_box.x, sample_box.y, sample_box.width, sample_box.height };
-            if (sample_cb) {
-               try {
-                  sample_cb (TooltipSample {
-                     .generation = item.generation,
-                     .rect = sample_rect,
-                     .image = bgra (sample_box).clone (),
-                     .locale = locale_name,
-                     .text = text,
-                     .rarity = rarity.value_or (""),
-                     .confidence = confidence,
-                     .backend = item.frame.backend,
-                  });
-               } catch (const std::exception& error) {
-                  core::Logger::warn ("collection: tooltip sample failed: {}", error.what ());
-               }
-            }
-            if (item.generation != generation.load (std::memory_order_relaxed)) continue;
-            if (text.empty ()) continue;
-            last_completed_generation = item.generation;
-
-            std::string printable = text;
-            std::size_t newline = 0;
-            while ((newline = printable.find ('\n', newline)) != std::string::npos) {
-               printable.replace (newline, 1, "\\n");
-               newline += 2;
-            }
-            core::Logger::info (
-               "OCR result generation={} family={} rarity={} confidence={:.3f} text=\"{}\"",
-               item.generation, family_dir (family),
-               rarity.value_or ("unknown"), confidence, printable);
-
-            if (cache.size () == 128) cache.erase (cache.begin ());
-            cache.push_back (Cached {
-               .observation = item.observation,
-               .family = family,
-               .text = text,
-               .rarity = rarity.value_or (""),
-               .gems = gems,
-               .confidence = confidence,
-            });
-
-            if (callback) {
-               try {
-                  callback (RecognizedTooltip {
-                     .generation  = item.generation,
-                     .rect        = box.rect,
-                     .text        = std::move (text),
-                     .rarity      = rarity.value_or (""),
-                     .gems        = std::move (gems),
-                     .confidence  = confidence,
-                     .backend     = item.frame.backend,
-                     .preliminary = false,
-                     .captured_at = item.frame.timestamp,
-                  });
-               } catch (const std::exception& e) {
-                  core::Logger::error ("pipeline: tooltip callback threw: {}", e.what ());
-               }
-            }
-         }
-      }
-   }
-};
-
-Pipeline::Pipeline (
-   capture::CaptureService& capture,
-   vision::TooltipDetector& detector,
-   LanguageRegistry&        registry,
-   Config                   config
-) {
    impl_ = std::make_unique<Impl> (capture, detector, registry, std::move (config));
 }
 
-Pipeline::~Pipeline () { stop (); }
+Pipeline::~Pipeline ()
+{
+   stop ();
+}
 
-void Pipeline::on_anchor (AnchorCallback cb) { impl_->anchor_cb = std::move (cb); }
-void Pipeline::on_anchor_lost (AnchorLostCallback cb) { impl_->anchor_lost_cb = std::move (cb); }
-void Pipeline::on_sample (SampleCallback cb) { impl_->sample_cb = std::move (cb); }
+void Pipeline::on_anchor (AnchorCallback cb)
+{
+   impl_->anchor_cb = std::move (cb);
+}
+void Pipeline::on_anchor_lost (AnchorLostCallback cb)
+{
+   impl_->anchor_lost_cb = std::move (cb);
+}
+void Pipeline::on_sample (SampleCallback cb)
+{
+   impl_->sample_cb = std::move (cb);
+}
 
 void Pipeline::set_active_window (void* hwnd)
 {
    if (impl_->window.exchange (hwnd) != hwnd) {
       core::log::vision.event ("capture_target", {
-         { "state", hwnd ? "acquired" : "released" },
-      });
+                                                    { "state", hwnd ? "acquired" : "released" },
+                                                 });
       impl_->reset_requested.store (true, std::memory_order_relaxed);
    }
 }
@@ -1130,7 +146,10 @@ bool Pipeline::is_current (std::uint64_t value) const noexcept
 {
    return impl_->generation.load (std::memory_order_relaxed) == value;
 }
-void Pipeline::set_detect_only (bool on) { impl_->detect_only.store (on); }
+void Pipeline::set_detect_only (bool on)
+{
+   impl_->detect_only.store (on);
+}
 void Pipeline::request_immediate_scan ()
 {
    if (!impl_->enabled.load (std::memory_order_relaxed)) return;
@@ -1138,10 +157,8 @@ void Pipeline::request_immediate_scan ()
    impl_->queue_scans (k_forced_burst);
 }
 
-void Pipeline::record_evidence (
-   std::uint64_t generation,
-   std::string event,
-   std::unordered_map<std::string, std::string> fields)
+void Pipeline::record_evidence (std::uint64_t generation, std::string event,
+                                std::unordered_map<std::string, std::string> fields)
 {
    impl_->evidence.event (generation, std::move (event), std::move (fields));
 }
@@ -1149,10 +166,11 @@ void Pipeline::record_evidence (
 core::Result<void> Pipeline::start (TooltipCallback on_tooltip)
 {
    if (impl_->running.exchange (true)) {
-      return core::fail (core::Error::make (core::ErrorKind::Internal, "pipeline: already running"));
+      return core::fail (
+         core::Error::make (core::ErrorKind::Internal, "pipeline: already running"));
    }
 
-   impl_->callback       = std::move (on_tooltip);
+   impl_->callback = std::move (on_tooltip);
 
    const auto warm_started = std::chrono::steady_clock::now ();
    LanguageFamily warm_family;
@@ -1162,26 +180,25 @@ core::Result<void> Pipeline::start (TooltipCallback on_tooltip)
    }
    auto warm = impl_->registry.acquire (warm_family);
    const auto warm_ms = std::chrono::duration_cast<std::chrono::milliseconds> (
-      std::chrono::steady_clock::now () - warm_started).count ();
+                           std::chrono::steady_clock::now () - warm_started)
+                           .count ();
    core::log::ocr.event ("model_prewarm", {
-      { "family", std::string { family_dir (warm_family) } },
-      { "elapsed_ms", std::to_string (warm_ms) },
-      { "ok", warm.has_value () ? "1" : "0" },
-   });
+                                             { "family", std::string { family_dir (warm_family) } },
+                                             { "elapsed_ms", std::to_string (warm_ms) },
+                                             { "ok", warm.has_value () ? "1" : "0" },
+                                          });
    if (!warm.has_value ()) {
       core::Logger::warn ("pipeline: OCR prewarm failed: {}", warm.error ().message);
    }
    impl_->capture_thread = std::thread { [this] { impl_->capture_loop (); } };
-   impl_->vision_thread  = std::thread { [this] { impl_->vision_loop ();  } };
-   impl_->ocr_thread     = std::thread { [this] { impl_->ocr_loop ();     } };
+   impl_->vision_thread = std::thread { [this] { impl_->vision_loop (); } };
+   impl_->ocr_thread = std::thread { [this] { impl_->ocr_loop (); } };
 
    core::Logger::info (
       "pipeline: started (detector_fps={:.1f}, performance_fps={:.1f}, "
       "tracking_fps={:.1f}, performance_tracking_fps={:.1f})",
-      impl_->capture_fps.load (std::memory_order_relaxed),
-      impl_->config.performance_fps,
-      impl_->config.tracking_fps,
-      impl_->config.performance_tracking_fps);
+      impl_->capture_fps.load (std::memory_order_relaxed), impl_->config.performance_fps,
+      impl_->config.tracking_fps, impl_->config.performance_tracking_fps);
    return {};
 }
 
@@ -1191,10 +208,10 @@ void Pipeline::stop () noexcept
    if (!impl_->running.exchange (false)) return;
 
    if (impl_->capture_thread.joinable ()) impl_->capture_thread.join ();
-   if (impl_->vision_thread.joinable  ()) impl_->vision_thread.join  ();
-   if (impl_->ocr_thread.joinable     ()) impl_->ocr_thread.join     ();
+   if (impl_->vision_thread.joinable ()) impl_->vision_thread.join ();
+   if (impl_->ocr_thread.joinable ()) impl_->ocr_thread.join ();
 
    core::Logger::info ("pipeline: stopped");
 }
 
-} // namespace gv::ocr
+}  // namespace gv::ocr

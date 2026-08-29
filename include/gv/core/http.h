@@ -1,8 +1,7 @@
 #pragma once
 
-#include <gv/core/result.h>
-
 #include <curl/curl.h>
+#include <gv/core/result.h>
 
 #include <atomic>
 #include <chrono>
@@ -19,28 +18,38 @@ struct Header {
 };
 
 struct Response {
-   long                      status   = 0;
-   std::string               body;
+   long status = 0;
+   std::string body;
    std::chrono::milliseconds elapsed { 0 };
 };
 
+struct Transport {
+   std::string ca_bundle;
+   std::string protocols = "http,https";
+   std::chrono::milliseconds timeout { 15000 };
+   std::chrono::milliseconds connect_timeout { 5000 };
+   bool follow_redirects = false;
+   bool keep_alive = false;
+};
+
 struct Request {
-   std::string         method;       // "GET" / "POST"
-   std::string         url;
-   std::string         body;         // empty = no body
-   std::string         content_type; // applied only if body non-empty
-   std::string         ca_bundle;    // empty = system trust store
+   std::string method;  // "GET" / "POST"
+   std::string url;
+   std::string body;          // empty = no body
+   std::string content_type;  // applied only if body non-empty
+   std::string ca_bundle;     // empty = system trust store
    std::vector<Header> headers;
    std::chrono::milliseconds timeout { 15000 };
-   std::size_t         max_response_bytes { 1024 * 1024 };
-   bool                follow_redirects   = false;
+   std::size_t max_response_bytes { 1024 * 1024 };
+   bool follow_redirects = false;
+   std::string protocols = "http,https";
 
    // Cooperative cancellation. When cancel_epoch is set, the transfer aborts
    // as soon as the epoch moves away from cancel_epoch_at, mirroring the
    // persistent-handle lane in DDBClient so a long upload can be torn down at
    // shutdown instead of blocking on the full timeout.
-   const std::atomic<std::uint64_t>* cancel_epoch    = nullptr;
-   std::uint64_t                     cancel_epoch_at = 0;
+   const std::atomic<std::uint64_t>* cancel_epoch = nullptr;
+   std::uint64_t cancel_epoch_at = 0;
 };
 
 // Process-scoped libcurl lifetime. Construct this before every object that
@@ -48,7 +57,7 @@ struct Request {
 // cleanup runs only after all HTTP clients and worker threads are gone.
 class Global final
 {
-public:
+  public:
    Global ();
    ~Global ();
 
@@ -57,7 +66,7 @@ public:
 
    explicit operator bool () const noexcept { return initialized_; }
 
-private:
+  private:
    bool initialized_ = false;
 };
 
@@ -71,6 +80,7 @@ private:
 // and managed enterprise roots. Revocation is best-effort: a CRL/OCSP
 // endpoint that cannot be reached is not fatal, but revoked certificates are.
 void apply_tls (CURL* curl, const std::string& ca_bundle);
+void apply_transport (CURL* curl, const Transport& transport);
 
 // One-shot libcurl request. DDBClient keeps its own persistent handle, retry
 // ladder and bounded response reader; everything else (OAuth token exchange,
@@ -80,4 +90,4 @@ void apply_tls (CURL* curl, const std::string& ca_bundle);
 // posts must never forward credentials to a redirected origin.
 Result<Response> perform (const Request& req);
 
-} // namespace gv::core::http
+}  // namespace gv::core::http

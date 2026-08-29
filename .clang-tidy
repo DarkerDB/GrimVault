@@ -1,0 +1,13 @@
+Checks: >
+  -*,
+  bugprone-*,
+  cert-*,
+  clang-analyzer-*,
+  performance-*,
+  portability-*,
+  readability-container-size-empty,
+  readability-duplicate-include,
+  readability-misleading-indentation,
+  readability-redundant-*
+HeaderFilterRegex: '.*[\\/](include[\\/]gv|src)[\\/].*'
+FormatStyle: file

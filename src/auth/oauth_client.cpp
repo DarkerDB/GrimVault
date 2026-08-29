@@ -1,6 +1,5 @@
-#include <gv/auth/oauth_client.h>
-
 #include <gv/auth/loopback_server.h>
+#include <gv/auth/oauth_client.h>
 #include <gv/auth/pkce.h>
 #include <gv/core/http.h>
 #include <gv/core/logger.h>
@@ -11,17 +10,16 @@
 #include <QUrl>
 
 #ifdef _WIN32
-   #include <Windows.h>
-   #include <shellapi.h>
-   #pragma comment (lib, "Shell32.lib")
+#include <Windows.h>
+#include <shellapi.h>
+#pragma comment(lib, "Shell32.lib")
 #endif
-
-#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <mutex>
+#include <nlohmann/json.hpp>
 #include <sstream>
 #include <string>
 
@@ -29,86 +27,90 @@ namespace gv::auth {
 
 namespace {
 
-   // RFC 3986 §2.3 + 2.4. Reserved chars (except unreserved) get %HH-escaped.
-   std::string url_escape (std::string_view s)
-   {
-      static constexpr char hex [] = "0123456789ABCDEF";
-      std::string out;
-      out.reserve (s.size ());
-      for (unsigned char c : s) {
-         const bool unreserved =
-            (c >= 'A' && c <= 'Z') ||
-            (c >= 'a' && c <= 'z') ||
-            (c >= '0' && c <= '9') ||
-            c == '-' || c == '.' || c == '_' || c == '~';
-         if (unreserved) { out.push_back (static_cast<char> (c)); continue; }
-         out.push_back ('%');
-         out.push_back (hex [c >> 4]);
-         out.push_back (hex [c & 0x0F]);
+// RFC 3986 §2.3 + 2.4. Reserved chars (except unreserved) get %HH-escaped.
+std::string url_escape (std::string_view s)
+{
+   static constexpr char hex[] = "0123456789ABCDEF";
+   std::string out;
+   out.reserve (s.size ());
+   for (unsigned char c : s) {
+      const bool unreserved = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                              (c >= '0' && c <= '9') || c == '-' || c == '.' || c == '_' ||
+                              c == '~';
+      if (unreserved) {
+         out.push_back (static_cast<char> (c));
+         continue;
       }
-      return out;
+      out.push_back ('%');
+      out.push_back (hex[c >> 4]);
+      out.push_back (hex[c & 0x0F]);
+   }
+   return out;
+}
+
+std::string form_encode (std::initializer_list<std::pair<std::string_view, std::string_view>> pairs)
+{
+   std::string out;
+   bool first = true;
+   for (const auto& [k, v] : pairs) {
+      if (!first) out.push_back ('&');
+      first = false;
+      out += url_escape (k);
+      out.push_back ('=');
+      out += url_escape (v);
+   }
+   return out;
+}
+
+core::Result<TokenSet> parse_token_response (const nlohmann::json& json)
+{
+   // The KATforge envelope wraps the RFC 6749 payload under "body";
+   // tolerate both shapes so a raw RFC response still parses.
+   const nlohmann::json* src = &json;
+
+   if (json.is_object ()) {
+      if (auto it = json.find ("body"); it != json.end () && it->is_object ()) {
+         src = &*it;
+      }
    }
 
-   std::string form_encode (
-      std::initializer_list<std::pair<std::string_view, std::string_view>> pairs)
-   {
-      std::string out;
-      bool first = true;
-      for (const auto& [k, v] : pairs) {
-         if (!first) out.push_back ('&');
-         first = false;
-         out += url_escape (k);
-         out.push_back ('=');
-         out += url_escape (v);
-      }
-      return out;
-   }
+   const nlohmann::json& j = *src;
 
-   TokenSet parse_token_response (const nlohmann::json& json)
-   {
-      // The KATforge envelope wraps the RFC 6749 payload under "body";
-      // tolerate both shapes so a raw RFC response still parses.
-      const nlohmann::json* src = &json;
-
-      if (json.is_object ()) {
-         if (auto it = json.find ("body"); it != json.end () && it->is_object ()) {
-            src = &*it;
-         }
-      }
-
-      const nlohmann::json& j = *src;
-
+   try {
       TokenSet t;
-      t.access_token  = j.value ("access_token",  "");
+      t.access_token = j.value ("access_token", "");
       t.refresh_token = j.value ("refresh_token", "");
-      t.scope         = j.value ("scope",         "");
+      t.scope = j.value ("scope", "");
       std::int64_t expires_in = 0;
-      if (auto expiry = j.find ("expires_in");
-          expiry != j.end () && expiry->is_number_integer ()) {
+      if (auto expiry = j.find ("expires_in"); expiry != j.end () && expiry->is_number_integer ()) {
          expires_in = std::max<std::int64_t> (0, expiry->get<std::int64_t> ());
       }
-      t.expires_at = std::chrono::system_clock::now ()
-                   + std::chrono::seconds { expires_in };
+      t.expires_at = std::chrono::system_clock::now () + std::chrono::seconds { expires_in };
       return t;
+   } catch (const nlohmann::json::exception&) {
+      return core::fail (
+         core::Error::make (core::ErrorKind::ExternalApi, "oauth: invalid token response"));
    }
+}
 
-} // namespace
+}  // namespace
 
-struct OauthClient::Impl
-{
-   Config       cfg;
-   BrowserHook  browser_hook;
-   std::mutex   authorize_lock;
+struct OauthClient::Impl {
+   Config cfg;
+   BrowserHook browser_hook;
+   std::mutex authorize_lock;
    LoopbackServer* active_server = nullptr;
 };
 
-OauthClient::OauthClient (Config cfg)
-   : impl_ (std::make_unique<Impl> ())
+OauthClient::OauthClient (Config cfg) : impl_ (std::make_unique<Impl> ())
 {
    impl_->cfg = std::move (cfg);
 }
 
-OauthClient::~OauthClient () { cancel_authorize (); }
+OauthClient::~OauthClient ()
+{
+   cancel_authorize ();
+}
 
 void OauthClient::set_browser_hook (BrowserHook hook)
 {
@@ -122,7 +124,7 @@ core::Result<TokenResponse> OauthClient::authorize ()
       std::lock_guard lk { impl_->authorize_lock };
       if (impl_->active_server) {
          return core::fail (core::Error::make (core::ErrorKind::InvalidArgument,
-            "oauth: authorization is already in progress"));
+                                               "oauth: authorization is already in progress"));
       }
       impl_->active_server = &server;
    }
@@ -139,24 +141,21 @@ core::Result<TokenResponse> OauthClient::authorize ()
    auto port = server.bind ();
    if (!port.has_value ()) return core::fail (port.error ());
 
-   const auto pkce  = pkce_generate ();
+   const auto pkce = pkce_generate ();
    const auto state = state_generate ();
 
-   const std::string redirect_uri =
-      "http://127.0.0.1:" + std::to_string (*port) + "/callback";
+   const std::string redirect_uri = "http://127.0.0.1:" + std::to_string (*port) + "/callback";
 
    std::ostringstream url;
    url << impl_->cfg.auth_base_url << "/oauth/authorize"
        << "?response_type=code"
-       << "&client_id="             << url_escape (impl_->cfg.client_id)
-       << "&redirect_uri="          << url_escape (redirect_uri)
-       << "&scope="                 << url_escape (impl_->cfg.scope)
-       << "&state="                 << url_escape (state)
-       << "&code_challenge="        << url_escape (pkce.challenge)
-       << "&code_challenge_method=S256";
+       << "&client_id=" << url_escape (impl_->cfg.client_id)
+       << "&redirect_uri=" << url_escape (redirect_uri)
+       << "&scope=" << url_escape (impl_->cfg.scope) << "&state=" << url_escape (state)
+       << "&code_challenge=" << url_escape (pkce.challenge) << "&code_challenge_method=S256";
 
    const std::string authorize_url = url.str ();
-   core::log::api.info ("oauth: opening browser to {}", authorize_url);
+   core::log::api.info ("oauth: opening browser sign-in");
 
    bool launch_browser = true;
    if (impl_->browser_hook) {
@@ -180,15 +179,14 @@ core::Result<TokenResponse> OauthClient::authorize ()
       if (!opened) {
          const auto wurl = qurl.toStdWString ();
          const auto rc = reinterpret_cast<INT_PTR> (
-            ::ShellExecuteW (nullptr, L"open", wurl.c_str (),
-                             nullptr, nullptr, SW_SHOWNORMAL));
+            ::ShellExecuteW (nullptr, L"open", wurl.c_str (), nullptr, nullptr, SW_SHOWNORMAL));
          opened = (rc > 32);
       }
 #endif
       if (!opened) {
-         core::log::api.warn ("oauth: browser launch failed (url={})", authorize_url);
+         core::log::api.warn ("oauth: browser launch failed");
          return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
-            "Could not open the sign-in page in your browser."));
+                                               "Could not open the sign-in page in your browser."));
       }
    }
 
@@ -199,22 +197,22 @@ core::Result<TokenResponse> OauthClient::authorize ()
    std::string error_redirect;
    if (!impl_->cfg.spa_base_url.empty ()) {
       success_redirect = impl_->cfg.spa_base_url + "/grimvault/callback?status=ok";
-      error_redirect   = impl_->cfg.spa_base_url + "/grimvault/callback?status=error";
+      error_redirect = impl_->cfg.spa_base_url + "/grimvault/callback?status=error";
    }
 
-   auto cb = server.await_callback (state, impl_->cfg.callback_timeout,
-                                    success_redirect, error_redirect);
+   auto cb =
+      server.await_callback (state, impl_->cfg.callback_timeout, success_redirect, error_redirect);
    if (!cb.has_value ()) return core::fail (cb.error ());
 
    // Exchange the code at /oauth/token.
    core::http::Request req;
-   req.method       = "POST";
-   req.url          = impl_->cfg.api_base_url + "/oauth/token";
-   req.body         = form_encode ({
-      { "grant_type",    "authorization_code" },
-      { "code",          cb->code },
-      { "redirect_uri",  redirect_uri },
-      { "client_id",     impl_->cfg.client_id },
+   req.method = "POST";
+   req.url = impl_->cfg.api_base_url + "/oauth/token";
+   req.body = form_encode ({
+      { "grant_type", "authorization_code" },
+      { "code", cb->code },
+      { "redirect_uri", redirect_uri },
+      { "client_id", impl_->cfg.client_id },
       { "code_verifier", pkce.verifier },
    });
    req.content_type = "application/x-www-form-urlencoded";
@@ -224,24 +222,23 @@ core::Result<TokenResponse> OauthClient::authorize ()
 
    if (res->status < 200 || res->status >= 300) {
       return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
-         "Token exchange failed (HTTP {}): {}", res->status,
-         res->body.substr (0, 300)));
+                                            "Token exchange failed (HTTP {}).", res->status));
    }
 
    auto json = nlohmann::json::parse (res->body, nullptr, false);
    if (json.is_discarded ()) {
       return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
-         "Token response from the server wasn't valid JSON."));
+                                            "Token response from the server wasn't valid JSON."));
    }
 
    auto tokens = parse_token_response (json);
-   if (tokens.access_token.empty () || tokens.refresh_token.empty ()) {
-      return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
-         "Token response parsed but {} missing — body: {}",
-         tokens.access_token.empty () ? "access_token" : "refresh_token",
-         res->body.substr (0, 300)));
+   if (!tokens.has_value ()) return core::fail (tokens.error ());
+   if (tokens->access_token.empty () || tokens->refresh_token.empty ()) {
+      return core::fail (
+         core::Error::make (core::ErrorKind::ExternalApi, "Token response is missing {}.",
+                            tokens->access_token.empty () ? "access_token" : "refresh_token"));
    }
-   return TokenResponse { std::move (tokens) };
+   return TokenResponse { std::move (*tokens) };
 }
 
 void OauthClient::cancel_authorize () noexcept
@@ -253,12 +250,12 @@ void OauthClient::cancel_authorize () noexcept
 core::Result<TokenResponse> OauthClient::refresh (std::string_view refresh_token)
 {
    core::http::Request req;
-   req.method       = "POST";
-   req.url          = impl_->cfg.api_base_url + "/oauth/token";
-   req.body         = form_encode ({
-      { "grant_type",    "refresh_token" },
+   req.method = "POST";
+   req.url = impl_->cfg.api_base_url + "/oauth/token";
+   req.body = form_encode ({
+      { "grant_type", "refresh_token" },
       { "refresh_token", refresh_token },
-      { "client_id",     impl_->cfg.client_id },
+      { "client_id", impl_->cfg.client_id },
    });
    req.content_type = "application/x-www-form-urlencoded";
 
@@ -268,41 +265,40 @@ core::Result<TokenResponse> OauthClient::refresh (std::string_view refresh_token
    if (res->status == 400 || res->status == 401) {
       // invalid_grant — refresh token dead. Fatal.
       return core::fail (core::Error::make (core::ErrorKind::Permission,
-         "oauth: refresh rejected HTTP {}: {}", res->status,
-         res->body.substr (0, 300)));
+                                            "oauth: refresh rejected HTTP {}", res->status));
    }
    if (res->status < 200 || res->status >= 300) {
       return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
-         "oauth: refresh failed HTTP {}: {}", res->status,
-         res->body.substr (0, 300)));
+                                            "oauth: refresh failed HTTP {}", res->status));
    }
 
    auto json = nlohmann::json::parse (res->body, nullptr, false);
    if (json.is_discarded ()) {
-      return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
-         "oauth: refresh response not JSON"));
+      return core::fail (
+         core::Error::make (core::ErrorKind::ExternalApi, "oauth: refresh response not JSON"));
    }
 
    auto t = parse_token_response (json);
-   if (t.access_token.empty () || t.refresh_token.empty ()) {
+   if (!t.has_value ()) return core::fail (t.error ());
+   if (t->access_token.empty () || t->refresh_token.empty ()) {
       // Contract §3.3: rotation is required. Surface as hard failure so the
       // operator sees that KATforge regressed on this guarantee.
-      return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
-         "oauth: refresh response missing {}",
-         t.access_token.empty () ? "access_token" : "rotated refresh_token"));
+      return core::fail (
+         core::Error::make (core::ErrorKind::ExternalApi, "oauth: refresh response missing {}",
+                            t->access_token.empty () ? "access_token" : "rotated refresh_token"));
    }
-   return TokenResponse { std::move (t) };
+   return TokenResponse { std::move (*t) };
 }
 
 core::Result<void> OauthClient::revoke (std::string_view refresh_token)
 {
    core::http::Request req;
-   req.method       = "POST";
-   req.url          = impl_->cfg.api_base_url + "/oauth/revoke";
-   req.body         = form_encode ({
-      { "token",           refresh_token },
+   req.method = "POST";
+   req.url = impl_->cfg.api_base_url + "/oauth/revoke";
+   req.body = form_encode ({
+      { "token", refresh_token },
       { "token_type_hint", "refresh_token" },
-      { "client_id",       impl_->cfg.client_id },
+      { "client_id", impl_->cfg.client_id },
    });
    req.content_type = "application/x-www-form-urlencoded";
 
@@ -310,10 +306,10 @@ core::Result<void> OauthClient::revoke (std::string_view refresh_token)
    if (!res.has_value ()) return core::fail (res.error ());
 
    if (res->status < 200 || res->status >= 300) {
-      return core::fail (core::Error::make (core::ErrorKind::ExternalApi,
-         "oauth: revoke HTTP {}: {}", res->status, res->body.substr (0, 200)));
+      return core::fail (
+         core::Error::make (core::ErrorKind::ExternalApi, "oauth: revoke HTTP {}", res->status));
    }
    return {};
 }
 
-} // namespace gv::auth
+}  // namespace gv::auth

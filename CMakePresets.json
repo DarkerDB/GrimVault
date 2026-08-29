@@ -48,6 +48,7 @@
       "displayName": "Windows MSVC Test",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE":      "RelWithDebInfo",
+        "CMAKE_COMPILE_WARNING_AS_ERROR": "ON",
         "BUILD_TESTING":         "ON",
         "GRIMVAULT_BUILD_E2E":   "ON"
       }

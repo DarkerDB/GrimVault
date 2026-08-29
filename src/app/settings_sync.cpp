@@ -21,21 +21,20 @@ namespace gv::app {
 
 namespace {
 
-   const core::Log log { "settings" };
+const core::Log log { "settings" };
 
-} // namespace
+}  // namespace
 
-struct SettingsSync::Impl
-{
-   gv::api::DDBClient*       api      = nullptr;
-   gv::auth::Session*        session  = nullptr;
-   gv::db::UserSettingsRepo* repo     = nullptr;
-   Config                    cfg;
+struct SettingsSync::Impl {
+   gv::api::DDBClient* api = nullptr;
+   gv::auth::Session* session = nullptr;
+   gv::db::UserSettingsRepo* repo = nullptr;
+   Config cfg;
 
-   QTimer                    timer;
-   bool                      running          = false;
-   bool                      poll_in_flight   = false;
-   bool                      analysis_warmed  = false;
+   QTimer timer;
+   bool running = false;
+   bool poll_in_flight = false;
+   bool analysis_warmed = false;
    std::unordered_set<QThread*> workers;
 
    // Generation counter — each start () bumps this. Worker results from a
@@ -44,32 +43,26 @@ struct SettingsSync::Impl
 
    // Current backoff delay. Doubles on failure (clamped to backoff_cap),
    // resets to 0 on success (next tick uses `interval`).
-   std::chrono::seconds      current_backoff { 0 };
+   std::chrono::seconds current_backoff { 0 };
 
    void schedule_next (std::chrono::seconds delay)
    {
-      timer.start (static_cast<int> (
-         std::chrono::duration_cast<std::chrono::milliseconds> (delay).count ()));
+      timer.start (
+         static_cast<int> (std::chrono::duration_cast<std::chrono::milliseconds> (delay).count ()));
    }
 };
 
-SettingsSync::SettingsSync (gv::api::DDBClient* api,
-                            gv::auth::Session*       session,
-                            gv::db::UserSettingsRepo* repo,
-                            Config                   cfg,
-                            QObject*                 parent)
-   : QObject (parent)
-   , impl_ (std::make_unique<Impl> ())
+SettingsSync::SettingsSync (gv::api::DDBClient* api, gv::auth::Session* session,
+                            gv::db::UserSettingsRepo* repo, Config cfg, QObject* parent)
+    : QObject (parent), impl_ (std::make_unique<Impl> ())
 {
-   impl_->api     = api;
+   impl_->api = api;
    impl_->session = session;
-   impl_->repo    = repo;
-   impl_->cfg     = cfg;
+   impl_->repo = repo;
+   impl_->cfg = cfg;
 
    impl_->timer.setSingleShot (true);
-   QObject::connect (&impl_->timer, &QTimer::timeout, this, [this] {
-      poll_now ();
-   });
+   QObject::connect (&impl_->timer, &QTimer::timeout, this, [this] { poll_now (); });
 }
 
 SettingsSync::~SettingsSync ()
@@ -89,7 +82,7 @@ SettingsSync::~SettingsSync ()
 void SettingsSync::start ()
 {
    if (impl_->running) return;
-   impl_->running         = true;
+   impl_->running = true;
    impl_->current_backoff = std::chrono::seconds { 0 };
    impl_->generation.fetch_add (1, std::memory_order_relaxed);
    log.info ("settings sync: started (interval={}s)", impl_->cfg.interval.count ());
@@ -128,7 +121,8 @@ void SettingsSync::poll_now ()
          auto warm = impl_->api->ping ();
          if (warm.has_value ()) impl_->analysis_warmed = true;
       }
-      QMetaObject::invokeMethod (this,
+      QMetaObject::invokeMethod (
+         this,
          [this, gen, bundle = std::move (bundle)] () mutable {
             impl_->poll_in_flight = false;
 
@@ -141,11 +135,11 @@ void SettingsSync::poll_now ()
 
             if (!bundle.has_value ()) {
                auto next = impl_->current_backoff.count () == 0
-                  ? impl_->cfg.backoff_floor
-                  : std::min (impl_->current_backoff * 2, impl_->cfg.backoff_cap);
+                              ? impl_->cfg.backoff_floor
+                              : std::min (impl_->current_backoff * 2, impl_->cfg.backoff_cap);
                impl_->current_backoff = next;
-               log.warn ("settings sync: poll failed: {} (next in {}s)",
-                  bundle.error ().message, next.count ());
+               log.warn ("settings sync: poll failed: {} (next in {}s)", bundle.error ().message,
+                         next.count ());
                emit poll_failed (QString::fromStdString (bundle.error ().message));
                if (!impl_->session || !impl_->session->signed_in ()) {
                   emit authentication_required ();
@@ -165,8 +159,7 @@ void SettingsSync::poll_now ()
                if (!is_managed_setting (key) || bundle->values.contains (key)) continue;
 
                if (auto erased = impl_->repo->erase (key); !erased.has_value ()) {
-                  log.warn ("settings sync: erase failed for {}: {}",
-                     key, erased.error ().message);
+                  log.warn ("settings sync: erase failed for {}: {}", key, erased.error ().message);
                   continue;
                }
                ++changed;
@@ -177,7 +170,7 @@ void SettingsSync::poll_now ()
             std::vector<std::string_view> keys;
             keys.reserve (bundle->values.size ());
             for (const auto& [key, value] : bundle->values) {
-               (void) value;
+               (void)value;
                keys.push_back (key);
             }
             std::sort (keys.begin (), keys.end (), [] (const auto left, const auto right) {
@@ -209,11 +202,9 @@ void SettingsSync::poll_now ()
             }
 
             impl_->current_backoff = std::chrono::seconds { 0 };
-            log.info ("settings sync: ok ({} key{} changed of {})",
-               changed,
-               changed == 1 ? "" : "s",
-               bundle->values.size ());
-            emit poll_succeeded (changed);
+            log.info ("settings sync: ok ({} key{} changed of {})", changed,
+                      changed == 1 ? "" : "s", bundle->values.size ());
+            emit poll_succeeded (changed, bundle->collection.is_improvement_enabled);
             impl_->schedule_next (impl_->cfg.interval);
          },
          Qt::QueuedConnection);
@@ -226,4 +217,4 @@ void SettingsSync::poll_now ()
    worker->start ();
 }
 
-} // namespace gv::app
+}  // namespace gv::app

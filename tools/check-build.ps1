@@ -92,8 +92,13 @@ if (-not $remote) {
                 ((New-Object System.IO.DriveInfo ($root)).DriveType -eq 'Network')
    }
 }
-$out = if ($remote) { "$env:LOCALAPPDATA\GrimVault\build\$Preset" }
-       else         { Join-Path $root "build\$Preset" }
+$buildName = if ($root -match '[\\/]\.worktrees[\\/]') {
+   "$(Split-Path $root -Leaf)-$Preset"
+} else {
+   $Preset
+}
+$out = if ($remote) { "$env:LOCALAPPDATA\GrimVault\build\$buildName" }
+       else         { Join-Path $root "build\$buildName" }
 
 function Fail ([string] $msg) {
    Write-Host "FAIL:  $msg" -ForegroundColor Red

@@ -13,95 +13,101 @@ namespace gv::core {
 
 namespace {
 
-   struct IniEntry {
-      std::string section;
-      std::string key;
-      std::string value;
-   };
+struct IniEntry {
+   std::string section;
+   std::string key;
+   std::string value;
+};
 
-   std::string_view trim (std::string_view s)
-   {
-      while (!s.empty () && (s.front () == ' ' || s.front () == '\t' || s.front () == '\r')) s.remove_prefix (1);
-      while (!s.empty () && (s.back  () == ' ' || s.back  () == '\t' || s.back  () == '\r')) s.remove_suffix (1);
-      return s;
-   }
+std::string_view trim (std::string_view s)
+{
+   while (!s.empty () && (s.front () == ' ' || s.front () == '\t' || s.front () == '\r'))
+      s.remove_prefix (1);
+   while (!s.empty () && (s.back () == ' ' || s.back () == '\t' || s.back () == '\r'))
+      s.remove_suffix (1);
+   return s;
+}
 
-   std::vector<IniEntry> parse_ini (const std::filesystem::path& path)
-   {
-      std::vector<IniEntry> out;
-      std::ifstream         in { path };
+std::vector<IniEntry> parse_ini (const std::filesystem::path& path)
+{
+   std::vector<IniEntry> out;
+   std::ifstream in { path };
 
-      if (!in) {
-         return out;
-      }
-
-      std::string section;
-      std::string line;
-
-      while (std::getline (in, line)) {
-         auto sv = trim (line);
-
-         if (sv.empty () || sv.front () == ';' || sv.front () == '#') continue;
-
-         if (sv.front () == '[' && sv.back () == ']') {
-            section = std::string { trim (sv.substr (1, sv.size () - 2)) };
-            continue;
-         }
-
-         auto eq = sv.find ('=');
-
-         if (eq == std::string_view::npos) continue;
-
-         auto key   = trim (sv.substr (0, eq));
-         auto value = trim (sv.substr (eq + 1));
-
-         if (key.empty ()) continue;
-
-         out.emplace_back (IniEntry {
-            .section = section,
-            .key     = std::string { key },
-            .value   = std::string { value },
-         });
-      }
-
+   if (!in) {
       return out;
    }
 
-   constexpr struct { std::string_view key; std::string_view value; } k_defaults [] = {
-      { "general:telemetry",          "true" },
-      { "general:auto_updates",       "true" },
-      { "general:launch_on_startup",  "true" },
-      { "general:default_mode",       "automatic" },
-      { "general:alignment",          "attached" },
-      { "general:components",         "header,primary,secondary,details,quests,pricing" },
-      { "general:scale",              "1.0" },
-   };
+   std::string section;
+   std::string line;
 
-   constexpr struct { std::string_view action_id; std::string_view accelerator; } k_default_hotkeys [] = {
-      { "scan_now", "F5" },
-   };
+   while (std::getline (in, line)) {
+      auto sv = trim (line);
 
-   constexpr std::string_view k_retired_hotkeys [] = {
-      "toggle_mode",
-      "debug_toggle",
-      "clear_overlay",
-   };
+      if (sv.empty () || sv.front () == ';' || sv.front () == '#') continue;
 
-   bool retired_hotkey (std::string_view action)
-   {
-      for (const auto retired : k_retired_hotkeys) {
-         if (action == retired) return true;
+      if (sv.front () == '[' && sv.back () == ']') {
+         section = std::string { trim (sv.substr (1, sv.size () - 2)) };
+         continue;
       }
-      return false;
+
+      auto eq = sv.find ('=');
+
+      if (eq == std::string_view::npos) continue;
+
+      auto key = trim (sv.substr (0, eq));
+      auto value = trim (sv.substr (eq + 1));
+
+      if (key.empty ()) continue;
+
+      out.emplace_back (IniEntry {
+         .section = section,
+         .key = std::string { key },
+         .value = std::string { value },
+      });
    }
 
-} // namespace
+   return out;
+}
 
-Result<bool> IniMigrator::run (
-   const std::filesystem::path& ini_path,
-   gv::db::UserSettingsRepo&    settings,
-   gv::db::UserHotkeysRepo&     hotkeys
-) {
+constexpr struct {
+   std::string_view key;
+   std::string_view value;
+} k_defaults[] = {
+   { "general:telemetry", "false" },
+   { "general:auto_updates", "true" },
+   { "general:launch_on_startup", "true" },
+   { "general:default_mode", "automatic" },
+   { "general:alignment", "attached" },
+   { "general:components", "header,primary,secondary,details,quests,pricing" },
+   { "general:scale", "1.0" },
+};
+
+constexpr struct {
+   std::string_view action_id;
+   std::string_view accelerator;
+} k_default_hotkeys[] = {
+   { "scan_now", "F5" },
+};
+
+constexpr std::string_view k_retired_hotkeys[] = {
+   "toggle_mode",
+   "debug_toggle",
+   "clear_overlay",
+};
+
+bool retired_hotkey (std::string_view action)
+{
+   for (const auto retired : k_retired_hotkeys) {
+      if (action == retired) return true;
+   }
+   return false;
+}
+
+}  // namespace
+
+Result<bool> IniMigrator::run (const std::filesystem::path& ini_path,
+                               gv::db::UserSettingsRepo& settings, gv::db::UserHotkeysRepo& hotkeys)
+{
    auto existing = settings.all ();
 
    if (!existing.has_value ()) {
@@ -150,8 +156,8 @@ Result<bool> IniMigrator::run (
    std::filesystem::rename (ini_path, migrated, ec);
 
    if (ec) {
-      Logger::warn ("ini_migrator: failed to rename {} → {}: {}",
-         ini_path.string (), migrated.string (), ec.message ());
+      Logger::warn ("ini_migrator: failed to rename {} → {}: {}", ini_path.string (),
+                    migrated.string (), ec.message ());
    } else {
       Logger::info ("ini_migrator: migrated INI; renamed to {}", migrated.string ());
    }
@@ -159,4 +165,4 @@ Result<bool> IniMigrator::run (
    return true;
 }
 
-} // namespace gv::core
+}  // namespace gv::core

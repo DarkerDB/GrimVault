@@ -10,12 +10,12 @@ namespace gv::collection {
 
 class Collector
 {
-public:
+  public:
    using Sender = std::function<core::Result<api::CollectionResult> (const api::CollectionSample&)>;
    using Uploaded = std::function<void (const api::CollectionSample&)>;
 
    explicit Collector (api::DDBClient& client);
-   explicit Collector (Sender sender);
+   explicit Collector (Sender sender, std::function<void ()> cancel = {});
    ~Collector ();
 
    Collector (const Collector&) = delete;
@@ -27,7 +27,7 @@ public:
    bool submit (api::CollectionSample sample);
    void stop ();
 
-private:
+  private:
    struct Impl;
    std::unique_ptr<Impl> impl_;
 };

@@ -1,0 +1,117 @@
+name: CI
+
+on:
+   pull_request:
+   push:
+      branches: [ master ]
+
+permissions:
+   contents: read
+
+concurrency:
+   group: ci-grimvault-${{ github.ref }}
+   cancel-in-progress: true
+
+jobs:
+   style:
+      name: C++ style
+      runs-on: ubuntu-24.04
+      steps:
+         - uses: actions/checkout@v4
+           with:
+              fetch-depth: 0
+
+         - name: Install clang-format
+           run: sudo apt-get update && sudo apt-get install -y clang-format-18
+
+         - name: Check changed C++ files
+           shell: bash
+           env:
+              BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+           run: |
+              set -euo pipefail
+              if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+                 BASE_SHA=$(git hash-object -t tree /dev/null)
+              fi
+              mapfile -d '' files < <(git diff --diff-filter=ACMR --name-only -z \
+                 "$BASE_SHA" "$GITHUB_SHA" -- '*.cpp' '*.h')
+              if (( ${#files[@]} )); then
+                 clang-format-18 --dry-run --Werror "${files[@]}"
+              fi
+
+   windows:
+      name: Windows MSVC
+      runs-on: windows-2022
+      env:
+         VCPKG_COMMIT: 2b65c20fc66eda893aa15a15a453c3cf09500b19
+         VCPKG_BINARY_SOURCES: clear;files,V:\.vcpkg-cache,readwrite
+      steps:
+         - uses: actions/checkout@v4
+           with:
+              fetch-depth: 0
+
+         - uses: ilammy/msvc-dev-cmd@v1
+
+         - name: Install Ninja
+           shell: pwsh
+           run: choco install ninja -y --no-progress
+
+         - name: Install Qt
+           uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730
+           with:
+              version: '6.10.3'
+              arch: win64_msvc2022_64
+              modules: qtcharts
+              cache: true
+
+         - name: Install OpenCV
+           shell: pwsh
+           run: |
+              $archive = Join-Path $env:RUNNER_TEMP 'opencv-4.12.0-windows.exe'
+              Invoke-WebRequest `
+                 -Uri 'https://github.com/opencv/opencv/releases/download/4.12.0/opencv-4.12.0-windows.exe' `
+                 -OutFile $archive
+              $expected = 'b753b14d880b9bc8d89d6acd3b665c040baec0211078435432fcae117db707af'
+              $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($actual -ne $expected) { throw "OpenCV checksum mismatch: $actual" }
+              & 7z x $archive "-o$env:RUNNER_TEMP" -y | Out-Null
+              $opencv = Join-Path $env:RUNNER_TEMP 'opencv\build\x64\vc16\lib'
+              "OpenCV_DIR=$opencv" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+         - uses: actions/cache@v4
+           with:
+              path: .vcpkg-cache
+              key: vcpkg-windows-2022-test-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
+
+         - uses: actions/checkout@v4
+           with:
+              repository: microsoft/vcpkg
+              ref: ${{ env.VCPKG_COMMIT }}
+              path: vcpkg
+              fetch-depth: 1
+
+         - name: Configure
+           shell: pwsh
+           run: |
+              subst V: "$env:GITHUB_WORKSPACE"
+              V:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+              $env:VCPKG_ROOT = 'V:\vcpkg'
+              cmake --preset windows-msvc-test "-DOpenCV_DIR=$env:OpenCV_DIR"
+
+         - name: Build
+           shell: pwsh
+           run: cmake --build --preset windows-msvc-test --parallel
+
+         - name: Test
+           shell: pwsh
+           run: |
+              $build = 'build/windows-msvc-test'
+              $qtBin = Join-Path $env:QT_ROOT_DIR 'bin'
+              $opencvBin = Join-Path (Split-Path $env:OpenCV_DIR -Parent) 'bin'
+              $vcpkgBin = Join-Path $build 'vcpkg_installed\x64-windows\bin'
+              $env:PATH = "$qtBin;$opencvBin;$vcpkgBin;$env:PATH"
+              tools\release\fetch-webview2.ps1
+              $webview = Start-Process tools\build\MicrosoftEdgeWebView2Setup.exe `
+                 -ArgumentList '/silent', '/install' -Wait -PassThru
+              if ($webview.ExitCode -ne 0) { throw "WebView2 install failed: $($webview.ExitCode)" }
+              ctest --test-dir $build --output-on-failure

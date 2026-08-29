@@ -248,6 +248,16 @@ target_link_libraries (gv_app
       gv::collection
       gv::ui
       Qt6::Core
+   PRIVATE
+      gv::auth
+      gv::capture
+      gv::cli
+      gv::update
+      gv::vision
+      nlohmann_json::nlohmann_json
+      opencv_imgcodecs
+      Qt6::Gui
+      Qt6::Widgets
 )
 
 grimvault_add_module (ui)

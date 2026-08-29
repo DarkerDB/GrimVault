@@ -17,21 +17,18 @@ TEST (CollectionCollector, RequiresConsentAndDeduplicatesSamples)
    auto completed = sent.get_future ();
    std::promise<std::string> uploaded;
    auto upload = uploaded.get_future ();
-   gv::collection::Collector collector {
-      [&calls, &sent] (const gv::api::CollectionSample&) -> gv::core::Result<gv::api::CollectionResult> {
-         ++calls;
-         sent.set_value ();
-         return gv::api::CollectionResult { .accepted = true };
-      }
-   };
+   gv::collection::Collector collector { [&calls, &sent] (const gv::api::CollectionSample&)
+                                            -> gv::core::Result<gv::api::CollectionResult> {
+      ++calls;
+      sent.set_value ();
+      return gv::api::CollectionResult { .accepted = true };
+   } };
    collector.on_uploaded ([&uploaded] (const gv::api::CollectionSample& sample) {
       uploaded.set_value (sample.channel);
    });
-   gv::api::CollectionSample sample {
-      .channel = "tooltip",
-      .content_type = "image/png",
-      .body = "pixels"
-   };
+   gv::api::CollectionSample sample { .channel = "tooltip",
+                                      .content_type = "image/png",
+                                      .body = "pixels" };
 
    EXPECT_FALSE (collector.submit (sample));
    collector.set_enabled (true);
@@ -47,15 +44,15 @@ TEST (CollectionCollector, SubmitsLatestLogIncludingCurrentDay)
 {
    std::promise<gv::api::CollectionSample> sent;
    auto completed = sent.get_future ();
-   gv::collection::Collector collector {
-      [&sent] (const gv::api::CollectionSample& sample) -> gv::core::Result<gv::api::CollectionResult> {
-         sent.set_value (sample);
-         return gv::api::CollectionResult { .accepted = true };
-      }
-   };
-   const auto directory = std::filesystem::temp_directory_path ()
-      / ("grimvault-collection-" + std::to_string (
-         std::chrono::steady_clock::now ().time_since_epoch ().count ()));
+   gv::collection::Collector collector { [&sent] (const gv::api::CollectionSample& sample)
+                                            -> gv::core::Result<gv::api::CollectionResult> {
+      sent.set_value (sample);
+      return gv::api::CollectionResult { .accepted = true };
+   } };
+   const auto directory =
+      std::filesystem::temp_directory_path () /
+      ("grimvault-collection-" +
+       std::to_string (std::chrono::steady_clock::now ().time_since_epoch ().count ()));
    std::filesystem::create_directories (directory);
    const auto now = std::chrono::system_clock::to_time_t (std::chrono::system_clock::now ());
    std::tm parts {};
@@ -64,7 +61,7 @@ TEST (CollectionCollector, SubmitsLatestLogIncludingCurrentDay)
 #else
    ::localtime_r (&now, &parts);
 #endif
-   char date [11] {};
+   char date[11] {};
    std::strftime (date, sizeof (date), "%Y-%m-%d", &parts);
    const auto current = std::string { date };
    {
@@ -74,17 +71,48 @@ TEST (CollectionCollector, SubmitsLatestLogIncludingCurrentDay)
    }
 
    collector.set_enabled (true);
-   EXPECT_TRUE (gv::collection::submit_latest_log (
-      collector, directory, "install", "2.1.0", "dev"));
+   EXPECT_TRUE (
+      gv::collection::submit_latest_log (collector, directory, "install", "2.1.0", "dev"));
    const auto sample = completed.get ();
    EXPECT_EQ (sample.channel, "log");
    EXPECT_EQ (sample.content_type, "text/plain");
    EXPECT_EQ (sample.body, "current");
-   EXPECT_EQ (sample.metadata ["date"], current);
-   EXPECT_EQ (sample.metadata ["filename"], "grimvault_" + current + ".txt");
-   EXPECT_EQ (sample.metadata ["install_id"], "install");
-   EXPECT_EQ (sample.metadata ["partition"], "logs");
+   EXPECT_EQ (sample.metadata["date"], current);
+   EXPECT_EQ (sample.metadata["filename"], "grimvault_" + current + ".txt");
+   EXPECT_EQ (sample.metadata["install_id"], "install");
+   EXPECT_EQ (sample.metadata["partition"], "logs");
 
    collector.stop ();
    std::filesystem::remove_all (directory);
+}
+
+TEST (CollectionCollector, RevokingConsentCancelsActiveUpload)
+{
+   std::promise<void> started;
+   auto active = started.get_future ();
+   std::promise<void> release;
+   auto released = release.get_future ();
+   std::atomic<bool> cancelled { false };
+   gv::collection::Collector collector {
+      [&] (const gv::api::CollectionSample&) -> gv::core::Result<gv::api::CollectionResult> {
+         started.set_value ();
+         released.wait ();
+         return gv::api::CollectionResult { .accepted = true };
+      },
+      [&] { cancelled.store (true); },
+   };
+
+   collector.set_enabled (true);
+   ASSERT_TRUE (collector.submit ({
+      .channel = "tooltip",
+      .content_type = "image/png",
+      .body = "pixels",
+   }));
+   ASSERT_EQ (active.wait_for (std::chrono::seconds { 1 }), std::future_status::ready);
+
+   collector.set_enabled (false);
+
+   EXPECT_TRUE (cancelled.load ());
+   release.set_value ();
+   collector.stop ();
 }

@@ -9,9 +9,15 @@
 #include <memory>
 #include <string_view>
 
-namespace gv::api  { class DDBClient; }
-namespace gv::auth { class Session;        }
-namespace gv::db   { class UserSettingsRepo; }
+namespace gv::api {
+class DDBClient;
+}
+namespace gv::auth {
+class Session;
+}
+namespace gv::db {
+class UserSettingsRepo;
+}
 
 namespace gv::app {
 
@@ -19,15 +25,14 @@ namespace gv::app {
 // (which unsets a key the dashboard dropped) and account scoping in main ()
 // (which clears the previous account's values on a switch) key off this one
 // list, so a new managed family is added in a single place.
-inline constexpr std::string_view managed_setting_prefixes [] = {
+inline constexpr std::string_view managed_setting_prefixes[] = {
    "behavior:", "collection:", "hotkeys:", "overlay:", "pricing:", "tooltip:"
 };
 
 inline bool is_managed_setting (std::string_view key)
 {
-   return std::any_of (
-      std::begin (managed_setting_prefixes), std::end (managed_setting_prefixes),
-      [key] (std::string_view prefix) { return key.starts_with (prefix); });
+   return std::any_of (std::begin (managed_setting_prefixes), std::end (managed_setting_prefixes),
+                       [key] (std::string_view prefix) { return key.starts_with (prefix); });
 }
 
 // Background poller that mirrors dashboard-controlled settings from
@@ -47,7 +52,7 @@ class SettingsSync : public QObject
 {
    Q_OBJECT
 
-public:
+  public:
    struct Config {
       // Cadence between successful polls. This is the whole propagation
       // latency of a dashboard change: there is no push channel, so a
@@ -60,34 +65,31 @@ public:
       // Backoff floor (first failure) and cap (every failure after that
       // doubles up to the cap).
       std::chrono::seconds backoff_floor { 15 };
-      std::chrono::seconds backoff_cap   { 300 };
+      std::chrono::seconds backoff_cap { 300 };
    };
 
-   SettingsSync (gv::api::DDBClient* api,
-                 gv::auth::Session*       session,
-                 gv::db::UserSettingsRepo* repo,
-                 Config                   cfg    = {},
-                 QObject*                 parent = nullptr);
+   SettingsSync (gv::api::DDBClient* api, gv::auth::Session* session,
+                 gv::db::UserSettingsRepo* repo, Config cfg = {}, QObject* parent = nullptr);
    ~SettingsSync () override;
 
    // Idempotent. Kicks an immediate poll, then schedules the next.
    void start ();
 
    // Stops the timer + ignores any in-flight worker result.
-   void stop  ();
+   void stop ();
 
    // Fire one cycle now, independent of the schedule. No-op when stopped.
    void poll_now ();
 
-signals:
+  signals:
    void settings_changed (QString key, QString value);
-   void poll_succeeded   (int num_changed);
-   void poll_failed      (QString message);
+   void poll_succeeded (int num_changed, bool improvement_enabled);
+   void poll_failed (QString message);
    void authentication_required ();
 
-private:
+  private:
    struct Impl;
    std::unique_ptr<Impl> impl_;
 };
 
-} // namespace gv::app
+}  // namespace gv::app

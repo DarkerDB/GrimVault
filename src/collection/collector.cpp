@@ -38,8 +38,7 @@ std::string fingerprint (const api::CollectionSample& sample)
 
 }
 
-struct Collector::Impl
-{
+struct Collector::Impl {
    explicit Impl (Sender send) : sender (std::move (send)), worker ([this] { run (); }) {}
 
    Sender sender;
@@ -73,17 +72,18 @@ struct Collector::Impl
                std::lock_guard guard { lock };
                seen.erase (fingerprint (sample));
             }
-            core::Logger::warn ("collection: {} failed: {}", sample.channel, result.error ().message);
+            core::Logger::warn ("collection: {} failed: {}", sample.channel,
+                                result.error ().message);
             continue;
          }
          if (result->retry_after > 0) {
             std::lock_guard guard { lock };
-            blocked [sample.channel] = std::chrono::steady_clock::now ()
-               + std::chrono::seconds { result->retry_after };
+            blocked[sample.channel] =
+               std::chrono::steady_clock::now () + std::chrono::seconds { result->retry_after };
          }
-         if (result->accepted) {
-            core::Logger::info ("collection: {} uploaded bytes={} object={}",
-               sample.channel, sample.body.size (), result->object_key);
+         if (result->accepted && active.load ()) {
+            core::Logger::info ("collection: {} uploaded bytes={} object={}", sample.channel,
+                                sample.body.size (), result->object_key);
             Uploaded callback;
             {
                std::lock_guard guard { lock };
@@ -91,26 +91,36 @@ struct Collector::Impl
             }
             if (callback) callback (sample);
          } else {
-            core::Logger::debug ("collection: {} skipped reason={}", sample.channel, result->reason);
+            core::Logger::debug ("collection: {} skipped reason={}", sample.channel,
+                                 result->reason);
          }
       }
    }
 };
 
 Collector::Collector (api::DDBClient& client)
-   : Collector ([&client] (const api::CollectionSample& sample) { return client.collect (sample); })
+    : Collector (
+         [&client] (const api::CollectionSample& sample) { return client.collect (sample); })
 {
    impl_->cancel = [&client] { client.cancel_pending (); };
 }
 
-Collector::Collector (Sender sender) : impl_ (std::make_unique<Impl> (std::move (sender))) {}
+Collector::Collector (Sender sender, std::function<void ()> cancel)
+    : impl_ (std::make_unique<Impl> (std::move (sender)))
+{
+   impl_->cancel = std::move (cancel);
+}
 
-Collector::~Collector () { stop (); }
+Collector::~Collector ()
+{
+   stop ();
+}
 
 void Collector::set_enabled (bool enabled)
 {
    if (impl_->active.exchange (enabled) == enabled) return;
    if (!enabled) {
+      if (impl_->cancel) impl_->cancel ();
       std::lock_guard guard { impl_->lock };
       impl_->queue.clear ();
    }
@@ -123,7 +133,10 @@ void Collector::on_uploaded (Uploaded callback)
    impl_->uploaded = std::move (callback);
 }
 
-bool Collector::enabled () const noexcept { return impl_->active.load (); }
+bool Collector::enabled () const noexcept
+{
+   return impl_->active.load ();
+}
 
 bool Collector::submit (api::CollectionSample sample)
 {
