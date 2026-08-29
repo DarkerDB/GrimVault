@@ -42,6 +42,8 @@ namespace {
       { Actions::k_open_in_browser, DefaultAccelerators::open_in_browser },
    }};
 
+   constexpr auto k_analysis_refresh_interval = std::chrono::seconds { 10 };
+
    const char* mode_name (Mode m)
    {
       switch (m) {
@@ -288,22 +290,36 @@ struct Controller::Impl
 
    void analysis_loop ()
    {
+      std::optional<AnalysisJob> current_analysis;
+
       for (;;) {
          AnalysisJob job;
+         bool initial;
          {
             std::unique_lock lk { analysis_lock };
-            analysis_ready.wait (lk, [this] {
+            const auto ready = [this] {
                return analysis_stopping || pending_analysis.has_value ();
-            });
+            };
+            if (current_analysis)
+               analysis_ready.wait_for (lk, k_analysis_refresh_interval, ready);
+            else
+               analysis_ready.wait (lk, ready);
             if (analysis_stopping) return;
-            job = std::move (*pending_analysis);
-            pending_analysis.reset ();
+            initial = pending_analysis.has_value ();
+            if (initial) {
+               current_analysis = std::move (pending_analysis);
+               pending_analysis.reset ();
+            }
+            job = *current_analysis;
          }
 
          if (!authenticated.load (std::memory_order_relaxed)
-             || mode.load (std::memory_order_relaxed) == Mode::Disabled) continue;
-         if (!deps.api) continue;
+             || mode.load (std::memory_order_relaxed) == Mode::Disabled || !deps.api) {
+            current_analysis.reset ();
+            continue;
+         }
          if (deps.pipeline && !deps.pipeline->is_current (job.tooltip.generation)) {
+            current_analysis.reset ();
             deps.pipeline->record_evidence (job.tooltip.generation, "analysis_discarded", {
                { "reason", "stale_before_request" },
             });
@@ -314,13 +330,17 @@ struct Controller::Impl
          auto result = deps.api->analyze_tooltip (
             job.tooltip.text, job.language, job.tooltip.confidence,
             capture::backend_name (job.tooltip.backend), job.tooltip.gems,
-            job.enabled_widgets, job.tooltip.rarity);
+            job.enabled_widgets, job.tooltip.rarity, k_analysis_refresh_interval);
          const auto analysis_ms = std::chrono::duration_cast<std::chrono::milliseconds> (
             std::chrono::steady_clock::now () - analysis_started).count ();
 
          if (!authenticated.load (std::memory_order_relaxed)
-             || mode.load (std::memory_order_relaxed) == Mode::Disabled) continue;
+             || mode.load (std::memory_order_relaxed) == Mode::Disabled) {
+            current_analysis.reset ();
+            continue;
+         }
          if (deps.pipeline && !deps.pipeline->is_current (job.tooltip.generation)) {
+            current_analysis.reset ();
             core::log::ocr.event ("analysis_discarded", {
                { "reason", "stale_generation" },
                { "generation", std::to_string (job.tooltip.generation) },
@@ -365,7 +385,7 @@ struct Controller::Impl
                { "confidence", lookup.pricing.confidence },
                { "elapsed_ms", std::to_string (analysis_ms) },
             });
-         persist_find (lookup);
+         if (initial) persist_find (lookup);
          {
             std::lock_guard lk { browse_lock };
             last_item_id = lookup.item_id;
@@ -400,9 +420,6 @@ struct Controller::Impl
                   bounds.x + rect.x, bounds.y + rect.y, rect.w, rect.h
                };
 
-               // This is the first and only visible render for the generation:
-               // complete API data has arrived and the hidden renderer will
-               // still wait for its final size + bitmap before revealing it.
                guard->impl_->deps.overlay->present (lookup, game, anchor, true);
                core::log::ui.event ("overlay.presented", {
                   { "generation", std::to_string (generation) },
