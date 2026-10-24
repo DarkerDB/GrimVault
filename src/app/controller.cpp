@@ -8,6 +8,7 @@
 #include <gv/db/repos/user_settings_repo.h>
 #include <gv/ocr/game_locale.h>
 #include <gv/ocr/pipeline.h>
+#include <gv/ocr/tooltip_filter.h>
 #include <gv/ui/debug_overlay.h>
 #include <gv/ui/overlay_window.h>
 
@@ -866,6 +867,13 @@ void Controller::on_tooltip (const ocr::RecognizedTooltip& rt)
 
    if (!impl_->deps.api || rt.preliminary) return;
    if (impl_->deps.pipeline && !impl_->deps.pipeline->is_current (rt.generation)) return;
+   if (!ocr::looks_like_tooltip (rt.text)) {
+      core::log::ocr.event ("analysis_skipped", {
+         { "reason", "not_a_tooltip" },
+         { "generation", std::to_string (rt.generation) },
+      });
+      return;
+   }
    impl_->enqueue_analysis (rt);
 }
 

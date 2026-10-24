@@ -40,6 +40,10 @@ public:
    {
       std::function<void ()> on_ready;
       std::function<void (std::string)> on_failed;
+
+      // The card's window in physical screen pixels whenever it is shown or
+      // moves; an empty rect once it is hidden.
+      std::function<void (QRect)> on_card_area;
    };
 
    static core::Result<std::unique_ptr<AugmentView>> create (Config config,

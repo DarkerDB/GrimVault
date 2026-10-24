@@ -96,6 +96,8 @@ namespace {
          hide ();
       }
 
+      std::function<void (QRect)> on_area;
+
       // Dashboard opacity, multiplied into the enter animation's own fade so
       // a mid-hover change repaints without restarting the animation.
       void set_opacity (qreal opacity)
@@ -135,11 +137,13 @@ namespace {
          screen::make_passthrough (this->windowHandle ());
          update ();
          if (animate) enter_.start ();
+         report (physical);
       }
 
       void move_physical (const QPoint& position)
       {
          screen::move (windowHandle (), position);
+         if (!area_.isEmpty ()) report (QRect { position, area_.size () });
       }
 
       void clear ()
@@ -150,6 +154,7 @@ namespace {
          hide ();
          image_ = {};
          enter_progress_ = 0.0;
+         if (!area_.isEmpty ()) report ({});
       }
 
    protected:
@@ -174,7 +179,14 @@ namespace {
       }
 
    private:
+      void report (const QRect& area)
+      {
+         area_ = area;
+         if (on_area) on_area (area);
+      }
+
       QImage image_;
+      QRect area_;                // physical screen px, empty while hidden
       qreal opacity_ = 0.9;
       QVariantAnimation enter_;
       qreal enter_progress_ = 0.0;
@@ -325,6 +337,9 @@ core::Result<std::unique_ptr<AugmentView>> AugmentView::create (Config config,
    auto* impl = view->impl_.get ();
    impl->callbacks = std::move (callbacks);
    impl->snapshot  = std::make_unique<SnapshotWindow> ();
+   impl->snapshot->on_area = [impl] (QRect area) {
+      if (impl->callbacks.on_card_area) impl->callbacks.on_card_area (area);
+   };
 
    auto host = WebviewHost::create (
       WebviewHost::Config {

@@ -55,6 +55,9 @@ public:
 signals:
    void renderer_failed (const QString& reason);
 
+   // Where the card is drawn, physical screen pixels; empty once hidden.
+   void card_area_changed (const QRect& physical);
+
 private:
    void start_webview ();
    void recover_webview (std::uint64_t generation, std::string reason);

@@ -2,6 +2,7 @@
 
 #include <gv/ocr/evidence.h>
 #include <gv/ocr/pipeline.h>
+#include <gv/ocr/tooltip_filter.h>
 #include <gv/ocr/tooltip_state.h>
 
 #include <atomic>
@@ -23,6 +24,7 @@ struct Pipeline::Impl {
    LanguageRegistry& registry;
    Config config;
    Evidence evidence;
+   OverlayExclusion overlay;
    std::atomic<double> capture_fps;
    std::atomic<capture::CaptureMode> capture_mode { capture::CaptureMode::Automatic };
    std::atomic<bool> running { false };

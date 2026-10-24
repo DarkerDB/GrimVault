@@ -59,6 +59,7 @@ struct VisionHealth {
    std::uint64_t empty = 0;
    std::uint64_t errors = 0;
    std::uint64_t identity_failures = 0;
+   std::uint64_t overlay_skipped = 0;
    std::uint64_t tracked = 0;
    std::uint64_t accepted = 0;
    std::uint64_t cursor_valid = 0;
@@ -95,6 +96,7 @@ struct VisionHealth {
             { "empty", std::to_string (empty) },
             { "errors", std::to_string (errors) },
             { "identity_failures", std::to_string (identity_failures) },
+            { "overlay_skipped", std::to_string (overlay_skipped) },
             { "tracked", std::to_string (tracked) },
             { "accepted", std::to_string (accepted) },
             { "cursor_valid", std::to_string (cursor_valid) },
@@ -270,6 +272,15 @@ void Pipeline::Impl::vision_loop ()
                                 .count ();
       last_detect_ms.store (detect_ms);
       health.record_detection (detect_ms);
+
+      if (detected.has_value () && !detected->empty ()) {
+         const auto own_card = [&] (const vision::TooltipBox& box) {
+            return overlay.covers (box.rect, frame.origin_x, frame.origin_y, frame.timestamp);
+         };
+         const auto before = detected->size ();
+         std::erase_if (*detected, own_card);
+         if (detected->size () != before) ++health.overlay_skipped;
+      }
 
       std::optional<capture::Rect> selected;
       std::optional<capture::Rect> detector_box;

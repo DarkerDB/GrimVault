@@ -91,6 +91,9 @@ void OverlayWindow::start_webview ()
                   recover_webview (generation, reason);
                }, Qt::QueuedConnection);
          },
+         .on_card_area = [this, generation] (QRect area) {
+            if (generation == impl_->generation) emit card_area_changed (area);
+         },
       });
 
    if (!augment.has_value ()) {
@@ -118,6 +121,7 @@ void OverlayWindow::recover_webview (std::uint64_t generation, std::string reaso
 
    impl_->startup.stop ();
    impl_->augment.reset ();
+   emit card_area_changed ({});
    core::Logger::warn ("overlay: WebView2 attempt={} failed: {}",
       impl_->attempt + 1, reason);
 

@@ -126,6 +126,10 @@ public:
 
    void set_detect_only (bool on);
 
+   // Where GrimVault's own card is on screen, in desktop (physical) pixels;
+   // empty when hidden. Detections that are mostly the card are ignored.
+   void set_overlay_area (const capture::Rect& desktop);
+
    void request_immediate_scan ();
    void record_evidence (
       std::uint64_t generation,

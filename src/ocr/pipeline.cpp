@@ -150,6 +150,10 @@ void Pipeline::set_detect_only (bool on)
 {
    impl_->detect_only.store (on);
 }
+void Pipeline::set_overlay_area (const capture::Rect& desktop)
+{
+   impl_->overlay.update (desktop);
+}
 void Pipeline::request_immediate_scan ()
 {
    if (!impl_->enabled.load (std::memory_order_relaxed)) return;
