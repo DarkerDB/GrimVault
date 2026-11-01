@@ -1,4 +1,5 @@
 name: Release
+run-name: Release ${{ inputs.version || github.event.release.tag_name }} (${{ inputs.target_env || 'prod' }}, ${{ inputs.channel || 'release' }})
 
 on:
    release:
@@ -165,9 +166,8 @@ jobs:
               $webview = Start-Process tools\build\MicrosoftEdgeWebView2Setup.exe `
                  -ArgumentList '/silent', '/install' -Wait -PassThru
               if ($webview.ExitCode -ne 0) { throw "WebView2 install failed: $($webview.ExitCode)" }
-              ctest --test-dir $build --output-on-failure -L unit
-              ctest --test-dir $build --output-on-failure -L e2e
-              ctest --test-dir $build --output-on-failure -L integration
+              ctest --test-dir $build --output-on-failure -L 'unit|e2e|integration'
+              if ($LASTEXITCODE -ne 0) { throw 'Release tests failed.' }
 
          - name: Sign application
            shell: pwsh

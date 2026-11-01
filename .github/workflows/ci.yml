@@ -96,7 +96,9 @@ jobs:
               subst V: "$env:GITHUB_WORKSPACE"
               V:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
               $env:VCPKG_ROOT = 'V:\vcpkg'
-              cmake --preset windows-msvc-test "-DOpenCV_DIR=$env:OpenCV_DIR"
+              cmake --preset windows-msvc-test `
+                 "-DOpenCV_DIR=$env:OpenCV_DIR" `
+                 "-DVCPKG_MANIFEST_NO_DEFAULT_FEATURES=ON"
 
          - name: Build
            shell: pwsh
