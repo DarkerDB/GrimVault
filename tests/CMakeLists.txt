@@ -41,11 +41,13 @@ endif ()
 if (WIN32)
    add_executable (grimvault_renderer_tests
       integration/renderer_test.cpp
+      integration/capture_exclusion_test.cpp
    )
 
    target_link_libraries (grimvault_renderer_tests PRIVATE
       gv::core
       gv::ui
+      gv::capture
       Qt6::Core
       Qt6::Gui
       Qt6::Widgets

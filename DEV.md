@@ -281,6 +281,11 @@ hidden WebView2, captured as a transparent PNG, and displayed through a
 disabled native Qt window. No browser HWND is placed over the game. Startup
 retries with clean profile data and then software rendering if necessary.
 
+Native overlays are excluded from Windows desktop capture, so DXGI cannot
+feed the card or debug borders back into tooltip tracking. They remain
+visible on the monitor but are omitted from supported screenshots and recordings.
+An exclusion failure is recorded in the application log.
+
 The card's enter animation is CSS in `web/augment.html`, played on the
 `.ddb-tooltip` element the library recreates on each render (a fresh
 element with a CSS `animation` plays from frame 0; the transparent window
