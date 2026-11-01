@@ -91,8 +91,8 @@ testing::AssertionResult captures_color (gv::capture::CaptureService& capture, Q
    return testing::AssertionFailure ()
           << "Expected " << expected.name ().toStdString () << " at desktop center " << x << ","
           << y << "; observed " << last_color.name ().toStdString () << " across "
-          << observed_frames << " frames"
-          << "; covering process=" << point_pid << "; test process=" << ::GetCurrentProcessId ()
+          << observed_frames << " frames" << "; covering process=" << point_pid
+          << "; test process=" << ::GetCurrentProcessId ()
           << ". Run capture tests on an unlocked interactive desktop.";
 }
 
