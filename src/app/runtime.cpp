@@ -478,12 +478,12 @@ int run_gui_impl (int argc, char** argv, GuiOptions opts)
    };
    gv::app::Controller controller { deps };
    if (pipeline) {
-      QObject::connect (&overlay, &gv::ui::OverlayWindow::card_area_changed, &overlay,
-                        [&pipeline] (const QRect& area) {
-                           if (!pipeline) return;
-                           pipeline->set_overlay_area (
-                              { area.x (), area.y (), area.width (), area.height () });
-                        });
+      QObject::connect (
+         &overlay, &gv::ui::OverlayWindow::card_area_changed, &overlay,
+         [&pipeline] (const QRect& area) {
+            if (!pipeline) return;
+            pipeline->set_overlay_area ({ area.x (), area.y (), area.width (), area.height () });
+         });
    }
    collection.on_uploaded ([&debug_overlay] (const gv::api::CollectionSample& sample) {
       if (sample.channel != "tooltip") return;
