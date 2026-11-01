@@ -60,6 +60,7 @@ struct VisionHealth {
    std::uint64_t errors = 0;
    std::uint64_t identity_failures = 0;
    std::uint64_t overlay_skipped = 0;
+   std::uint64_t rejected_skipped = 0;
    std::uint64_t tracked = 0;
    std::uint64_t accepted = 0;
    std::uint64_t cursor_valid = 0;
@@ -97,6 +98,7 @@ struct VisionHealth {
             { "errors", std::to_string (errors) },
             { "identity_failures", std::to_string (identity_failures) },
             { "overlay_skipped", std::to_string (overlay_skipped) },
+            { "rejected_skipped", std::to_string (rejected_skipped) },
             { "tracked", std::to_string (tracked) },
             { "accepted", std::to_string (accepted) },
             { "cursor_valid", std::to_string (cursor_valid) },
@@ -213,6 +215,11 @@ void Pipeline::Impl::vision_loop ()
       }
       const bool forced = pending > 0;
 
+      if (!forced && state.current ().has_value () &&
+          rejected.contains (*state.current (), config.identity_bits, config.identity_size_px)) {
+         lose ("not_a_tooltip");
+      }
+
       cv::Mat image {
          frame.height,
          frame.width,
@@ -280,6 +287,17 @@ void Pipeline::Impl::vision_loop ()
          const auto before = detected->size ();
          std::erase_if (*detected, own_card);
          if (detected->size () != before) ++health.overlay_skipped;
+      }
+
+      if (!forced && detected.has_value () && !detected->empty ()) {
+         const auto before = detected->size ();
+         std::erase_if (*detected, [&] (const vision::TooltipBox& box) {
+            const auto selection = vision::TooltipTracker::select (image, box.rect);
+            const auto candidate = TooltipObservation::read (image, selection.rect, frame.cursor);
+            return candidate.has_value () &&
+                   rejected.contains (*candidate, config.identity_bits, config.identity_size_px);
+         });
+         health.rejected_skipped += before - detected->size ();
       }
 
       std::optional<capture::Rect> selected;

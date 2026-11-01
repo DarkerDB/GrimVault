@@ -1,10 +1,12 @@
 #pragma once
 
 #include <gv/capture/frame.h>
+#include <gv/ocr/tooltip_state.h>
 
 #include <chrono>
 #include <mutex>
 #include <string_view>
+#include <vector>
 
 namespace gv::ocr {
 
@@ -15,7 +17,7 @@ namespace gv::ocr {
 // that mostly sit inside it.
 class OverlayExclusion
 {
-public:
+  public:
    using Clock = std::chrono::steady_clock;
 
    // Hidden cards stay excluded for frames captured within this window:
@@ -32,7 +34,7 @@ public:
    bool covers (const capture::Rect& box, int origin_x, int origin_y,
                 Clock::time_point captured_at) const;
 
-private:
+  private:
    mutable std::mutex lock_;
    capture::Rect area_;
    bool visible_ = false;
@@ -45,5 +47,32 @@ private:
 inline constexpr int k_min_tooltip_lines = 2;
 
 bool looks_like_tooltip (std::string_view text) noexcept;
+
+// OCR-rejected image identities must not remain eligible tracking targets.
+// Entries expire so a transient incomplete OCR read can be retried.
+class RejectedTooltips
+{
+  public:
+   using Clock = std::chrono::steady_clock;
+   static constexpr std::chrono::seconds k_retry_after { 2 };
+   static constexpr std::size_t k_capacity = 32;
+
+   // Input: the observation whose OCR was not a tooltip. Output: suppression
+   // until now + 2s. Example: a one-line button is ignored on the next frame.
+   void reject (const TooltipObservation& observation, Clock::time_point now = Clock::now ());
+
+   // Match content and size, never coordinates alone. Example: new item text
+   // at a rejected button's position remains eligible immediately.
+   bool contains (const TooltipObservation& observation, int max_bits = 16, int max_size_px = 8,
+                  Clock::time_point now = Clock::now ()) const;
+
+  private:
+   struct Entry {
+      TooltipObservation observation;
+      Clock::time_point expires;
+   };
+   mutable std::mutex lock_;
+   std::vector<Entry> entries_;
+};
 
 }

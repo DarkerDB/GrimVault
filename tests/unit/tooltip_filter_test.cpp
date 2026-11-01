@@ -3,8 +3,8 @@
 #include <gtest/gtest.h>
 
 using gv::capture::Rect;
-using gv::ocr::OverlayExclusion;
 using gv::ocr::looks_like_tooltip;
+using gv::ocr::OverlayExclusion;
 using namespace std::chrono_literals;
 
 namespace {
@@ -53,8 +53,8 @@ TEST (OverlayExclusion, HiddenCardStaysExcludedForInFlightFrames)
    exclusion.update ({ 100, 100, 526, 500 }, t0);
    exclusion.update ({}, t0 + 1s);
    EXPECT_TRUE (exclusion.covers ({ 100, 100, 526, 500 }, 0, 0, t0 + 1s));
-   EXPECT_TRUE (exclusion.covers ({ 100, 100, 526, 500 }, 0, 0,
-                                  t0 + 1s + OverlayExclusion::k_hide_grace));
+   EXPECT_TRUE (
+      exclusion.covers ({ 100, 100, 526, 500 }, 0, 0, t0 + 1s + OverlayExclusion::k_hide_grace));
    EXPECT_FALSE (exclusion.covers ({ 100, 100, 526, 500 }, 0, 0, t0 + 1s + 151ms));
 }
 
@@ -93,4 +93,47 @@ TEST (LooksLikeTooltip, AcceptsCutShortRealTooltips)
    EXPECT_TRUE (looks_like_tooltip ("Slim Bangle (Perfect)\nSlot Type: Invalid"));
    EXPECT_TRUE (looks_like_tooltip ("Frock\nArmor Rating 5\nMagic Resistance 26"));
    EXPECT_TRUE (looks_like_tooltip ("钛金巨盾\n护甲值 43\n移動速度 -45"));
+}
+
+TEST (RejectedTooltips, RejectsRepeatedButtonButKeepsChangedContent)
+{
+   gv::ocr::RejectedTooltips rejected;
+   gv::ocr::TooltipObservation button;
+   button.box = { 226, 866, 341, 84 };
+   rejected.reject (button, t0);
+   EXPECT_TRUE (rejected.contains (button, 16, 8, t0 + 100ms));
+
+   auto item = button;
+   item.identity.bits.fill (0xffffffffffffffffull);
+   EXPECT_FALSE (rejected.contains (item, 16, 8, t0 + 100ms));
+
+   auto shoes = button;
+   shoes.box = { 1294, 685, 518, 542 };
+   EXPECT_FALSE (rejected.contains (shoes, 16, 8, t0 + 100ms));
+}
+
+TEST (RejectedTooltips, RetriesTransientIncompleteOcrAfterTwoSeconds)
+{
+   gv::ocr::RejectedTooltips rejected;
+   gv::ocr::TooltipObservation observation;
+   observation.box = { 100, 100, 500, 400 };
+   rejected.reject (observation, t0);
+   EXPECT_TRUE (rejected.contains (observation, 16, 8, t0 + 1999ms));
+   EXPECT_FALSE (rejected.contains (observation, 16, 8, t0 + 2s));
+}
+
+TEST (RejectedTooltips, BoundedCacheEvictsOldestObservation)
+{
+   gv::ocr::RejectedTooltips rejected;
+   gv::ocr::TooltipObservation observation;
+   observation.box = { 100, 100, 500, 400 };
+
+   for (std::size_t index = 0; index <= gv::ocr::RejectedTooltips::k_capacity; ++index) {
+      observation.box.w = 500 + static_cast<int> (index) * 20;
+      rejected.reject (observation, t0);
+   }
+
+   EXPECT_TRUE (rejected.contains (observation, 16, 8, t0));
+   observation.box.w = 500;
+   EXPECT_FALSE (rejected.contains (observation, 16, 8, t0));
 }

@@ -25,6 +25,7 @@ struct Pipeline::Impl {
    Config config;
    Evidence evidence;
    OverlayExclusion overlay;
+   RejectedTooltips rejected;
    std::atomic<double> capture_fps;
    std::atomic<capture::CaptureMode> capture_mode { capture::CaptureMode::Automatic };
    std::atomic<bool> running { false };

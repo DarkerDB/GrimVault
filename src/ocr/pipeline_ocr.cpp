@@ -336,8 +336,17 @@ void Pipeline::Impl::ocr_loop ()
                core::Logger::warn ("collection: tooltip sample failed: {}", error.what ());
             }
          }
+         if (!looks_like_tooltip (text)) {
+            rejected.reject (item.observation);
+            core::log::ocr.event ("analysis_skipped",
+                                  {
+                                     { "reason", "not_a_tooltip" },
+                                     { "generation", std::to_string (item.generation) },
+                                  });
+            continue;
+         }
+
          if (item.generation != generation.load (std::memory_order_relaxed)) continue;
-         if (text.empty ()) continue;
          last_completed_generation = item.generation;
 
          core::Logger::info (

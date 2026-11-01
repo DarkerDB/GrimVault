@@ -290,6 +290,12 @@ Losing or replacing a tooltip anchor immediately clears its visible card,
 queued render and focus-restoration cache. A replacement detection cannot
 reuse the previous item while waiting for a new analysis.
 
+OCR-rejected detections are also removed from tracking and candidate selection.
+The rejection cache matches image identity and size, holds at most 32 entries,
+and retries after two seconds. Changed content remains eligible immediately;
+a forced scan bypasses suppression. `rejected_skipped` reports these exclusions
+in pipeline health logs.
+
 The card's enter animation is CSS in `web/augment.html`, played on the
 `.ddb-tooltip` element the library recreates on each render (a fresh
 element with a CSS `animation` plays from frame 0; the transparent window
