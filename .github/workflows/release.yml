@@ -1,4 +1,5 @@
 name: Release
+run-name: Release ${{ inputs.version || github.event.release.tag_name }} (${{ inputs.target_env || 'prod' }}, ${{ inputs.channel || 'release' }})
 
 on:
    release:
@@ -45,7 +46,7 @@ env:
 jobs:
    compatibility:
       name: Windows release
-      runs-on: windows-2022
+      runs-on: windows-2025
       steps:
          - uses: actions/checkout@v4
            with:
@@ -105,8 +106,8 @@ jobs:
            with:
               path: |
                  .vcpkg-cache
-              key: vcpkg-windows-2022-release-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'tools/release/triplets/**') }}
-              restore-keys: vcpkg-windows-2022-release-${{ env.VCPKG_COMMIT }}-
+              key: vcpkg-windows-2025-release-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'tools/release/triplets/**') }}
+              restore-keys: vcpkg-windows-2025-release-${{ env.VCPKG_COMMIT }}-
 
          - uses: actions/checkout@v4
            with:
@@ -148,7 +149,7 @@ jobs:
            with:
               path: |
                  .vcpkg-cache
-              key: vcpkg-windows-2022-release-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'tools/release/triplets/**') }}
+              key: vcpkg-windows-2025-release-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'tools/release/triplets/**') }}
 
          - name: Build
            shell: pwsh
@@ -165,9 +166,8 @@ jobs:
               $webview = Start-Process tools\build\MicrosoftEdgeWebView2Setup.exe `
                  -ArgumentList '/silent', '/install' -Wait -PassThru
               if ($webview.ExitCode -ne 0) { throw "WebView2 install failed: $($webview.ExitCode)" }
-              ctest --test-dir $build --output-on-failure -L unit
-              ctest --test-dir $build --output-on-failure -L e2e
-              ctest --test-dir $build --output-on-failure -L integration
+              ctest --test-dir $build --output-on-failure -L 'unit|e2e|integration'
+              if ($LASTEXITCODE -ne 0) { throw 'Release tests failed.' }
 
          - name: Sign application
            shell: pwsh

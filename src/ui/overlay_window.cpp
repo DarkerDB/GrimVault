@@ -13,8 +13,7 @@
 
 namespace gv::ui {
 
-struct OverlayWindow::Impl
-{
+struct OverlayWindow::Impl {
    struct LastPresentation {
       gv::api::TooltipLookup lookup;
       QRect game;
@@ -35,14 +34,13 @@ struct OverlayWindow::Impl
 };
 
 OverlayWindow::OverlayWindow (Config config, QObject* parent)
-   : QObject (parent), impl_ (std::make_unique<Impl> ())
+    : QObject (parent), impl_ (std::make_unique<Impl> ())
 {
    impl_->config = std::move (config);
    impl_->startup.setSingleShot (true);
    impl_->startup.setInterval (10000);
-   QObject::connect (&impl_->startup, &QTimer::timeout, this, [this] {
-      recover_webview (impl_->generation, "startup timeout");
-   });
+   QObject::connect (&impl_->startup, &QTimer::timeout, this,
+                     [this] { recover_webview (impl_->generation, "startup timeout"); });
    start_webview ();
 }
 
@@ -55,10 +53,9 @@ void OverlayWindow::start_webview ()
    auto profile = impl_->config.user_data_dir;
 
    if (impl_->attempt > 0) {
-      const auto pattern = impl_->config.user_data_dir.parent_path ()
-         / "webview2-recovery-XXXXXX";
-      auto temporary = std::make_unique<QTemporaryDir> (
-         QString::fromStdWString (pattern.wstring ()));
+      const auto pattern = impl_->config.user_data_dir.parent_path () / "webview2-recovery-XXXXXX";
+      auto temporary =
+         std::make_unique<QTemporaryDir> (QString::fromStdWString (pattern.wstring ()));
       if (!temporary->isValid ()) {
          QTimer::singleShot (0, this, [this, generation] {
             recover_webview (generation, "temporary profile unavailable");
@@ -69,9 +66,9 @@ void OverlayWindow::start_webview ()
       impl_->profiles.push_back (std::move (temporary));
    }
 
-   core::Logger::info ("overlay: WebView2 attempt={} profile={} rendering={}",
-      impl_->attempt + 1, impl_->attempt == 0 ? "persistent" : "temporary",
-      software ? "software" : "hardware");
+   core::Logger::info ("overlay: WebView2 attempt={} profile={} rendering={}", impl_->attempt + 1,
+                       impl_->attempt == 0 ? "persistent" : "temporary",
+                       software ? "software" : "hardware");
 
    auto augment = AugmentView::create (
       AugmentView::Config {
@@ -80,24 +77,31 @@ void OverlayWindow::start_webview ()
          .software_rendering = software,
       },
       AugmentView::Callbacks {
-         .on_ready = [this, generation] {
-            if (generation != impl_->generation) return;
-            impl_->startup.stop ();
-            core::Logger::info ("overlay: WebView2 ready attempt={}", impl_->attempt + 1);
-         },
-         .on_failed = [this, generation] (std::string reason) {
-            QMetaObject::invokeMethod (this,
-               [this, generation, reason = std::move (reason)] {
-                  recover_webview (generation, reason);
-               }, Qt::QueuedConnection);
-         },
+         .on_ready =
+            [this, generation] {
+               if (generation != impl_->generation) return;
+               impl_->startup.stop ();
+               core::Logger::info ("overlay: WebView2 ready attempt={}", impl_->attempt + 1);
+            },
+         .on_failed =
+            [this, generation] (std::string reason) {
+               QMetaObject::invokeMethod (
+                  this,
+                  [this, generation, reason = std::move (reason)] {
+                     recover_webview (generation, reason);
+                  },
+                  Qt::QueuedConnection);
+            },
+         .on_card_area =
+            [this, generation] (QRect area) {
+               if (generation == impl_->generation) emit card_area_changed (area);
+            },
       });
 
    if (!augment.has_value ()) {
       const auto reason = augment.error ().message;
-      QTimer::singleShot (0, this, [this, generation, reason] {
-         recover_webview (generation, reason);
-      });
+      QTimer::singleShot (0, this,
+                          [this, generation, reason] { recover_webview (generation, reason); });
       return;
    }
 
@@ -107,8 +111,7 @@ void OverlayWindow::start_webview ()
    impl_->startup.start ();
 
    if (impl_->active && impl_->last) {
-      impl_->augment->present (
-         impl_->last->lookup, impl_->last->game, impl_->last->anchor, false);
+      impl_->augment->present (impl_->last->lookup, impl_->last->game, impl_->last->anchor, false);
    }
 }
 
@@ -118,8 +121,8 @@ void OverlayWindow::recover_webview (std::uint64_t generation, std::string reaso
 
    impl_->startup.stop ();
    impl_->augment.reset ();
-   core::Logger::warn ("overlay: WebView2 attempt={} failed: {}",
-      impl_->attempt + 1, reason);
+   emit card_area_changed ({});
+   core::Logger::warn ("overlay: WebView2 attempt={} failed: {}", impl_->attempt + 1, reason);
 
    if (++impl_->attempt < 3) {
       start_webview ();
@@ -137,8 +140,8 @@ void OverlayWindow::fail_webview (std::string reason)
    emit renderer_failed (QString::fromStdString (reason));
 }
 
-void OverlayWindow::present (const gv::api::TooltipLookup& lookup,
-                             const QRect& game, const QRect& anchor, bool animate)
+void OverlayWindow::present (const gv::api::TooltipLookup& lookup, const QRect& game,
+                             const QRect& anchor, bool animate)
 {
    impl_->last = Impl::LastPresentation { lookup, game, anchor };
    if (impl_->active && impl_->augment) {
@@ -180,19 +183,24 @@ void OverlayWindow::set_options (const augment::Options& options)
    if (impl_->augment) impl_->augment->set_options (options);
 }
 
-void OverlayWindow::anchor_shown (const QRect& game, const QPoint& offset,
-                                  const QSize& tip, bool pinned_x, bool pinned_y,
-                                  const QPoint& pin)
+void OverlayWindow::anchor_shown (const QRect& game, const QPoint& offset, const QSize& tip,
+                                  bool pinned_x, bool pinned_y, const QPoint& pin)
 {
    if (impl_->augment) {
       impl_->augment->anchor_shown (game, offset, tip, pinned_x, pinned_y, pin);
    }
 }
 
-void OverlayWindow::anchor_lost (bool immediate)
+// Invalidate the item when its anchor ends or is replaced.
+// Example: Bandage followed by an unrecognized box cannot restore Bandage
+// when the game regains focus. No presentation survives this event.
+void OverlayWindow::anchor_lost ()
 {
-   if (impl_->augment) impl_->augment->anchor_lost (immediate);
-   if (immediate) impl_->last.reset ();
+   impl_->last.reset ();
+
+   if (impl_->augment) {
+      impl_->augment->anchor_lost ();
+   }
 }
 
 }

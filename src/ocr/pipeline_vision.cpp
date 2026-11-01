@@ -59,6 +59,8 @@ struct VisionHealth {
    std::uint64_t empty = 0;
    std::uint64_t errors = 0;
    std::uint64_t identity_failures = 0;
+   std::uint64_t overlay_skipped = 0;
+   std::uint64_t rejected_skipped = 0;
    std::uint64_t tracked = 0;
    std::uint64_t accepted = 0;
    std::uint64_t cursor_valid = 0;
@@ -95,6 +97,8 @@ struct VisionHealth {
             { "empty", std::to_string (empty) },
             { "errors", std::to_string (errors) },
             { "identity_failures", std::to_string (identity_failures) },
+            { "overlay_skipped", std::to_string (overlay_skipped) },
+            { "rejected_skipped", std::to_string (rejected_skipped) },
             { "tracked", std::to_string (tracked) },
             { "accepted", std::to_string (accepted) },
             { "cursor_valid", std::to_string (cursor_valid) },
@@ -170,7 +174,7 @@ void Pipeline::Impl::vision_loop ()
       tracking.store (false, std::memory_order_relaxed);
       generation.fetch_add (1, std::memory_order_relaxed);
       anchor_generation = 0;
-      if (anchor_lost_cb) anchor_lost_cb (true);
+      if (anchor_lost_cb) anchor_lost_cb ();
       core::log::vision.event ("tooltip_lost",
                                {
                                   { "generation", std::to_string (lost_generation) },
@@ -210,6 +214,11 @@ void Pipeline::Impl::vision_loop ()
              !force_scans.compare_exchange_weak (pending, pending - 1, std::memory_order_relaxed)) {
       }
       const bool forced = pending > 0;
+
+      if (!forced && state.current ().has_value () &&
+          rejected.contains (*state.current (), config.identity_bits, config.identity_size_px)) {
+         lose ("not_a_tooltip");
+      }
 
       cv::Mat image {
          frame.height,
@@ -270,6 +279,26 @@ void Pipeline::Impl::vision_loop ()
                                 .count ();
       last_detect_ms.store (detect_ms);
       health.record_detection (detect_ms);
+
+      if (detected.has_value () && !detected->empty ()) {
+         const auto own_card = [&] (const vision::TooltipBox& box) {
+            return overlay.covers (box.rect, frame.origin_x, frame.origin_y, frame.timestamp);
+         };
+         const auto before = detected->size ();
+         std::erase_if (*detected, own_card);
+         if (detected->size () != before) ++health.overlay_skipped;
+      }
+
+      if (!forced && detected.has_value () && !detected->empty ()) {
+         const auto before = detected->size ();
+         std::erase_if (*detected, [&] (const vision::TooltipBox& box) {
+            const auto selection = vision::TooltipTracker::select (image, box.rect);
+            const auto candidate = TooltipObservation::read (image, selection.rect, frame.cursor);
+            return candidate.has_value () &&
+                   rejected.contains (*candidate, config.identity_bits, config.identity_size_px);
+         });
+         health.rejected_skipped += before - detected->size ();
+      }
 
       std::optional<capture::Rect> selected;
       std::optional<capture::Rect> detector_box;
@@ -335,7 +364,7 @@ void Pipeline::Impl::vision_loop ()
          tracking.store (false, std::memory_order_relaxed);
          generation.fetch_add (1, std::memory_order_relaxed);
          anchor_generation = 0;
-         if (anchor_lost_cb) anchor_lost_cb (true);
+         if (anchor_lost_cb) anchor_lost_cb ();
          evidence.snapshot (previous_generation, "lost", image,
                             detected.has_value () ? *detected : empty);
          core::log::vision.event ("tooltip_lost",
@@ -367,7 +396,7 @@ void Pipeline::Impl::vision_loop ()
          continue;
 
       if (was_active) {
-         if (anchor_lost_cb) anchor_lost_cb (false);
+         if (anchor_lost_cb) anchor_lost_cb ();
          evidence.event (previous_generation, "replaced",
                          {
                             { "identity_distance", std::to_string (update.identity_distance) },

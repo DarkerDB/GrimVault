@@ -41,7 +41,7 @@ jobs:
 
    windows:
       name: Windows MSVC
-      runs-on: windows-2022
+      runs-on: windows-2025
       env:
          VCPKG_COMMIT: 2b65c20fc66eda893aa15a15a453c3cf09500b19
          VCPKG_BINARY_SOURCES: clear;files,V:\.vcpkg-cache,readwrite
@@ -79,9 +79,10 @@ jobs:
               "OpenCV_DIR=$opencv" | Out-File -FilePath $env:GITHUB_ENV -Append
 
          - uses: actions/cache@v4
+           id: vcpkg-cache
            with:
               path: .vcpkg-cache
-              key: vcpkg-windows-2022-test-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
+              key: vcpkg-windows-2025-test-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
 
          - uses: actions/checkout@v4
            with:
@@ -91,12 +92,22 @@ jobs:
               fetch-depth: 1
 
          - name: Configure
+           id: configure
            shell: pwsh
            run: |
               subst V: "$env:GITHUB_WORKSPACE"
               V:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
               $env:VCPKG_ROOT = 'V:\vcpkg'
-              cmake --preset windows-msvc-test "-DOpenCV_DIR=$env:OpenCV_DIR"
+              cmake --preset windows-msvc-test `
+                 "-DOpenCV_DIR=$env:OpenCV_DIR" `
+                 "-DVCPKG_MANIFEST_NO_DEFAULT_FEATURES=ON"
+
+         - name: Save configured dependencies
+           if: always() && steps.configure.outcome == 'success' && steps.vcpkg-cache.outputs.cache-hit != 'true'
+           uses: actions/cache/save@v4
+           with:
+              path: .vcpkg-cache
+              key: vcpkg-windows-2025-test-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
 
          - name: Build
            shell: pwsh

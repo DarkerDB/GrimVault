@@ -1,10 +1,11 @@
 #include <gv/ui/screen.h>
+#include <gv/core/logger.h>
 
 #include <QWindow>
 
 #ifdef _WIN32
-   #include <Windows.h>
-   #include <ShellScalingApi.h>
+#include <Windows.h>
+#include <ShellScalingApi.h>
 #endif
 
 namespace gv::ui::screen {
@@ -51,13 +52,8 @@ void move (QWindow* window, const QPoint& physical)
 #ifdef _WIN32
    // SetWindowPos takes physical pixels directly; Qt back-maps the resulting
    // geometry to logical coordinates itself on WM_WINDOWPOSCHANGED.
-   ::SetWindowPos (
-      reinterpret_cast<HWND> (window->winId ()),
-      nullptr,
-      physical.x (), physical.y (),
-      0, 0,
-      SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
-   );
+   ::SetWindowPos (reinterpret_cast<HWND> (window->winId ()), nullptr, physical.x (), physical.y (),
+                   0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 #else
    window->setPosition (physical);
 #endif
@@ -69,16 +65,48 @@ void make_passthrough (QWindow* window)
    const HWND h = reinterpret_cast<HWND> (window->winId ());
    const LONG_PTR ex = ::GetWindowLongPtrW (h, GWL_EXSTYLE);
    ::SetWindowLongPtrW (h, GWL_EXSTYLE,
-      ex | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW);
+                        ex | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW);
 
    // Qt::WindowTransparentForInput and WS_EX_TRANSPARENT are not a formal
    // cross-process hit-test exclusion. A disabled top-level HWND is skipped
    // by Windows point selection, cannot activate, and still keeps its Qt
    // Quick / DirectComposition content visible.
    ::EnableWindow (h, FALSE);
+   exclude_from_capture (window);
 #else
    Q_UNUSED (window);
 #endif
 }
 
-} // namespace gv::ui::screen
+// Input: our native top-level window. Output: true when excluded from
+// capture. Example: an excluded blue card over red captures as red.
+bool exclude_from_capture (QWindow* window)
+{
+#ifdef _WIN32
+   if (window == nullptr) {
+      return false;
+   }
+
+   const HWND handle = reinterpret_cast<HWND> (window->winId ());
+   DWORD affinity = WDA_NONE;
+   const bool already_excluded =
+      ::GetWindowDisplayAffinity (handle, &affinity) && affinity == WDA_EXCLUDEFROMCAPTURE;
+
+   if (already_excluded) {
+      return true;
+   }
+
+   if (!::SetWindowDisplayAffinity (handle, WDA_EXCLUDEFROMCAPTURE)) {
+      core::Logger::warn ("overlay: capture exclusion failed error={}", ::GetLastError ());
+      return false;
+   }
+
+   core::Logger::info ("overlay: excluded from desktop capture");
+   return true;
+#else
+   Q_UNUSED (window);
+   return false;
+#endif
+}
+
+}  // namespace gv::ui::screen

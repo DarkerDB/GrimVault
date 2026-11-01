@@ -1,3 +1,4 @@
+#include <gv/api/price_check_url.h>
 #include <gv/app/controller.h>
 
 #include <gv/api/darkerdb_client.h>
@@ -8,6 +9,7 @@
 #include <gv/db/repos/user_settings_repo.h>
 #include <gv/ocr/game_locale.h>
 #include <gv/ocr/pipeline.h>
+#include <gv/ocr/tooltip_filter.h>
 #include <gv/ui/debug_overlay.h>
 #include <gv/ui/overlay_window.h>
 
@@ -34,113 +36,123 @@ namespace gv::app {
 
 namespace {
 
-   struct DefaultRow { const char* action; const char* accelerator; };
+struct DefaultRow {
+   const char* action;
+   const char* accelerator;
+};
 
-   constexpr std::array<DefaultRow, 3> k_defaults = {{
-      { Actions::k_scan_now,       DefaultAccelerators::scan_now       },
-      { Actions::k_toggle_overlay,  DefaultAccelerators::toggle_overlay  },
-      { Actions::k_open_in_browser, DefaultAccelerators::open_in_browser },
-   }};
+constexpr std::array<DefaultRow, 3> k_defaults = { {
+   { Actions::k_scan_now, DefaultAccelerators::scan_now },
+   { Actions::k_toggle_overlay, DefaultAccelerators::toggle_overlay },
+   { Actions::k_open_in_browser, DefaultAccelerators::open_in_browser },
+} };
 
-   constexpr auto k_analysis_refresh_interval = std::chrono::seconds { 10 };
+constexpr auto k_analysis_refresh_interval = std::chrono::seconds { 10 };
 
-   const char* mode_name (Mode m)
-   {
-      switch (m) {
-         case Mode::Auto:     return "automatic";
-         case Mode::Manual:   return "manual";
-         case Mode::Disabled: return "disabled";
-      }
-      return "automatic";
-   }
-
-   std::string fingerprint_for (const api::TooltipLookup& lookup)
-   {
-      std::uint64_t hash = 1469598103934665603ULL;
-      const auto add = [&hash] (std::string_view value) {
-         for (const unsigned char ch : value) {
-            hash ^= ch;
-            hash *= 1099511628211ULL;
-         }
-         hash ^= 0xff;
-         hash *= 1099511628211ULL;
-      };
-      add (lookup.item_id);
-      for (const auto& roll : lookup.rolls) {
-         add (roll.attribute_id);
-         add (roll.formatted_value);
-      }
-      std::ostringstream out;
-      out << std::hex << std::setfill ('0') << std::setw (16) << hash;
-      return out.str ();
-   }
-
-   // Empty handler = unknown action. Bind and rebind both dispatch through
-   // here so a new action can never be bindable from one path and not the
-   // other.
-   core::HotkeyManager::Handler handler_for (std::string_view action,
-                                             QPointer<Controller> self)
-   {
-      if (action == Actions::k_scan_now)
-         return [self] { if (self) self->action_scan_now       (); };
-      if (action == Actions::k_toggle_overlay)
-         return [self] { if (self) self->action_toggle_overlay (); };
-      if (action == Actions::k_open_in_browser)
-         return [self] { if (self) self->action_open_in_browser (); };
-
-      return {};
-   }
-
-} // namespace
-
-struct Controller::Impl
+const char* mode_name (Mode m)
 {
-   Controller&            self;
-   Dependencies           deps;
+   switch (m) {
+      case Mode::Auto:
+         return "automatic";
+      case Mode::Manual:
+         return "manual";
+      case Mode::Disabled:
+         return "disabled";
+   }
+   return "automatic";
+}
 
-   std::atomic<Mode>      mode { Mode::Auto };
-   std::atomic<bool>      authenticated { false };
-   std::atomic<bool>      performance_mode { false };
-   std::mutex             session_lock;
-   std::int64_t           session_id = 0;
-   std::string            account_id;
+std::string fingerprint_for (const api::TooltipLookup& lookup)
+{
+   std::uint64_t hash = 1469598103934665603ULL;
+   const auto add = [&hash] (std::string_view value) {
+      for (const unsigned char ch : value) {
+         hash ^= ch;
+         hash *= 1099511628211ULL;
+      }
+      hash ^= 0xff;
+      hash *= 1099511628211ULL;
+   };
+   add (lookup.item_id);
+   for (const auto& roll : lookup.rolls) {
+      add (roll.attribute_id);
+      add (roll.formatted_value);
+   }
+   std::ostringstream out;
+   out << std::hex << std::setfill ('0') << std::setw (16) << hash;
+   return out.str ();
+}
+
+// Empty handler = unknown action. Bind and rebind both dispatch through
+// here so a new action can never be bindable from one path and not the
+// other.
+core::HotkeyManager::Handler handler_for (std::string_view action, QPointer<Controller> self)
+{
+   if (action == Actions::k_scan_now)
+      return [self] {
+         if (self) self->action_scan_now ();
+      };
+   if (action == Actions::k_toggle_overlay)
+      return [self] {
+         if (self) self->action_toggle_overlay ();
+      };
+   if (action == Actions::k_open_in_browser)
+      return [self] {
+         if (self) self->action_open_in_browser ();
+      };
+
+   return {};
+}
+
+}  // namespace
+
+struct Controller::Impl {
+   Controller& self;
+   Dependencies deps;
+
+   std::atomic<Mode> mode { Mode::Auto };
+   std::atomic<bool> authenticated { false };
+   std::atomic<bool> performance_mode { false };
+   std::mutex session_lock;
+   std::int64_t session_id = 0;
+   std::string account_id;
 
    // What overlay:mode last said. toggle_overlay flips between Disabled and
    // this, so a player in Manual who hides and re-shows the card lands back
    // in Manual rather than being silently upgraded to Auto.
-   std::atomic<Mode>      configured_mode { Mode::Auto };
-   std::atomic<bool>      mode_adopted { false };
-   std::atomic<bool>      debug_overlay { false };
+   std::atomic<Mode> configured_mode { Mode::Auto };
+   std::atomic<bool> mode_adopted { false };
+   std::atomic<bool> debug_overlay { false };
 
    // Last known game window state (updated from tracker thread, read by
    // mouse watcher + main thread).
-   std::mutex             state_lock;
-   core::WindowEvent      last_event {};
+   std::mutex state_lock;
+   core::WindowEvent last_event {};
 
    // Network analysis never blocks an OCR worker. A single latest-only slot
    // coalesces rapid hover changes while an older request is in flight; the
    // generation checks on both sides of the request prevent stale reveals.
    struct AnalysisJob {
       ocr::RecognizedTooltip tooltip;
-      std::string            language;
+      std::string language;
       std::vector<std::string> enabled_widgets;
    };
-   std::thread                analysis_thread;
-   std::mutex                 analysis_lock;
-   std::condition_variable    analysis_ready;
+   std::thread analysis_thread;
+   std::mutex analysis_lock;
+   std::condition_variable analysis_ready;
    std::optional<AnalysisJob> pending_analysis;
-   bool                       analysis_stopping = false;
-   std::mutex                 widgets_lock;
-   std::vector<std::string>   enabled_widgets;
+   bool analysis_stopping = false;
+   std::mutex widgets_lock;
+   std::vector<std::string> enabled_widgets;
 
    // Cache of currently bound accelerators by action id.
-   std::mutex                                  hk_lock;
+   std::mutex hk_lock;
    std::unordered_map<std::string, std::string> accels;
 
-   // SPA origin and the last item analysed, for the open-in-browser action.
+   // SPA origin and the exact analyzed roll share route for open-in-browser.
    std::string browse_base;
-   std::mutex  browse_lock;
-   std::string last_item_id;
+   std::mutex browse_lock;
+   std::string last_price_check_path;
 
    mutable std::mutex language_lock;
    std::string language_selection;
@@ -155,13 +167,13 @@ struct Controller::Impl
    // Latest anchor from the pipeline, Qt-thread only. Re-applied when the
    // game window moves so the Augment presenter gets fresh bounds.
    ocr::Pipeline::AnchorEvent live_anchor {};
-   bool                       has_live_anchor = false;
+   bool has_live_anchor = false;
 
    void sync_pipeline ()
    {
       const auto current = mode.load (std::memory_order_relaxed);
-      const bool active = authenticated.load (std::memory_order_relaxed)
-         && current != Mode::Disabled;
+      const bool active =
+         authenticated.load (std::memory_order_relaxed) && current != Mode::Disabled;
 
       if (deps.pipeline) {
          deps.pipeline->set_automatic (current == Mode::Auto);
@@ -179,7 +191,7 @@ struct Controller::Impl
       has_live_anchor = false;
       {
          std::lock_guard lk { browse_lock };
-         last_item_id.clear ();
+         last_price_check_path.clear ();
       }
       if (deps.overlay) deps.overlay->clear ();
       if (deps.debug) deps.debug->clear_anchor ();
@@ -214,8 +226,10 @@ struct Controller::Impl
          return;
       }
       try {
-         SQLite::Statement update { deps.db->sqlite (),
-            "UPDATE session_runs SET ended_at = unixepoch () WHERE session_id = ?" };
+         SQLite::Statement update {
+            deps.db->sqlite (),
+            "UPDATE session_runs SET ended_at = unixepoch () WHERE session_id = ?"
+         };
          update.bind (1, session_id);
          update.exec ();
       } catch (const std::exception& e) {
@@ -234,26 +248,23 @@ struct Controller::Impl
       }
       if (!ev.visible) return;
 
-      const QRect  game   { ev.bounds.x, ev.bounds.y, ev.bounds.w, ev.bounds.h };
+      const QRect game { ev.bounds.x, ev.bounds.y, ev.bounds.w, ev.bounds.h };
       const QPoint offset { live_anchor.offset_x, live_anchor.offset_y };
-      const QSize  tip    { live_anchor.w, live_anchor.h };
-      const QPoint pin    { live_anchor.pin_x, live_anchor.pin_y };
+      const QSize tip { live_anchor.w, live_anchor.h };
+      const QPoint pin { live_anchor.pin_x, live_anchor.pin_y };
 
-      if (deps.overlay) deps.overlay->anchor_shown (
-         game, offset, tip, live_anchor.pinned_x, live_anchor.pinned_y, pin);
+      if (deps.overlay)
+         deps.overlay->anchor_shown (game, offset, tip, live_anchor.pinned_x, live_anchor.pinned_y,
+                                     pin);
       if (deps.debug && debug_overlay.load ()) {
-         deps.debug->set_anchor (
-            live_anchor.generation, offset, tip,
-            live_anchor.pinned_x, live_anchor.pinned_y, pin);
+         deps.debug->set_anchor (live_anchor.generation, offset, tip, live_anchor.pinned_x,
+                                 live_anchor.pinned_y, pin);
       }
    }
 
    explicit Impl (Controller& s, Dependencies d) : self (s), deps (std::move (d)) {}
 
-   ~Impl ()
-   {
-      stop_analysis_worker ();
-   }
+   ~Impl () { stop_analysis_worker (); }
 
    void start_analysis_worker ()
    {
@@ -300,10 +311,8 @@ struct Controller::Impl
             const auto ready = [this] {
                return analysis_stopping || pending_analysis.has_value ();
             };
-            if (current_analysis)
-               analysis_ready.wait_for (lk, k_analysis_refresh_interval, ready);
-            else
-               analysis_ready.wait (lk, ready);
+            if (current_analysis) analysis_ready.wait_for (lk, k_analysis_refresh_interval, ready);
+            else analysis_ready.wait (lk, ready);
             if (analysis_stopping) return;
             initial = pending_analysis.has_value ();
             if (initial) {
@@ -313,124 +322,136 @@ struct Controller::Impl
             job = *current_analysis;
          }
 
-         if (!authenticated.load (std::memory_order_relaxed)
-             || mode.load (std::memory_order_relaxed) == Mode::Disabled || !deps.api) {
+         if (!authenticated.load (std::memory_order_relaxed) ||
+             mode.load (std::memory_order_relaxed) == Mode::Disabled || !deps.api) {
             current_analysis.reset ();
             continue;
          }
          if (deps.pipeline && !deps.pipeline->is_current (job.tooltip.generation)) {
             current_analysis.reset ();
-            deps.pipeline->record_evidence (job.tooltip.generation, "analysis_discarded", {
-               { "reason", "stale_before_request" },
-            });
+            deps.pipeline->record_evidence (job.tooltip.generation, "analysis_discarded",
+                                            {
+                                               { "reason", "stale_before_request" },
+                                            });
             continue;
          }
 
          const auto analysis_started = std::chrono::steady_clock::now ();
          auto result = deps.api->analyze_tooltip (
             job.tooltip.text, job.language, job.tooltip.confidence,
-            capture::backend_name (job.tooltip.backend), job.tooltip.gems,
-            job.enabled_widgets, job.tooltip.rarity, k_analysis_refresh_interval);
+            capture::backend_name (job.tooltip.backend), job.tooltip.gems, job.enabled_widgets,
+            job.tooltip.rarity, k_analysis_refresh_interval);
          const auto analysis_ms = std::chrono::duration_cast<std::chrono::milliseconds> (
-            std::chrono::steady_clock::now () - analysis_started).count ();
+                                     std::chrono::steady_clock::now () - analysis_started)
+                                     .count ();
 
-         if (!authenticated.load (std::memory_order_relaxed)
-             || mode.load (std::memory_order_relaxed) == Mode::Disabled) {
+         if (!authenticated.load (std::memory_order_relaxed) ||
+             mode.load (std::memory_order_relaxed) == Mode::Disabled) {
             current_analysis.reset ();
             continue;
          }
          if (deps.pipeline && !deps.pipeline->is_current (job.tooltip.generation)) {
             current_analysis.reset ();
-            core::log::ocr.event ("analysis_discarded", {
-               { "reason", "stale_generation" },
-               { "generation", std::to_string (job.tooltip.generation) },
-            });
-            deps.pipeline->record_evidence (job.tooltip.generation, "analysis_discarded", {
-               { "reason", "stale_after_request" },
-            });
+            core::log::ocr.event ("analysis_discarded",
+                                  {
+                                     { "reason", "stale_generation" },
+                                     { "generation", std::to_string (job.tooltip.generation) },
+                                  });
+            deps.pipeline->record_evidence (job.tooltip.generation, "analysis_discarded",
+                                            {
+                                               { "reason", "stale_after_request" },
+                                            });
             continue;
          }
          if (!result.has_value ()) {
-            core::log::api.event ("analysis.failed", {
-               { "generation", std::to_string (job.tooltip.generation) },
-               { "elapsed_ms", std::to_string (analysis_ms) },
-               { "kind", std::string { core::kind_name (result.error ().kind) } },
-            });
-            if (deps.pipeline) deps.pipeline->record_evidence (
-               job.tooltip.generation, "analysis_failed", {
-                  { "message", result.error ().message },
+            core::log::api.event (
+               "analysis.failed",
+               {
+                  { "generation", std::to_string (job.tooltip.generation) },
                   { "elapsed_ms", std::to_string (analysis_ms) },
+                  { "kind", std::string { core::kind_name (result.error ().kind) } },
                });
+            if (deps.pipeline)
+               deps.pipeline->record_evidence (job.tooltip.generation, "analysis_failed",
+                                               {
+                                                  { "message", result.error ().message },
+                                                  { "elapsed_ms", std::to_string (analysis_ms) },
+                                               });
             continue;
          }
 
          auto lookup = std::move (*result);
-         core::log::api.event ("analysis.ready", {
-            { "generation", std::to_string (job.tooltip.generation) },
-            { "item_id", lookup.item_id },
-            { "request_id", lookup.request_id },
-            { "capture_backend", std::string { capture::backend_name (job.tooltip.backend) } },
-            { "comps", std::to_string (lookup.pricing.sample_size) },
-            { "confidence", lookup.pricing.confidence },
-            { "elapsed_ms", std::to_string (analysis_ms) },
-         });
-         core::log::api.event ("analysis.interpreted", {
-            { "generation", std::to_string (job.tooltip.generation) },
-            { "data", api::diagnostic (lookup).dump () },
-         });
-         if (deps.pipeline) deps.pipeline->record_evidence (
-            job.tooltip.generation, "analysis_ready", {
+         core::log::api.event (
+            "analysis.ready",
+            {
+               { "generation", std::to_string (job.tooltip.generation) },
                { "item_id", lookup.item_id },
                { "request_id", lookup.request_id },
+               { "capture_backend", std::string { capture::backend_name (job.tooltip.backend) } },
+               { "comps", std::to_string (lookup.pricing.sample_size) },
                { "confidence", lookup.pricing.confidence },
                { "elapsed_ms", std::to_string (analysis_ms) },
             });
+         core::log::api.event ("analysis.interpreted",
+                               {
+                                  { "generation", std::to_string (job.tooltip.generation) },
+                                  { "data", api::diagnostic (lookup).dump () },
+                               });
+         if (deps.pipeline)
+            deps.pipeline->record_evidence (job.tooltip.generation, "analysis_ready",
+                                            {
+                                               { "item_id", lookup.item_id },
+                                               { "request_id", lookup.request_id },
+                                               { "confidence", lookup.pricing.confidence },
+                                               { "elapsed_ms", std::to_string (analysis_ms) },
+                                            });
          if (initial) persist_find (lookup);
          {
             std::lock_guard lk { browse_lock };
-            last_item_id = lookup.item_id;
+            last_price_check_path = api::price_check_path (lookup);
          }
 
          QPointer<Controller> guard { &self };
-         QMetaObject::invokeMethod (&self,
+         QMetaObject::invokeMethod (
+            &self,
             [guard, lookup = std::move (lookup), rect = job.tooltip.rect,
              generation = job.tooltip.generation] () mutable {
                if (!guard || !guard->impl_->deps.overlay) return;
                if (!guard->impl_->authenticated.load ()) return;
                if (guard->impl_->mode.load () == Mode::Disabled) return;
-               if (guard->impl_->deps.pipeline
-                   && !guard->impl_->deps.pipeline->is_current (generation)) return;
-               if (!guard->impl_->has_live_anchor
-                   || guard->impl_->live_anchor.generation != generation) return;
+               if (guard->impl_->deps.pipeline &&
+                   !guard->impl_->deps.pipeline->is_current (generation))
+                  return;
+               if (!guard->impl_->has_live_anchor ||
+                   guard->impl_->live_anchor.generation != generation)
+                  return;
 
                core::WindowRect bounds;
                bool active;
                {
                   std::lock_guard lk { guard->impl_->state_lock };
                   bounds = guard->impl_->last_event.bounds;
-                  active = guard->impl_->last_event.visible
-                        && guard->impl_->last_event.focused;
+                  active = guard->impl_->last_event.visible && guard->impl_->last_event.focused;
                }
                if (!active) return;
 
-               const QRect game {
-                  bounds.x, bounds.y, bounds.w, bounds.h
-               };
-               const QRect anchor {
-                  bounds.x + rect.x, bounds.y + rect.y, rect.w, rect.h
-               };
+               const QRect game { bounds.x, bounds.y, bounds.w, bounds.h };
+               const QRect anchor { bounds.x + rect.x, bounds.y + rect.y, rect.w, rect.h };
 
                guard->impl_->deps.overlay->present (lookup, game, anchor, true);
-               core::log::ui.event ("overlay.presented", {
-                  { "generation", std::to_string (generation) },
-                  { "item_id", lookup.item_id },
-               });
-               if (guard->impl_->deps.pipeline) guard->impl_->deps.pipeline->record_evidence (
-                  generation, "overlay_presented", {
-                     { "item_id", lookup.item_id },
-                  });
+               core::log::ui.event ("overlay.presented",
+                                    {
+                                       { "generation", std::to_string (generation) },
+                                       { "item_id", lookup.item_id },
+                                    });
+               if (guard->impl_->deps.pipeline)
+                  guard->impl_->deps.pipeline->record_evidence (generation, "overlay_presented",
+                                                                {
+                                                                   { "item_id", lookup.item_id },
+                                                                });
                emit guard->overlayPresented ();
-            }, Qt::QueuedConnection);
+            },
+            Qt::QueuedConnection);
       }
    }
 
@@ -450,7 +471,7 @@ struct Controller::Impl
             { "rolls", nlohmann::json::array () },
          };
          for (const auto& roll : lookup.rolls) {
-            attrs ["rolls"].push_back ({
+            attrs["rolls"].push_back ({
                { "attribute_id", roll.attribute_id },
                { "formatted_value", roll.formatted_value },
                { "roll_percentile", roll.roll_percentile },
@@ -480,16 +501,14 @@ struct Controller::Impl
 };
 
 Controller::Controller (Dependencies deps, QObject* parent)
-   : QObject (parent), impl_ (std::make_unique<Impl> (*this, std::move (deps)))
+    : QObject (parent), impl_ (std::make_unique<Impl> (*this, std::move (deps)))
 {
    qRegisterMetaType<Mode> ("gv::app::Mode");
 
-   const bool highlights_enabled = impl_->deps.highlight_game
-                                || impl_->deps.highlight_objects;
+   const bool highlights_enabled = impl_->deps.highlight_game || impl_->deps.highlight_objects;
    impl_->debug_overlay.store (highlights_enabled);
    if (impl_->deps.debug) {
-      impl_->deps.debug->set_highlights (
-         impl_->deps.highlight_game, impl_->deps.highlight_objects);
+      impl_->deps.debug->set_highlights (impl_->deps.highlight_game, impl_->deps.highlight_objects);
       impl_->deps.debug->set_enabled (highlights_enabled);
    }
 
@@ -503,25 +522,30 @@ Controller::Controller (Dependencies deps, QObject* parent)
    if (impl_->deps.pipeline) {
       QPointer<Controller> self { this };
 
-      impl_->deps.pipeline->on_anchor (
-         [self] (const ocr::Pipeline::AnchorEvent& ev) {
-            if (!self) return;
-            QMetaObject::invokeMethod (self, [self, ev] {
+      impl_->deps.pipeline->on_anchor ([self] (const ocr::Pipeline::AnchorEvent& ev) {
+         if (!self) return;
+         QMetaObject::invokeMethod (
+            self,
+            [self, ev] {
                if (!self) return;
-               self->impl_->live_anchor     = ev;
+               self->impl_->live_anchor = ev;
                self->impl_->has_live_anchor = true;
                self->impl_->apply_anchor ();
-            }, Qt::QueuedConnection);
-         });
+            },
+            Qt::QueuedConnection);
+      });
 
-      impl_->deps.pipeline->on_anchor_lost ([self] (bool immediate) {
+      impl_->deps.pipeline->on_anchor_lost ([self] () {
          if (!self) return;
-         QMetaObject::invokeMethod (self, [self, immediate] {
-            if (!self) return;
-            self->impl_->has_live_anchor = false;
-            if (self->impl_->deps.overlay) self->impl_->deps.overlay->anchor_lost (immediate);
-            if (self->impl_->deps.debug)   self->impl_->deps.debug->clear_anchor ();
-         }, Qt::QueuedConnection);
+         QMetaObject::invokeMethod (
+            self,
+            [self] {
+               if (!self) return;
+               self->impl_->has_live_anchor = false;
+               if (self->impl_->deps.overlay) self->impl_->deps.overlay->anchor_lost ();
+               if (self->impl_->deps.debug) self->impl_->deps.debug->clear_anchor ();
+            },
+            Qt::QueuedConnection);
       });
    }
 
@@ -534,7 +558,10 @@ Controller::~Controller ()
    impl_->end_session ();
 }
 
-Mode Controller::mode () const noexcept { return impl_->mode.load (); }
+Mode Controller::mode () const noexcept
+{
+   return impl_->mode.load ();
+}
 
 void Controller::set_enabled_widgets (std::vector<std::string> widgets)
 {
@@ -589,10 +616,8 @@ void Controller::set_configured_mode (Mode m)
    const Mode previous = impl_->configured_mode.exchange (m);
    const bool adopting = !impl_->mode_adopted.exchange (true);
 
-   if (adopting && m == Mode::Disabled)
-      m = Mode::Auto;
-   else if (previous == m)
-      return;
+   if (adopting && m == Mode::Disabled) m = Mode::Auto;
+   else if (previous == m) return;
 
    if (impl_->mode.load () == m) return;
 
@@ -651,8 +676,8 @@ void Controller::set_language (std::string selection)
 
    const auto family = ocr::family_of (*resolved);
    if (impl_->deps.pipeline) impl_->deps.pipeline->set_language (*resolved);
-   core::Logger::info ("controller: game language '{}' source={} (ocr family '{}')",
-      *resolved, source, std::string { ocr::family_dir (family) });
+   core::Logger::info ("controller: game language '{}' source={} (ocr family '{}')", *resolved,
+                       source, std::string { ocr::family_dir (family) });
 }
 
 std::string Controller::language () const
@@ -684,7 +709,7 @@ int Controller::bind_hotkeys_from_repo ()
    for (const auto& row : k_defaults) {
       if (!rows.contains (row.action)) {
          rows.emplace (row.action, row.accelerator);
-         (void) impl_->deps.hotkeys_repo->set (row.action, row.accelerator);
+         (void)impl_->deps.hotkeys_repo->set (row.action, row.accelerator);
       }
    }
 
@@ -701,10 +726,13 @@ int Controller::bind_hotkeys_from_repo ()
       auto r = impl_->deps.hotkeys->bind (action, accel, std::move (handler));
       if (r.has_value ()) {
          ++bound;
-         { std::lock_guard lk { impl_->hk_lock }; impl_->accels [action] = accel; }
+         {
+            std::lock_guard lk { impl_->hk_lock };
+            impl_->accels[action] = accel;
+         }
       } else {
-         core::Logger::warn ("controller: bind failed for {} → {}: {}",
-            action, accel, r.error ().message);
+         core::Logger::warn ("controller: bind failed for {} → {}: {}", action, accel,
+                             r.error ().message);
       }
    }
 
@@ -715,8 +743,8 @@ int Controller::bind_hotkeys_from_repo ()
 core::Result<void> Controller::rebind_hotkey (std::string action, std::string accelerator)
 {
    if (!impl_->deps.hotkeys || !impl_->deps.hotkeys_repo) {
-      return core::fail (core::Error::make (core::ErrorKind::Internal,
-         "controller: hotkeys not initialized"));
+      return core::fail (
+         core::Error::make (core::ErrorKind::Internal, "controller: hotkeys not initialized"));
    }
 
    QPointer<Controller> self { this };
@@ -724,7 +752,7 @@ core::Result<void> Controller::rebind_hotkey (std::string action, std::string ac
    auto handler = handler_for (action, self);
    if (!handler) {
       return core::fail (core::Error::make (core::ErrorKind::InvalidArgument,
-         "controller: unknown action '{}'", action));
+                                            "controller: unknown action '{}'", action));
    }
 
    // Nothing to do when the dashboard re-sends an accelerator we already
@@ -744,10 +772,13 @@ core::Result<void> Controller::rebind_hotkey (std::string action, std::string ac
    auto persist = impl_->deps.hotkeys_repo->set (action, accelerator);
    if (!persist.has_value ()) {
       core::Logger::warn ("controller: rebind succeeded but persist failed: {}",
-         persist.error ().message);
+                          persist.error ().message);
    }
 
-   { std::lock_guard lk { impl_->hk_lock }; impl_->accels [action] = accelerator; }
+   {
+      std::lock_guard lk { impl_->hk_lock };
+      impl_->accels[action] = accelerator;
+   }
 
    emit hotkeysChanged ();
    return {};
@@ -755,13 +786,16 @@ core::Result<void> Controller::rebind_hotkey (std::string action, std::string ac
 
 void Controller::action_scan_now ()
 {
-   QMetaObject::invokeMethod (this, [this] {
-      if (impl_->authenticated.load ()
-          && impl_->mode.load () != Mode::Disabled && impl_->deps.pipeline) {
-         core::Logger::info ("hotkey: scan_now");
-         impl_->deps.pipeline->request_immediate_scan ();
-      }
-   }, Qt::QueuedConnection);
+   QMetaObject::invokeMethod (
+      this,
+      [this] {
+         if (impl_->authenticated.load () && impl_->mode.load () != Mode::Disabled &&
+             impl_->deps.pipeline) {
+            core::Logger::info ("hotkey: scan_now");
+            impl_->deps.pipeline->request_immediate_scan ();
+         }
+      },
+      Qt::QueuedConnection);
 }
 
 void Controller::set_browse_base (std::string url)
@@ -775,41 +809,44 @@ void Controller::action_open_in_browser ()
    std::string url;
    {
       std::lock_guard lk { impl_->browse_lock };
-      if (impl_->browse_base.empty () || impl_->last_item_id.empty ()) {
+      if (impl_->browse_base.empty () || impl_->last_price_check_path.empty ()) {
          core::Logger::info ("hotkey: open in browser — nothing analysed yet");
          return;
       }
-      url = impl_->browse_base + "/items/" + impl_->last_item_id;
+      url = impl_->browse_base + impl_->last_price_check_path;
    }
 
    core::Logger::info ("hotkey: opening {}", url);
-   QMetaObject::invokeMethod (this, [url] {
-      QDesktopServices::openUrl (QUrl (QString::fromStdString (url)));
-   }, Qt::QueuedConnection);
+   QMetaObject::invokeMethod (
+      this, [url] { QDesktopServices::openUrl (QUrl (QString::fromStdString (url))); },
+      Qt::QueuedConnection);
 }
 
 void Controller::action_toggle_overlay ()
 {
-   QMetaObject::invokeMethod (this, [this] {
-      Mode next = Mode::Disabled;
+   QMetaObject::invokeMethod (
+      this,
+      [this] {
+         Mode next = Mode::Disabled;
 
-      if (impl_->mode.load () == Mode::Disabled) {
-         // Coming back on: return to whatever the dashboard configured, so a
-         // player in Manual isn't silently upgraded to Auto. When the
-         // dashboard is itself what turned the overlay off there is nothing
-         // to restore, and refusing to come back would make the hotkey look
-         // broken — fall back to Auto.
-         const Mode configured = impl_->configured_mode.load ();
-         next = configured == Mode::Disabled ? Mode::Auto : configured;
-      }
+         if (impl_->mode.load () == Mode::Disabled) {
+            // Coming back on: return to whatever the dashboard configured, so a
+            // player in Manual isn't silently upgraded to Auto. When the
+            // dashboard is itself what turned the overlay off there is nothing
+            // to restore, and refusing to come back would make the hotkey look
+            // broken — fall back to Auto.
+            const Mode configured = impl_->configured_mode.load ();
+            next = configured == Mode::Disabled ? Mode::Auto : configured;
+         }
 
-      impl_->mode.store (next);
-      impl_->sync_pipeline ();
-      core::Logger::info ("hotkey: overlay → {}", mode_name (next));
+         impl_->mode.store (next);
+         impl_->sync_pipeline ();
+         core::Logger::info ("hotkey: overlay → {}", mode_name (next));
 
-      if (next == Mode::Disabled && impl_->deps.overlay) impl_->deps.overlay->clear ();
-      emit modeChanged (next);
-   }, Qt::QueuedConnection);
+         if (next == Mode::Disabled && impl_->deps.overlay) impl_->deps.overlay->clear ();
+         emit modeChanged (next);
+      },
+      Qt::QueuedConnection);
 }
 
 void Controller::on_window_event (const core::WindowEvent& ev)
@@ -824,49 +861,59 @@ void Controller::on_window_event (const core::WindowEvent& ev)
    }
 
    const bool active = ev.visible && ev.focused;
-   const bool moved  = prev.x != ev.bounds.x || prev.y != ev.bounds.y
-                    || prev.w != ev.bounds.w || prev.h != ev.bounds.h;
+   const bool moved = prev.x != ev.bounds.x || prev.y != ev.bounds.y || prev.w != ev.bounds.w ||
+                      prev.h != ev.bounds.h;
 
    // Marshal to main thread; pipeline.set_active_window is safe to call here
    // (atomic), but overlay reposition / hide must be on the Qt thread.
    QPointer<Controller> self { this };
-   QMetaObject::invokeMethod (this, [self, ev, active, moved, was_active] {
-      if (!self) return;
-      if (self->impl_->deps.pipeline) {
-         self->impl_->deps.pipeline->set_active_window (ev.visible ? ev.hwnd : nullptr);
-      }
-
-      if (active && (moved || !was_active) && self->impl_->has_live_anchor) {
-         self->impl_->apply_anchor ();
-      }
-      if (self->impl_->deps.overlay) {
-         if (!ev.visible) self->impl_->deps.overlay->clear ();
-         if (self->impl_->deps.overlay->set_active (active)) {
-            emit self->overlayPresented ();
+   QMetaObject::invokeMethod (
+      this,
+      [self, ev, active, moved, was_active] {
+         if (!self) return;
+         if (self->impl_->deps.pipeline) {
+            self->impl_->deps.pipeline->set_active_window (ev.visible ? ev.hwnd : nullptr);
          }
-      }
 
-      // Debug overlay tracks the capture region: visible whenever the game
-      // window is (capture works unfocused via WGC).
-      if (self->impl_->deps.debug && self->impl_->debug_overlay.load ()) {
-         self->impl_->deps.debug->set_region (
-            QRect { ev.bounds.x, ev.bounds.y, ev.bounds.w, ev.bounds.h },
-            ev.visible);
-      }
+         if (active && (moved || !was_active) && self->impl_->has_live_anchor) {
+            self->impl_->apply_anchor ();
+         }
+         if (self->impl_->deps.overlay) {
+            if (!ev.visible) self->impl_->deps.overlay->clear ();
+            if (self->impl_->deps.overlay->set_active (active)) {
+               emit self->overlayPresented ();
+            }
+         }
 
-      emit self->gameWindowChanged (
-         QRect { ev.bounds.x, ev.bounds.y, ev.bounds.w, ev.bounds.h }, active);
-   }, Qt::QueuedConnection);
+         // Debug overlay tracks the capture region: visible whenever the game
+         // window is (capture works unfocused via WGC).
+         if (self->impl_->deps.debug && self->impl_->debug_overlay.load ()) {
+            self->impl_->deps.debug->set_region (
+               QRect { ev.bounds.x, ev.bounds.y, ev.bounds.w, ev.bounds.h }, ev.visible);
+         }
+
+         emit self->gameWindowChanged (QRect { ev.bounds.x, ev.bounds.y, ev.bounds.w, ev.bounds.h },
+                                       active);
+      },
+      Qt::QueuedConnection);
 }
 
 void Controller::on_tooltip (const ocr::RecognizedTooltip& rt)
 {
-   if (!impl_->authenticated.load (std::memory_order_relaxed)
-       || impl_->mode.load (std::memory_order_relaxed) == Mode::Disabled) return;
+   if (!impl_->authenticated.load (std::memory_order_relaxed) ||
+       impl_->mode.load (std::memory_order_relaxed) == Mode::Disabled)
+      return;
 
    if (!impl_->deps.api || rt.preliminary) return;
    if (impl_->deps.pipeline && !impl_->deps.pipeline->is_current (rt.generation)) return;
+   if (!ocr::looks_like_tooltip (rt.text)) {
+      core::log::ocr.event ("analysis_skipped", {
+                                                   { "reason", "not_a_tooltip" },
+                                                   { "generation", std::to_string (rt.generation) },
+                                                });
+      return;
+   }
    impl_->enqueue_analysis (rt);
 }
 
-} // namespace gv::app
+}  // namespace gv::app

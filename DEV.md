@@ -281,6 +281,25 @@ hidden WebView2, captured as a transparent PNG, and displayed through a
 disabled native Qt window. No browser HWND is placed over the game. Startup
 retries with clean profile data and then software rendering if necessary.
 
+Native overlays are excluded from Windows desktop capture, so DXGI cannot
+feed the card or debug borders back into tooltip tracking. They remain
+visible on the monitor but are omitted from supported screenshots and recordings.
+An exclusion failure is recorded in the application log.
+
+Losing or replacing a tooltip anchor immediately clears its visible card,
+queued render and focus-restoration cache. A replacement detection cannot
+reuse the previous item while waiting for a new analysis.
+
+OCR-rejected detections are also removed from tracking and candidate selection.
+The rejection cache matches image identity and size, holds at most 32 entries,
+and retries after two seconds. Changed content remains eligible immediately;
+a forced scan bypasses suppression. `rejected_skipped` reports these exclusions
+in pipeline health logs.
+
+Open on DarkerDB (`Ctrl+Shift+F` by default) opens `/tools/price-check` for
+the last analyzed item, preserving primary and secondary numeric rolls,
+secondary roll order, and socketed gem families in the page's share URL.
+
 The card's enter animation is CSS in `web/augment.html`, played on the
 `.ddb-tooltip` element the library recreates on each render (a fresh
 element with a CSS `animation` plays from frame 0; the transparent window
@@ -316,3 +335,52 @@ The script filters CMake/MSVC output for the first useful error and tails
 `%LOCALAPPDATA%\GrimVault\build\<preset>\configure.log` or `build.log`.
 If it's a vcpkg port issue, check
 `%VCPKG_ROOT%\buildtrees\<port>\install-x64-windows-rel-err.log`.
+
+## Preparing a desktop release locally
+
+`tools/release/prepare-windows.ps1` builds a versioned Release/LTO candidate,
+runs unit, integration and end-to-end tests, signs the executable and NSIS
+installer, and writes checksums plus `release.json` under the build's
+`artifacts/` directory. It never uploads artifacts or updates an appcast.
+
+Supply the four `SSL_COM_*` signing credentials through the process environment
+from the authorized `releases` production vault. Do not save them in the source
+or pass them on the command line. NSIS must be available on PATH.
+
+Run from the committed release worktree, supplying its exact Git revision:
+
+```powershell
+./tools/release/prepare-windows.ps1 -Version 2.1.2 -Stage prod -Channel stable `
+   -SourceRevision <40-character-commit> -VcpkgInstalledDirectory C:/v/i `
+   -UseInstalledDependencies
+```
+
+`-UseInstalledDependencies` reuses an explicitly supplied, already provisioned
+vcpkg tree without changing it. Omit it to provision manifest dependencies.
+The default build directory is `%LOCALAPPDATA%/GrimVault/build/release-prod-2.1.2`.
+Use separate build directories for each version and target environment.
+
+Local preparation validates the signed installer and staged runtime payload,
+including launching `grimvault.exe --help`. It does not install over the
+operator's application. Before publication, run `validate-package.ps1` without
+`-PayloadDirectory` on a clean Windows host to verify the real install and
+Start Menu shortcut. The existing release workflow performs this check.
+
+Capture integration tests require an unlocked interactive Windows desktop.
+A lock screen or another covering window can invalidate their baseline before
+capture exclusion is tested. A failed baseline reports observed pixels and the
+covering process ID; unlock the desktop and rerun the full preparation command.
+Do not bypass the test gate.
+
+Publication currently uses `.github/workflows/release.yml` with explicit
+`version=2.1.2`, `channel=stable`, `target_env=prod`. Its default `publish=false`
+builds and validates without updating downloads; `publish=true` changes the
+public installer and feed and requires release authorization. Use a ref that
+contains the prepared commits. Publish the DarkerDB changelog after the installer
+and feed are verified.
+
+The current Hearth service has no `desktop_command`, so `hearth deploy grimvault`
+is not a working native publication route yet. The established appcast private
+key is configured in GitHub Actions but absent from the `releases` vault. Keep
+using that existing signing identity; replacing it would break updater trust
+for installed clients. Local preparation requires only SSL.com credentials.

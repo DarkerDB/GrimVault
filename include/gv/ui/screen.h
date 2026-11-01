@@ -31,7 +31,14 @@ void move (QWindow* window, const QPoint& physical);
 // (WS_EX_TRANSPARENT | WS_EX_NOACTIVATE). Qt::WindowTransparentForInput
 // only sets the former, so a stray click on a Qt overlay was alt-tabbing
 // the game. Re-apply after each show(): Qt can drop native ex-styles when
-// it (re)creates the platform window. winId() must be valid.
+// it (re)creates the platform window. Also excludes these overlays from
+// desktop capture so vision cannot track its own UI. winId() must be valid.
 void make_passthrough (QWindow* window);
 
-} // namespace gv::ui::screen
+// Exclude our top-level overlay from desktop capture without hiding it on
+// the monitor. Returns whether Windows accepted the exclusion. For example,
+// a blue overlay over a red window stays blue on screen but captures red.
+// Reapply after show(), which can recreate the native window.
+bool exclude_from_capture (QWindow* window);
+
+}  // namespace gv::ui::screen
