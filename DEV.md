@@ -296,6 +296,10 @@ and retries after two seconds. Changed content remains eligible immediately;
 a forced scan bypasses suppression. `rejected_skipped` reports these exclusions
 in pipeline health logs.
 
+Open on DarkerDB (`Ctrl+Shift+F` by default) opens `/tools/price-check` for
+the last analyzed item, preserving primary and secondary numeric rolls,
+secondary roll order, and socketed gem families in the page's share URL.
+
 The card's enter animation is CSS in `web/augment.html`, played on the
 `.ddb-tooltip` element the library recreates on each render (a fresh
 element with a CSS `animation` plays from frame 0; the transparent window

@@ -1,3 +1,4 @@
+#include <gv/api/price_check_url.h>
 #include <gv/app/controller.h>
 
 #include <gv/api/darkerdb_client.h>
@@ -148,10 +149,10 @@ struct Controller::Impl {
    std::mutex hk_lock;
    std::unordered_map<std::string, std::string> accels;
 
-   // SPA origin and the last item analysed, for the open-in-browser action.
+   // SPA origin and the exact analyzed roll share route for open-in-browser.
    std::string browse_base;
    std::mutex browse_lock;
-   std::string last_item_id;
+   std::string last_price_check_path;
 
    mutable std::mutex language_lock;
    std::string language_selection;
@@ -190,7 +191,7 @@ struct Controller::Impl {
       has_live_anchor = false;
       {
          std::lock_guard lk { browse_lock };
-         last_item_id.clear ();
+         last_price_check_path.clear ();
       }
       if (deps.overlay) deps.overlay->clear ();
       if (deps.debug) deps.debug->clear_anchor ();
@@ -407,7 +408,7 @@ struct Controller::Impl {
          if (initial) persist_find (lookup);
          {
             std::lock_guard lk { browse_lock };
-            last_item_id = lookup.item_id;
+            last_price_check_path = api::price_check_path (lookup);
          }
 
          QPointer<Controller> guard { &self };
@@ -808,11 +809,11 @@ void Controller::action_open_in_browser ()
    std::string url;
    {
       std::lock_guard lk { impl_->browse_lock };
-      if (impl_->browse_base.empty () || impl_->last_item_id.empty ()) {
+      if (impl_->browse_base.empty () || impl_->last_price_check_path.empty ()) {
          core::Logger::info ("hotkey: open in browser — nothing analysed yet");
          return;
       }
-      url = impl_->browse_base + "/items/" + impl_->last_item_id;
+      url = impl_->browse_base + impl_->last_price_check_path;
    }
 
    core::Logger::info ("hotkey: opening {}", url);
