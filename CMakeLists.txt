@@ -39,7 +39,7 @@ add_compile_definitions (
 )
 
 if (MSVC)
-   add_compile_options (/W4 /permissive- /Zc:__cplusplus /bigobj /await /EHsc /utf-8)
+   add_compile_options (/W4 /permissive- /Zc:__cplusplus /bigobj /EHsc /utf-8)
    add_link_options (/GUARD:CF /CETCOMPAT)
 endif ()
 
