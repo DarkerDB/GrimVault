@@ -46,7 +46,7 @@ env:
 jobs:
    compatibility:
       name: Windows release
-      runs-on: windows-2022
+      runs-on: windows-2025
       steps:
          - uses: actions/checkout@v4
            with:
@@ -106,8 +106,8 @@ jobs:
            with:
               path: |
                  .vcpkg-cache
-              key: vcpkg-windows-2022-release-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'tools/release/triplets/**') }}
-              restore-keys: vcpkg-windows-2022-release-${{ env.VCPKG_COMMIT }}-
+              key: vcpkg-windows-2025-release-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'tools/release/triplets/**') }}
+              restore-keys: vcpkg-windows-2025-release-${{ env.VCPKG_COMMIT }}-
 
          - uses: actions/checkout@v4
            with:
@@ -149,7 +149,7 @@ jobs:
            with:
               path: |
                  .vcpkg-cache
-              key: vcpkg-windows-2022-release-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'tools/release/triplets/**') }}
+              key: vcpkg-windows-2025-release-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'tools/release/triplets/**') }}
 
          - name: Build
            shell: pwsh
