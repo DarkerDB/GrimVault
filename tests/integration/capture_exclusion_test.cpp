@@ -41,7 +41,8 @@ class CaptureCard final : public QWidget
 
 // Read the actual DXGI frame until the target center has the expected RGB.
 // Input: excluded blue overlay over red. Output: true for Qt::red, not blue.
-bool captures_color (gv::capture::CaptureService& capture, QWidget& target, QColor expected)
+testing::AssertionResult captures_color (gv::capture::CaptureService& capture, QWidget& target,
+                                         QColor expected)
 {
    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds { 3 };
    const HWND handle = reinterpret_cast<HWND> (target.winId ());
@@ -49,6 +50,9 @@ bool captures_color (gv::capture::CaptureService& capture, QWidget& target, QCol
    ::GetWindowRect (handle, &bounds);
    const int x = (bounds.left + bounds.right) / 2;
    const int y = (bounds.top + bounds.bottom) / 2;
+
+   QColor last_color;
+   int observed_frames = 0;
 
    while (std::chrono::steady_clock::now () < deadline) {
       QEventLoop loop;
@@ -72,13 +76,24 @@ bool captures_color (gv::capture::CaptureService& capture, QWidget& target, QCol
 
       const auto* pixel = frame->data.get () + local_y * frame->stride + local_x * 4;
       const QColor actual { pixel[2], pixel[1], pixel[0] };
+      last_color = actual;
+      ++observed_frames;
 
       if (actual == expected) {
-         return true;
+         return testing::AssertionSuccess ();
       }
    }
 
-   return false;
+   DWORD point_pid = 0;
+   const HWND at_point = ::WindowFromPoint (POINT { x, y });
+   ::GetWindowThreadProcessId (at_point, &point_pid);
+
+   return testing::AssertionFailure ()
+          << "Expected " << expected.name ().toStdString () << " at desktop center " << x << ","
+          << y << "; observed " << last_color.name ().toStdString () << " across "
+          << observed_frames << " frames"
+          << "; covering process=" << point_pid << "; test process=" << ::GetCurrentProcessId ()
+          << ". Run capture tests on an unlocked interactive desktop.";
 }
 
 TEST (Renderer, DesktopCaptureSeesGameBehindExcludedOverlay)

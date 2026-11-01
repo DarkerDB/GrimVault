@@ -365,3 +365,22 @@ including launching `grimvault.exe --help`. It does not install over the
 operator's application. Before publication, run `validate-package.ps1` without
 `-PayloadDirectory` on a clean Windows host to verify the real install and
 Start Menu shortcut. The existing release workflow performs this check.
+
+Capture integration tests require an unlocked interactive Windows desktop.
+A lock screen or another covering window can invalidate their baseline before
+capture exclusion is tested. A failed baseline reports observed pixels and the
+covering process ID; unlock the desktop and rerun the full preparation command.
+Do not bypass the test gate.
+
+Publication currently uses `.github/workflows/release.yml` with explicit
+`version=2.1.2`, `channel=stable`, `target_env=prod`. Its default `publish=false`
+builds and validates without updating downloads; `publish=true` changes the
+public installer and feed and requires release authorization. Use a ref that
+contains the prepared commits. Publish the DarkerDB changelog after the installer
+and feed are verified.
+
+The current Hearth service has no `desktop_command`, so `hearth deploy grimvault`
+is not a working native publication route yet. The established appcast private
+key is configured in GitHub Actions but absent from the `releases` vault. Keep
+using that existing signing identity; replacing it would break updater trust
+for installed clients. Local preparation requires only SSL.com credentials.
