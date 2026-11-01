@@ -286,6 +286,10 @@ feed the card or debug borders back into tooltip tracking. They remain
 visible on the monitor but are omitted from supported screenshots and recordings.
 An exclusion failure is recorded in the application log.
 
+Losing or replacing a tooltip anchor immediately clears its visible card,
+queued render and focus-restoration cache. A replacement detection cannot
+reuse the previous item while waiting for a new analysis.
+
 The card's enter animation is CSS in `web/augment.html`, played on the
 `.ddb-tooltip` element the library recreates on each render (a fresh
 element with a CSS `animation` plays from frame 0; the transparent window

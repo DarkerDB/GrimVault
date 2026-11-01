@@ -20,12 +20,12 @@ namespace gv::ocr {
 struct RecognizedTooltip {
    std::uint64_t generation = 0;
    capture::Rect rect;
-   std::string   text;
-   std::string   rarity;
+   std::string text;
+   std::string rarity;
    std::unordered_map<std::string, std::string> gems;
-   float         confidence = 0.0f;
+   float confidence = 0.0f;
    capture::CaptureBackend backend = capture::CaptureBackend::Unknown;
-   bool          preliminary = false; // title-only; full tooltip follows
+   bool preliminary = false;  // title-only; full tooltip follows
    std::chrono::steady_clock::time_point captured_at;
 };
 
@@ -42,23 +42,23 @@ struct TooltipSample {
 
 class Pipeline
 {
-public:
+  public:
    struct Config {
-      double                      capture_fps        = 15.0;
-      double                      performance_fps    = 3.0;
-      double                      tracking_fps       = 60.0;
-      double                      performance_tracking_fps = 30.0;
-      int                         stability_frames   = 2;
-      int                         missing_frames     = 2;
-      int                         pin_near_edge_px   = 48;
-      int                         pin_right_edge_px  = 32;
-      int                         identity_bits      = 16;
-      int                         identity_size_px   = 8;
-      int                         identity_position_px = 24;
-      double                      identity_size_ratio = 1.2;
-      LanguageFamily              language           = LanguageFamily::Latin;
-      std::filesystem::path       evidence_dir;
-      std::uintmax_t              evidence_max_bytes = 250ull * 1024ull * 1024ull;
+      double capture_fps = 15.0;
+      double performance_fps = 3.0;
+      double tracking_fps = 60.0;
+      double performance_tracking_fps = 30.0;
+      int stability_frames = 2;
+      int missing_frames = 2;
+      int pin_near_edge_px = 48;
+      int pin_right_edge_px = 32;
+      int identity_bits = 16;
+      int identity_size_px = 8;
+      int identity_position_px = 24;
+      double identity_size_ratio = 1.2;
+      LanguageFamily language = LanguageFamily::Latin;
+      std::filesystem::path evidence_dir;
+      std::uintmax_t evidence_max_bytes = 250ull * 1024ull * 1024ull;
    };
 
    // Once a tooltip settles,
@@ -66,47 +66,43 @@ public:
    // size — and the UI draws from cursor math until the anchor is lost.
    struct AnchorEvent {
       std::uint64_t generation = 0;
-      int  offset_x = 0;      // tooltip top-left minus cursor, physical px
-      int  offset_y = 0;
+      int offset_x = 0;  // tooltip top-left minus cursor, physical px
+      int offset_y = 0;
       bool locked_x = false;  // offset measured while not pinned at an edge
       bool locked_y = false;
       bool pinned_x = false;
       bool pinned_y = false;
-      int  pin_x    = 0;      // fixed game-relative coordinate while pinned
-      int  pin_y    = 0;
-      int  w        = 0;
-      int  h        = 0;
+      int pin_x = 0;  // fixed game-relative coordinate while pinned
+      int pin_y = 0;
+      int w = 0;
+      int h = 0;
    };
 
-   using TooltipCallback    = std::function<void (const RecognizedTooltip&)>;
-   using AnchorCallback     = std::function<void (const AnchorEvent&)>;
-   using SampleCallback     = std::function<void (TooltipSample)>;
+   using TooltipCallback = std::function<void (const RecognizedTooltip&)>;
+   using AnchorCallback = std::function<void (const AnchorEvent&)>;
+   using SampleCallback = std::function<void (TooltipSample)>;
 
-   using AnchorLostCallback = std::function<void (bool immediate)>;
+   using AnchorLostCallback = std::function<void ()>;
 
-   Pipeline (
-      capture::CaptureService& capture,
-      vision::TooltipDetector& detector,
-      LanguageRegistry&        registry,
-      Config                   config = {}
-   );
+   Pipeline (capture::CaptureService& capture, vision::TooltipDetector& detector,
+             LanguageRegistry& registry, Config config = {});
 
    ~Pipeline ();
 
    core::Result<void> start (TooltipCallback on_tooltip);
-   void               stop  () noexcept;
+   void stop () noexcept;
 
    // Anchor established / updated (offsets lock as the tooltip unpins) and
    // anchor lost, fired from the vision thread. Set before start().
-   void on_anchor      (AnchorCallback cb);
+   void on_anchor (AnchorCallback cb);
    void on_anchor_lost (AnchorLostCallback cb);
-   void on_sample      (SampleCallback cb);
+   void on_sample (SampleCallback cb);
 
-   void set_active_window (void* hwnd);   // HWND or nullptr to capture monitor
+   void set_active_window (void* hwnd);  // HWND or nullptr to capture monitor
 
    // Runtime policy. Disabled means no capture, detection, OCR, or API work.
    // Manual keeps the pipeline armed but captures only after an immediate scan.
-   void set_enabled   (bool on);
+   void set_enabled (bool on);
    void set_automatic (bool on);
 
    // Maximum full-frame GPU readbacks per second. Applies immediately.
@@ -131,14 +127,12 @@ public:
    void set_overlay_area (const capture::Rect& desktop);
 
    void request_immediate_scan ();
-   void record_evidence (
-      std::uint64_t generation,
-      std::string event,
-      std::unordered_map<std::string, std::string> fields = {});
+   void record_evidence (std::uint64_t generation, std::string event,
+                         std::unordered_map<std::string, std::string> fields = {});
 
-private:
+  private:
    struct Impl;
    std::unique_ptr<Impl> impl_;
 };
 
-} // namespace gv::ocr
+}  // namespace gv::ocr

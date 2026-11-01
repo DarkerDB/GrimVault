@@ -172,7 +172,7 @@ void Pipeline::Impl::vision_loop ()
       tracking.store (false, std::memory_order_relaxed);
       generation.fetch_add (1, std::memory_order_relaxed);
       anchor_generation = 0;
-      if (anchor_lost_cb) anchor_lost_cb (true);
+      if (anchor_lost_cb) anchor_lost_cb ();
       core::log::vision.event ("tooltip_lost",
                                {
                                   { "generation", std::to_string (lost_generation) },
@@ -346,7 +346,7 @@ void Pipeline::Impl::vision_loop ()
          tracking.store (false, std::memory_order_relaxed);
          generation.fetch_add (1, std::memory_order_relaxed);
          anchor_generation = 0;
-         if (anchor_lost_cb) anchor_lost_cb (true);
+         if (anchor_lost_cb) anchor_lost_cb ();
          evidence.snapshot (previous_generation, "lost", image,
                             detected.has_value () ? *detected : empty);
          core::log::vision.event ("tooltip_lost",
@@ -378,7 +378,7 @@ void Pipeline::Impl::vision_loop ()
          continue;
 
       if (was_active) {
-         if (anchor_lost_cb) anchor_lost_cb (false);
+         if (anchor_lost_cb) anchor_lost_cb ();
          evidence.event (previous_generation, "replaced",
                          {
                             { "identity_distance", std::to_string (update.identity_distance) },

@@ -42,6 +42,7 @@ if (WIN32)
    add_executable (grimvault_renderer_tests
       integration/renderer_test.cpp
       integration/capture_exclusion_test.cpp
+      integration/overlay_lifecycle_test.cpp
    )
 
    target_link_libraries (grimvault_renderer_tests PRIVATE

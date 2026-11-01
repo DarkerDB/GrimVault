@@ -19,7 +19,7 @@
 #include <utility>
 
 #ifdef _WIN32
-   #include <Windows.h>
+#include <Windows.h>
 #endif
 
 #include <algorithm>
@@ -33,169 +33,163 @@ using nlohmann::json;
 
 namespace {
 
-   constexpr int k_grace_ms = 40;    // reserved for future soft-loss signals
-   constexpr int k_visual_align_up_css = 5; // ignore top ornament for alignment
+constexpr int k_visual_align_up_css = 5;  // ignore top ornament for alignment
 
-   QPoint cursor_physical ()
-   {
-#ifdef _WIN32
-      POINT p {};
-      ::GetCursorPos (&p);
-      return { p.x, p.y };
-#else
-      return {};
-#endif
-   }
-
-   // A hidden minimal card warms Chromium, the SDK, fonts, and rasterization.
-   // It is cleared at its size handshake and never captured for presentation.
-   json warmup_message (std::uint64_t seq)
-   {
-      return {
-         { "type", "render" },
-         { "seq",  seq },
-         { "entity", json {
-            { "name",   "GrimVault" },
-            { "realm",  "grimvault" },
-            { "rarity", "common" },
-            { "sections", json::array () },
-         } },
-         { "params", { { "kind", "augment" }, { "compact", true } } },
-      };
-   }
-
-   class SnapshotWindow final : public QWidget
-   {
-   public:
-      SnapshotWindow ()
-         : QWidget (nullptr,
-              Qt::FramelessWindowHint
-            | Qt::WindowStaysOnTopHint
-            | Qt::Tool
-            | Qt::WindowTransparentForInput)
-      {
-         setAttribute (Qt::WA_TranslucentBackground);
-         setAttribute (Qt::WA_NoSystemBackground);
-         setFocusPolicy (Qt::NoFocus);
-         (void) winId (); // Create the native HWND while it is still hidden.
-         screen::make_passthrough (windowHandle ());
-
-         enter_.setDuration (240);
-         QEasingCurve easing { QEasingCurve::BezierSpline };
-         easing.addCubicBezierSegment (
-            QPointF { .2, .7 }, QPointF { .3, 1.0 }, QPointF { 1.0, 1.0 });
-         enter_.setEasingCurve (easing);
-         enter_.setStartValue (0.0);
-         enter_.setEndValue (1.0);
-         QObject::connect (&enter_, &QVariantAnimation::valueChanged,
-            this, [this] (const QVariant& value) {
-               enter_progress_ = value.toReal ();
-               update ();
-            });
-
-         hide ();
-      }
-
-      std::function<void (QRect)> on_area;
-
-      // Dashboard opacity, multiplied into the enter animation's own fade so
-      // a mid-hover change repaints without restarting the animation.
-      void set_opacity (qreal opacity)
-      {
-         opacity_ = std::clamp (opacity, 0.0, 1.0);
-         if (isVisible ()) update ();
-      }
-
-      // `dpr` is the MONITOR's device pixel ratio — deliberately not the scale
-      // the card was rendered at. Those two used to be the same number, and
-      // conflating them broke the moment overlay:scale and the fit-to-viewport
-      // shrink started feeding a composite scale in: the window was sized
-      // physical/render_scale instead of physical/dpr, so a card rendered at
-      // 0.96 came out ~4% too wide and too tall. That stretched the capture
-      // (pixelated), pushed the right edge over the game's tooltip, and ran
-      // the bottom off the screen — one bug, three symptoms.
-      void present (QImage image, const QRect& physical, qreal dpr, bool animate)
-      {
-         const int logical_w = qMax (1, qRound (physical.width ()  / dpr));
-         const int logical_h = qMax (1, qRound (physical.height () / dpr));
-
-         // Derive the image's ratio from what was actually captured rather
-         // than assuming it matches `physical`. Whatever the capture size,
-         // this maps it onto the logical box without Qt rescaling it.
-         image.setDevicePixelRatio (
-            image.width () > 0 ? qreal (image.width ()) / logical_w : dpr);
-         image_ = std::move (image);
-
-         // Establish the target monitor before assigning logical dimensions;
-         // Qt then maps them through that monitor's DPR.
-         screen::move (this->windowHandle (), physical.topLeft ());
-         resize (logical_w, logical_h);
-
-         enter_.stop ();
-         enter_progress_ = animate ? 0.0 : 1.0;
-         if (!isVisible ()) show ();
-         screen::make_passthrough (this->windowHandle ());
-         update ();
-         if (animate) enter_.start ();
-         report (physical);
-      }
-
-      void move_physical (const QPoint& position)
-      {
-         screen::move (windowHandle (), position);
-         if (!area_.isEmpty ()) report (QRect { position, area_.size () });
-      }
-
-      void clear ()
-      {
-         // Dismissal intentionally has no animation: the augment disappears
-         // at the same instant as the game's tooltip.
-         enter_.stop ();
-         hide ();
-         image_ = {};
-         enter_progress_ = 0.0;
-         if (!area_.isEmpty ()) report ({});
-      }
-
-   protected:
-      void paintEvent (QPaintEvent*) override
-      {
-         QPainter painter { this };
-         painter.setCompositionMode (QPainter::CompositionMode_Source);
-
-         // Match the old CSS entrance on the captured native image. The PNG
-         // includes transparent padding, so this transform has room without
-         // clipping the card ornamentation.
-         const qreal remaining = 1.0 - enter_progress_;
-         const qreal scale     = 0.96 + 0.04 * enter_progress_;
-         const QPointF origin { 0.0, height () / 2.0 };
-
-         painter.setOpacity (enter_progress_ * opacity_);
-         painter.translate (0.0, 8.0 * remaining);
-         painter.translate (origin);
-         painter.scale (scale, scale);
-         painter.translate (-origin);
-         painter.drawImage (rect (), image_);
-      }
-
-   private:
-      void report (const QRect& area)
-      {
-         area_ = area;
-         if (on_area) on_area (area);
-      }
-
-      QImage image_;
-      QRect area_;                // physical screen px, empty while hidden
-      qreal opacity_ = 0.9;
-      QVariantAnimation enter_;
-      qreal enter_progress_ = 0.0;
-   };
-
-} // namespace
-
-struct AugmentView::Impl
+QPoint cursor_physical ()
 {
+#ifdef _WIN32
+   POINT p {};
+   ::GetCursorPos (&p);
+   return { p.x, p.y };
+#else
+   return {};
+#endif
+}
+
+// A hidden minimal card warms Chromium, the SDK, fonts, and rasterization.
+// It is cleared at its size handshake and never captured for presentation.
+json warmup_message (std::uint64_t seq)
+{
+   return {
+      { "type", "render" },
+      { "seq", seq },
+      { "entity",
+        json {
+           { "name", "GrimVault" },
+           { "realm", "grimvault" },
+           { "rarity", "common" },
+           { "sections", json::array () },
+        } },
+      { "params", { { "kind", "augment" }, { "compact", true } } },
+   };
+}
+
+class SnapshotWindow final : public QWidget
+{
+  public:
+   SnapshotWindow ()
+       : QWidget (nullptr, Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint | Qt::Tool |
+                              Qt::WindowTransparentForInput)
+   {
+      setAttribute (Qt::WA_TranslucentBackground);
+      setAttribute (Qt::WA_NoSystemBackground);
+      setFocusPolicy (Qt::NoFocus);
+      (void)winId ();  // Create the native HWND while it is still hidden.
+      screen::make_passthrough (windowHandle ());
+
+      enter_.setDuration (240);
+      QEasingCurve easing { QEasingCurve::BezierSpline };
+      easing.addCubicBezierSegment (QPointF { .2, .7 }, QPointF { .3, 1.0 }, QPointF { 1.0, 1.0 });
+      enter_.setEasingCurve (easing);
+      enter_.setStartValue (0.0);
+      enter_.setEndValue (1.0);
+      QObject::connect (&enter_, &QVariantAnimation::valueChanged, this,
+                        [this] (const QVariant& value) {
+                           enter_progress_ = value.toReal ();
+                           update ();
+                        });
+
+      hide ();
+   }
+
+   std::function<void (QRect)> on_area;
+
+   // Dashboard opacity, multiplied into the enter animation's own fade so
+   // a mid-hover change repaints without restarting the animation.
+   void set_opacity (qreal opacity)
+   {
+      opacity_ = std::clamp (opacity, 0.0, 1.0);
+      if (isVisible ()) update ();
+   }
+
+   // `dpr` is the MONITOR's device pixel ratio — deliberately not the scale
+   // the card was rendered at. Those two used to be the same number, and
+   // conflating them broke the moment overlay:scale and the fit-to-viewport
+   // shrink started feeding a composite scale in: the window was sized
+   // physical/render_scale instead of physical/dpr, so a card rendered at
+   // 0.96 came out ~4% too wide and too tall. That stretched the capture
+   // (pixelated), pushed the right edge over the game's tooltip, and ran
+   // the bottom off the screen — one bug, three symptoms.
+   void present (QImage image, const QRect& physical, qreal dpr, bool animate)
+   {
+      const int logical_w = qMax (1, qRound (physical.width () / dpr));
+      const int logical_h = qMax (1, qRound (physical.height () / dpr));
+
+      // Derive the image's ratio from what was actually captured rather
+      // than assuming it matches `physical`. Whatever the capture size,
+      // this maps it onto the logical box without Qt rescaling it.
+      image.setDevicePixelRatio (image.width () > 0 ? qreal (image.width ()) / logical_w : dpr);
+      image_ = std::move (image);
+
+      // Establish the target monitor before assigning logical dimensions;
+      // Qt then maps them through that monitor's DPR.
+      screen::move (this->windowHandle (), physical.topLeft ());
+      resize (logical_w, logical_h);
+
+      enter_.stop ();
+      enter_progress_ = animate ? 0.0 : 1.0;
+      if (!isVisible ()) show ();
+      screen::make_passthrough (this->windowHandle ());
+      update ();
+      if (animate) enter_.start ();
+      report (physical);
+   }
+
+   void move_physical (const QPoint& position)
+   {
+      screen::move (windowHandle (), position);
+      if (!area_.isEmpty ()) report (QRect { position, area_.size () });
+   }
+
+   void clear ()
+   {
+      // Dismissal intentionally has no animation: the augment disappears
+      // at the same instant as the game's tooltip.
+      enter_.stop ();
+      hide ();
+      image_ = {};
+      enter_progress_ = 0.0;
+      if (!area_.isEmpty ()) report ({});
+   }
+
+  protected:
+   void paintEvent (QPaintEvent*) override
+   {
+      QPainter painter { this };
+      painter.setCompositionMode (QPainter::CompositionMode_Source);
+
+      // Match the old CSS entrance on the captured native image. The PNG
+      // includes transparent padding, so this transform has room without
+      // clipping the card ornamentation.
+      const qreal remaining = 1.0 - enter_progress_;
+      const qreal scale = 0.96 + 0.04 * enter_progress_;
+      const QPointF origin { 0.0, height () / 2.0 };
+
+      painter.setOpacity (enter_progress_ * opacity_);
+      painter.translate (0.0, 8.0 * remaining);
+      painter.translate (origin);
+      painter.scale (scale, scale);
+      painter.translate (-origin);
+      painter.drawImage (rect (), image_);
+   }
+
+  private:
+   void report (const QRect& area)
+   {
+      area_ = area;
+      if (on_area) on_area (area);
+   }
+
+   QImage image_;
+   QRect area_;  // physical screen px, empty while hidden
+   qreal opacity_ = 0.9;
+   QVariantAnimation enter_;
+   qreal enter_progress_ = 0.0;
+};
+
+}  // namespace
+
+struct AugmentView::Impl {
    struct PendingPresentation {
       gv::api::TooltipLookup lookup;
       QRect game;
@@ -203,17 +197,17 @@ struct AugmentView::Impl
       bool animate = true;
    };
 
-   AugmentView*                  owner = nullptr;
+   AugmentView* owner = nullptr;
    std::unique_ptr<WebviewHost> host;
    std::unique_ptr<SnapshotWindow> snapshot;
-   Callbacks                    callbacks;
-   bool                         pending_animate = true;
+   Callbacks callbacks;
+   bool pending_animate = true;
 
-   std::uint64_t seq         = 0;
+   std::uint64_t seq = 0;
    std::uint64_t pending_seq = 0;
-   bool          shown       = false;
-   bool          warm        = false;
-   bool          prewarming  = false;
+   bool shown = false;
+   bool warm = false;
+   bool prewarming = false;
    std::optional<PendingPresentation> waiting;
 
    // Legacy lookup-driven placement (present ()).
@@ -221,24 +215,24 @@ struct AugmentView::Impl
    QRect legacy_anchor;
 
    // Anchoring (anchoring.md §7): card follows the anchored tooltip at
-   // presenter rate; anchor-lost starts the grace before hiding.
-   bool   anchored = false;
-   bool   sized    = false;    // css size handshake completed
-   QRect  game;                // physical screen px
-   QPoint offset;              // tooltip top-left minus cursor
-   QSize  tip;                 // anchored tooltip size
-   bool   pinned_x = false;
-   bool   pinned_y = false;
-   QPoint pin;                 // fixed game-relative tooltip coordinate
-   std::uint64_t placed_seq = 0;   // last seq actually placed and captured
-   int    css_w   = 0;    // bare card size (CSS px)
-   int    css_h   = 0;
-   int    pad_css = 0;    // transparent animation headroom (CSS px)
-   qreal  scale   = 1.0;
-   QRect  placed;              // last window rect
+   // presenter rate; anchor loss immediately invalidates the card.
+   bool anchored = false;
+   bool sized = false;  // css size handshake completed
+   QRect game;          // physical screen px
+   QPoint offset;       // tooltip top-left minus cursor
+   QSize tip;           // anchored tooltip size
+   bool pinned_x = false;
+   bool pinned_y = false;
+   QPoint pin;                    // fixed game-relative tooltip coordinate
+   std::uint64_t placed_seq = 0;  // last seq actually placed and captured
+   int css_w = 0;                 // bare card size (CSS px)
+   int css_h = 0;
+   int pad_css = 0;  // transparent animation headroom (CSS px)
+   qreal scale = 1.0;
+   QRect placed;  // last window rect
 
    // Live dashboard settings (overlay:* and the render-time preferences).
-   Layout           layout;
+   Layout layout;
    augment::Options options;
 
    // Where the card is actually allowed to live: the monitor under the game,
@@ -264,19 +258,15 @@ struct AugmentView::Impl
       const qreal wanted = screen::scale_at (area.center ()) * layout.scale;
       const QRect view = viewport (area);
       const bool attached = layout.align == Layout::Align::Attached && !anchor.isEmpty ();
-      const QSize available = attached
-         ? placement::attached_space (view, anchor, 0)
-         : view.size ();
+      const QSize available = attached ? placement::attached_space (view, anchor, 0) : view.size ();
       const QSize footprint {
          css_w + 2 * pad_css + (attached ? 12 : 0),
          css_h + 2 * pad_css,
       };
-      return wanted * placement::fit (
-         QRect { QPoint {}, available }, footprint, 0, wanted);
+      return wanted * placement::fit (QRect { QPoint {}, available }, footprint, 0, wanted);
    }
 
-   QTimer follow;              // 120 Hz reposition
-   QTimer grace;
+   QTimer follow;  // 120 Hz reposition
 
    void on_message (std::string_view text);
    QRect current_anchor () const;
@@ -317,45 +307,37 @@ AugmentView::AugmentView () : impl_ (std::make_unique<Impl> ())
       impl->placed.moveTo (want.topLeft ());
       if (impl->snapshot) impl->snapshot->move_physical (want.topLeft ());
    });
-
-   impl_->grace.setSingleShot (true);
-   impl_->grace.setInterval (k_grace_ms);
-   QObject::connect (&impl_->grace, &QTimer::timeout, [impl = impl_.get ()] {
-      impl->anchored = false;
-      impl->pending_seq = 0;
-      impl->follow.stop ();
-      impl->conceal ();
-   });
 }
 
 AugmentView::~AugmentView () = default;
 
-core::Result<std::unique_ptr<AugmentView>> AugmentView::create (Config config,
-                                                                Callbacks callbacks)
+core::Result<std::unique_ptr<AugmentView>> AugmentView::create (Config config, Callbacks callbacks)
 {
    auto view = std::unique_ptr<AugmentView> { new AugmentView () };
    auto* impl = view->impl_.get ();
    impl->callbacks = std::move (callbacks);
-   impl->snapshot  = std::make_unique<SnapshotWindow> ();
+   impl->snapshot = std::make_unique<SnapshotWindow> ();
    impl->snapshot->on_area = [impl] (QRect area) {
       if (impl->callbacks.on_card_area) impl->callbacks.on_card_area (area);
    };
 
    auto host = WebviewHost::create (
       WebviewHost::Config {
-         .web_dir       = std::move (config.web_dir),
+         .web_dir = std::move (config.web_dir),
          .user_data_dir = std::move (config.user_data_dir),
          .software_rendering = config.software_rendering,
       },
       WebviewHost::Callbacks {
-         .on_ready          = [impl] {
-            impl->prewarm ();
-            if (impl->callbacks.on_ready) impl->callbacks.on_ready ();
-         },
-         .on_message        = [impl] (std::string_view text) { impl->on_message (text); },
-         .on_failed         = [impl] (std::string reason) {
-            if (impl->callbacks.on_failed) impl->callbacks.on_failed (std::move (reason));
-         },
+         .on_ready =
+            [impl] {
+               impl->prewarm ();
+               if (impl->callbacks.on_ready) impl->callbacks.on_ready ();
+            },
+         .on_message = [impl] (std::string_view text) { impl->on_message (text); },
+         .on_failed =
+            [impl] (std::string reason) {
+               if (impl->callbacks.on_failed) impl->callbacks.on_failed (std::move (reason));
+            },
       });
 
    if (!host.has_value ()) {
@@ -380,47 +362,36 @@ void AugmentView::Impl::prewarm ()
       owner->present (pending.lookup, pending.game, pending.anchor, pending.animate);
       return;
    }
-   prewarming  = true;
+   prewarming = true;
    pending_seq = ++seq;
    host->post_json (warmup_message (pending_seq).dump ());
 }
 
-void AugmentView::anchor_shown (const QRect& game, const QPoint& offset,
-                                const QSize& tip, bool pinned_x, bool pinned_y,
-                                const QPoint& pin)
+void AugmentView::anchor_shown (const QRect& game, const QPoint& offset, const QSize& tip,
+                                bool pinned_x, bool pinned_y, const QPoint& pin)
 {
    auto* impl = impl_.get ();
 
-   impl->grace.stop ();
-   impl->game   = game;
+   impl->game = game;
    impl->offset = offset;
-   impl->tip    = tip;
+   impl->tip = tip;
    impl->pinned_x = pinned_x;
    impl->pinned_y = pinned_y;
-   impl->pin      = pin;
+   impl->pin = pin;
 
    impl->anchored = true;
 }
 
-void AugmentView::anchor_lost (bool immediate)
+// Invalidate visible, in-flight and startup-queued presentations together.
+// Example: present Bandage before WebView2 is ready, then lose its anchor;
+// renderer startup produces no card until a new present() arrives.
+void AugmentView::anchor_lost ()
 {
-   if (!impl_->anchored) return;
-
-   if (immediate) {
-      // Cursor jumped away: hide now, no grace.
-      impl_->grace.stop ();
-      impl_->anchored = false;
-      impl_->pending_seq = 0;
-      impl_->follow.stop ();
-      impl_->conceal ();
-      return;
-   }
-
-   if (!impl_->grace.isActive ()) impl_->grace.start ();
+   clear ();
 }
 
-void AugmentView::present (const gv::api::TooltipLookup& lookup,
-                           const QRect& game, const QRect& anchor, bool animate)
+void AugmentView::present (const gv::api::TooltipLookup& lookup, const QRect& game,
+                           const QRect& anchor, bool animate)
 {
    auto* impl = impl_.get ();
 
@@ -430,9 +401,9 @@ void AugmentView::present (const gv::api::TooltipLookup& lookup,
       return;
    }
 
-   impl->pending_seq    = ++impl->seq;
-   impl->prewarming     = false;
-   impl->legacy_game    = game;
+   impl->pending_seq = ++impl->seq;
+   impl->prewarming = false;
+   impl->legacy_game = game;
    impl->legacy_anchor = anchor;
    impl->pending_animate = animate;
 
@@ -441,24 +412,23 @@ void AugmentView::present (const gv::api::TooltipLookup& lookup,
    // viewport `fitted_scale` measures, so "would one column be shrunk?" is
    // answered about the rectangle the card will actually be placed in.
    auto options = impl->options;
-   options.columns = impl->layout.columns == Layout::Columns::One ? "1"
-                   : impl->layout.columns == Layout::Columns::Two ? "2"
-                   : impl->layout.columns == Layout::Columns::Three ? "3"
-                                                                  : "auto";
+   options.columns = impl->layout.columns == Layout::Columns::One     ? "1"
+                     : impl->layout.columns == Layout::Columns::Two   ? "2"
+                     : impl->layout.columns == Layout::Columns::Three ? "3"
+                                                                      : "auto";
 
-   const QRect area = impl->anchored ? impl->viewport (impl->game)
-                                     : impl->viewport (impl->legacy_game);
-   const qreal css  = std::max (0.1, screen::scale_at (area.center ()) * impl->layout.scale);
+   const QRect area =
+      impl->anchored ? impl->viewport (impl->game) : impl->viewport (impl->legacy_game);
+   const qreal css = std::max (0.1, screen::scale_at (area.center ()) * impl->layout.scale);
    const QRect active_anchor = impl->anchored ? impl->current_anchor () : impl->legacy_anchor;
-   const QSize available = impl->layout.align == Layout::Align::Attached
-      && !active_anchor.isEmpty ()
-      ? placement::attached_space (area, active_anchor, static_cast<int> (12 * css))
-      : area.size ();
+   const QSize available =
+      impl->layout.align == Layout::Align::Attached && !active_anchor.isEmpty ()
+         ? placement::attached_space (area, active_anchor, static_cast<int> (12 * css))
+         : area.size ();
    options.budget_w = static_cast<int> (available.width () / css);
    options.budget_h = static_cast<int> (area.height () / css);
 
-   impl->host->post_json (
-      augment::render_message (lookup, impl->pending_seq, options).dump ());
+   impl->host->post_json (augment::render_message (lookup, impl->pending_seq, options).dump ());
 
    impl->shown = true;
    core::Logger::info ("augment: render '{}' seq={}", lookup.canonical_name, impl->seq);
@@ -484,13 +454,12 @@ void AugmentView::set_options (const augment::Options& options)
 
 void AugmentView::clear ()
 {
-   impl_->anchored    = false;
+   impl_->anchored = false;
    impl_->pending_seq = 0;
-   impl_->prewarming  = false;
+   impl_->prewarming = false;
    impl_->legacy_game = {};
    impl_->legacy_anchor = {};
    impl_->follow.stop ();
-   impl_->grace.stop ();
    impl_->waiting.reset ();
 
    if (impl_->host) {
@@ -500,7 +469,7 @@ void AugmentView::clear ()
 
 void AugmentView::Impl::on_message (std::string_view text)
 {
-   json msg = json::parse (text, nullptr, /*allow_exceptions=*/ false);
+   json msg = json::parse (text, nullptr, /*allow_exceptions=*/false);
    if (msg.is_discarded ()) return;
 
    if (msg.value ("type", "") == "hello") {
@@ -524,16 +493,16 @@ void AugmentView::Impl::on_message (std::string_view text)
    if (msg_seq == 0 || msg_seq != pending_seq) return;
 
    if (prewarming) {
-      prewarming  = false;
+      prewarming = false;
       pending_seq = 0;
       host->post_json (json { { "type", "clear" } }.dump ());
       return;
    }
 
-   css_w   = msg.value ("w", 0);       // bare card, no headroom
-   css_h   = msg.value ("h", 0);
-   pad_css = msg.value ("pad", 0);     // transparent animation headroom
-   sized   = css_w > 0 && css_h > 0;
+   css_w = msg.value ("w", 0);  // bare card, no headroom
+   css_h = msg.value ("h", 0);
+   pad_css = msg.value ("pad", 0);  // transparent animation headroom
+   sized = css_w > 0 && css_h > 0;
 
    if (!sized) return;
 
@@ -561,12 +530,14 @@ QRect AugmentView::Impl::current_anchor () const
 {
    const QPoint c = cursor_physical () - game.topLeft ();
 
-   const int tip_x = game.x () + (pinned_x ? pin.x ()
-      : std::clamp (c.x () + offset.x (), 0,
-         std::max (0, game.width () - tip.width ())));
-   const int tip_y = game.y () + (pinned_y ? pin.y ()
-      : std::clamp (c.y () + offset.y (), 0,
-         std::max (0, game.height () - tip.height ())));
+   const int tip_x =
+      game.x () +
+      (pinned_x ? pin.x ()
+                : std::clamp (c.x () + offset.x (), 0, std::max (0, game.width () - tip.width ())));
+   const int tip_y =
+      game.y () + (pinned_y ? pin.y ()
+                            : std::clamp (c.y () + offset.y (), 0,
+                                          std::max (0, game.height () - tip.height ())));
 
    return { tip_x, tip_y, tip.width (), tip.height () };
 }
@@ -593,13 +564,13 @@ QRect AugmentView::Impl::anchored_rect () const
    const int nudge_y = static_cast<int> (layout.offset_y * scale);
 
    const QPoint want = layout.align == Layout::Align::Attached
-      ? placement::attached (view, anchor, card, gap)
-      : placement::corner   (view, card, layout.align, nudge_x, nudge_y);
+                          ? placement::attached (view, anchor, card, gap)
+                          : placement::corner (view, card, layout.align, nudge_x, nudge_y);
 
    // The pad is transparent headroom for the enter animation, so the WINDOW
    // is larger than the card on every edge. Clamp the window, not the card,
    // or the animation clips against the screen edge.
-   const QSize  window { card.width () + 2 * pad, card.height () + 2 * pad };
+   const QSize window { card.width () + 2 * pad, card.height () + 2 * pad };
    const QPoint at = placement::clamp (view, want - QPoint { pad, pad }, window);
 
    return { at, window };
@@ -617,16 +588,16 @@ void AugmentView::Impl::place_anchored ()
 
    if (!follow.isActive ()) follow.start ();
 
-   core::Logger::debug ("augment: anchored card at {},{} {}x{} physical",
-      placed.x (), placed.y (), placed.width (), placed.height ());
+   core::Logger::debug ("augment: anchored card at {},{} {}x{} physical", placed.x (), placed.y (),
+                        placed.width (), placed.height ());
 }
 
 void AugmentView::Impl::place_legacy (int w_css, int h_css)
 {
-   const qreal s   = fitted_scale (legacy_game, legacy_anchor);
-   const int   gap = static_cast<int> (12 * s);
-   const int   w   = static_cast<int> (w_css * s);
-   const int   h   = static_cast<int> (h_css * s);
+   const qreal s = fitted_scale (legacy_game, legacy_anchor);
+   const int gap = static_cast<int> (12 * s);
+   const int w = static_cast<int> (w_css * s);
+   const int h = static_cast<int> (h_css * s);
 
    const QRect view = viewport (legacy_game);
    const QSize card { w, h };
@@ -636,7 +607,7 @@ void AugmentView::Impl::place_legacy (int w_css, int h_css)
    const QPoint want = placement::attached (view, legacy_anchor, card, gap);
 
    const int pad = static_cast<int> (pad_css * s);
-   scale  = s;
+   scale = s;
 
    const QSize window { w + 2 * pad, h + 2 * pad };
    placed = QRect { placement::clamp (view, want - QPoint { pad, pad }, window), window };
@@ -654,25 +625,25 @@ void AugmentView::Impl::capture_to_snapshot (const QRect& rect)
 
    // Let Chromium present the resized visual once before CapturePreview.
    QTimer::singleShot (0, &follow, [this, guard, capture_seq, capture_animate, rect] {
-      host->capture_png ([this, guard, capture_seq, capture_animate, rect] (std::vector<std::uint8_t> png) {
-         if (!guard) return;
-         if (capture_seq == 0 || capture_seq != pending_seq) return;
-         if (!anchored && legacy_game.isEmpty ()) return;
+      host->capture_png (
+         [this, guard, capture_seq, capture_animate, rect] (std::vector<std::uint8_t> png) {
+            if (!guard) return;
+            if (capture_seq == 0 || capture_seq != pending_seq) return;
+            if (!anchored && legacy_game.isEmpty ()) return;
 
-         QImage image = QImage::fromData (
-            reinterpret_cast<const uchar*> (png.data ()),
-            static_cast<int> (png.size ()), "PNG");
-         if (image.isNull ()) {
-            core::Logger::warn ("augment: WebView2 snapshot capture failed");
-            if (callbacks.on_failed) callbacks.on_failed ("snapshot capture failed");
-            return;
-         }
+            QImage image = QImage::fromData (reinterpret_cast<const uchar*> (png.data ()),
+                                             static_cast<int> (png.size ()), "PNG");
+            if (image.isNull ()) {
+               core::Logger::warn ("augment: WebView2 snapshot capture failed");
+               if (callbacks.on_failed) callbacks.on_failed ("snapshot capture failed");
+               return;
+            }
 
-         // The monitor's own ratio, not `scale` — see SnapshotWindow::present.
-         snapshot->present (std::move (image), rect,
-                            screen::scale_at (rect.center ()), capture_animate);
-      });
+            // The monitor's own ratio, not `scale` — see SnapshotWindow::present.
+            snapshot->present (std::move (image), rect, screen::scale_at (rect.center ()),
+                               capture_animate);
+         });
    });
 }
 
-} // namespace gv::ui
+}  // namespace gv::ui

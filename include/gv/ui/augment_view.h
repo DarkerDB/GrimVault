@@ -12,7 +12,9 @@
 #include <memory>
 #include <string>
 
-namespace gv::api { struct TooltipLookup; }
+namespace gv::api {
+struct TooltipLookup;
+}
 
 namespace gv::ui {
 
@@ -28,16 +30,14 @@ namespace gv::ui {
 //
 class AugmentView
 {
-public:
-   struct Config
-   {
+  public:
+   struct Config {
       std::filesystem::path web_dir;
       std::filesystem::path user_data_dir;
       bool software_rendering = false;
    };
 
-   struct Callbacks
-   {
+   struct Callbacks {
       std::function<void ()> on_ready;
       std::function<void (std::string)> on_failed;
 
@@ -46,34 +46,32 @@ public:
       std::function<void (QRect)> on_card_area;
    };
 
-   static core::Result<std::unique_ptr<AugmentView>> create (Config config,
-                                                             Callbacks callbacks);
+   static core::Result<std::unique_ptr<AugmentView>> create (Config config, Callbacks callbacks);
    ~AugmentView ();
 
-   void present (const gv::api::TooltipLookup& lookup,
-                 const QRect& game, const QRect& anchor, bool animate = true);
+   void present (const gv::api::TooltipLookup& lookup, const QRect& game, const QRect& anchor,
+                 bool animate = true);
 
    void clear ();
 
-   // Show the card beside
-   // the anchored tooltip and follow it at presenter rate; anchor-lost
-   // hides after a short grace so transient losses never blink the card.
-   void anchor_shown (const QRect& game, const QPoint& offset, const QSize& tip,
-                      bool pinned_x, bool pinned_y, const QPoint& pin);
+   // Follow the current tooltip at presenter rate. A lost or replaced
+   // anchor invalidates its card immediately, including queued renders.
+   void anchor_shown (const QRect& game, const QPoint& offset, const QSize& tip, bool pinned_x,
+                      bool pinned_y, const QPoint& pin);
 
-   // immediate = a cursor-jump reset: hide now, no grace.
-   void anchor_lost (bool immediate);
+   // Example: loss after presenting Bandage leaves no visible or queued card.
+   void anchor_lost ();
 
    // Live dashboard settings. set_layout takes effect on the next placement
    // (opacity repaints immediately); set_options on the next render.
-   void set_layout  (const Layout& layout);
+   void set_layout (const Layout& layout);
    void set_options (const augment::Options& options);
 
-private:
+  private:
    AugmentView ();
 
    struct Impl;
    std::unique_ptr<Impl> impl_;
 };
 
-} // namespace gv::ui
+}  // namespace gv::ui
