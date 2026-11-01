@@ -1,6 +1,7 @@
 param (
    [Parameter (Mandatory)]
-   [string] $Installer
+   [string] $Installer,
+   [string] $PayloadDirectory
 )
 
 $ErrorActionPreference = 'Stop'
@@ -42,14 +43,18 @@ if ($installerVersion.ProductName -ne 'GrimVault' -or
 }
 $installerIconHash = Get-IconHash $installerPath
 
-$destination = Join-Path $env:RUNNER_TEMP 'grimvault-package-check'
-New-Item -ItemType Directory -Force $destination | Out-Null
+if ($PayloadDirectory) {
+   $destination = (Resolve-Path $PayloadDirectory).Path
+} else {
+   $destination = Join-Path $env:RUNNER_TEMP 'grimvault-package-check'
+   New-Item -ItemType Directory -Force $destination | Out-Null
 
-$process = Start-Process -FilePath $installerPath `
-   -ArgumentList @('/S', "/D=$destination") `
-   -Wait -PassThru
-if ($process.ExitCode -ne 0) {
-   throw "Silent install failed with exit code $($process.ExitCode)."
+   $process = Start-Process -FilePath $installerPath `
+      -ArgumentList @('/S', "/D=$destination") `
+      -WindowStyle Hidden -Wait -PassThru
+   if ($process.ExitCode -ne 0) {
+      throw "Silent install failed with exit code $($process.ExitCode)."
+   }
 }
 
 $exe = Join-Path $destination 'grimvault.exe'
@@ -73,25 +78,28 @@ foreach ($path in $required) {
    }
 }
 
-$programRoots = @(
-   [Environment]::GetFolderPath([Environment+SpecialFolder]::Programs),
-   [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonPrograms)
-) | Where-Object { $_ } | Select-Object -Unique
-$shortcutPaths = @($programRoots | ForEach-Object {
-   Join-Path $_ 'GrimVault\GrimVault.lnk'
-})
-$shortcutPath = $shortcutPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
-if (-not $shortcutPath) {
-   throw "Installer omitted the Start Menu shortcut: $($shortcutPaths -join ', ')"
-}
+if (-not $PayloadDirectory) {
+   $programRoots = @(
+      [Environment]::GetFolderPath([Environment+SpecialFolder]::Programs),
+      [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonPrograms)
+   ) | Where-Object { $_ } | Select-Object -Unique
+   $shortcutPaths = @($programRoots | ForEach-Object {
+      Join-Path $_ 'GrimVault\GrimVault.lnk'
+   })
+   $shortcutPath = $shortcutPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+   if (-not $shortcutPath) {
+      throw "Installer omitted the Start Menu shortcut: $($shortcutPaths -join ', ')"
+   }
 
-$shell = New-Object -ComObject WScript.Shell
-$shortcut = $shell.CreateShortcut($shortcutPath)
-$shortcutTarget = [IO.Path]::GetFullPath($shortcut.TargetPath)
-$expectedTarget = [IO.Path]::GetFullPath($exe)
-if (-not [string]::Equals($shortcutTarget, $expectedTarget,
-      [StringComparison]::OrdinalIgnoreCase)) {
-   throw "Start Menu shortcut targets '$shortcutTarget' instead of '$expectedTarget'."
+   $shell = New-Object -ComObject WScript.Shell
+   $shortcut = $shell.CreateShortcut($shortcutPath)
+   $shortcutTarget = [IO.Path]::GetFullPath($shortcut.TargetPath)
+   $expectedTarget = [IO.Path]::GetFullPath($exe)
+   if (-not [string]::Equals($shortcutTarget, $expectedTarget,
+         [StringComparison]::OrdinalIgnoreCase)) {
+      throw "Start Menu shortcut targets '$shortcutTarget' instead of '$expectedTarget'."
+   }
+
 }
 
 $exeSignature = Get-AuthenticodeSignature $exe
@@ -111,9 +119,13 @@ if ($exeIconHash -ne $installerIconHash) {
 
 $launch = Start-Process -FilePath $exe `
    -ArgumentList '--help' `
-   -Wait -PassThru
+   -WindowStyle Hidden -Wait -PassThru
 if ($launch.ExitCode -ne 0) {
    throw "Installed GrimVault failed to start with exit code $($launch.ExitCode)."
 }
 
-Write-Host "Validated signed GrimVault package: $installerPath"
+if ($PayloadDirectory) {
+   Write-Host "Validated signed installer and staged payload (installation not exercised): $installerPath"
+} else {
+   Write-Host "Validated signed GrimVault installation: $installerPath"
+}

@@ -12,7 +12,7 @@
         "VCPKG_TARGET_TRIPLET": "x64-windows",
         "VCPKG_HOST_TRIPLET":   "x64-windows",
         "CMAKE_CXX_STANDARD":   "23",
-        "GRIMVAULT_VERSION":    "2.1.0"
+        "GRIMVAULT_VERSION":    "2.1.2"
       },
       "condition": {
         "type":  "equals",

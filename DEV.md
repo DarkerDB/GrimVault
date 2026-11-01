@@ -335,3 +335,33 @@ The script filters CMake/MSVC output for the first useful error and tails
 `%LOCALAPPDATA%\GrimVault\build\<preset>\configure.log` or `build.log`.
 If it's a vcpkg port issue, check
 `%VCPKG_ROOT%\buildtrees\<port>\install-x64-windows-rel-err.log`.
+
+## Preparing a desktop release locally
+
+`tools/release/prepare-windows.ps1` builds a versioned Release/LTO candidate,
+runs unit, integration and end-to-end tests, signs the executable and NSIS
+installer, and writes checksums plus `release.json` under the build's
+`artifacts/` directory. It never uploads artifacts or updates an appcast.
+
+Supply the four `SSL_COM_*` signing credentials through the process environment
+from the authorized `releases` production vault. Do not save them in the source
+or pass them on the command line. NSIS must be available on PATH.
+
+Run from the committed release worktree, supplying its exact Git revision:
+
+```powershell
+./tools/release/prepare-windows.ps1 -Version 2.1.2 -Stage prod -Channel stable `
+   -SourceRevision <40-character-commit> -VcpkgInstalledDirectory C:/v/i `
+   -UseInstalledDependencies
+```
+
+`-UseInstalledDependencies` reuses an explicitly supplied, already provisioned
+vcpkg tree without changing it. Omit it to provision manifest dependencies.
+The default build directory is `%LOCALAPPDATA%/GrimVault/build/release-prod-2.1.2`.
+Use separate build directories for each version and target environment.
+
+Local preparation validates the signed installer and staged runtime payload,
+including launching `grimvault.exe --help`. It does not install over the
+operator's application. Before publication, run `validate-package.ps1` without
+`-PayloadDirectory` on a clean Windows host to verify the real install and
+Start Menu shortcut. The existing release workflow performs this check.
